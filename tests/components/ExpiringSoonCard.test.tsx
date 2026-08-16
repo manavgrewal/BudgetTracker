@@ -65,20 +65,21 @@ describe('ExpiringSoonCard type badge and subscription wording (type-deltas.md T
     expect(container.querySelector('[data-testid="type-badge"]')).toBeNull();
   });
 
-  it('uses "Cancel in N days" wording for a subscription item, not "Expires"', () => {
+  it('shows the cancel-by DATE for a subscription item, not a day count (MUST-19.10/19.13)', () => {
     render(
       <ExpiringSoonCard
-        items={[item({ typeId: 2, typeName: 'Subscription', isSubscription: true })]}
+        items={[item({ typeId: 2, typeName: 'Subscription', isSubscription: true, expiryDate: '2026-08-26' })]}
         today={TODAY}
       />,
     );
-    expect(screen.getByText('Cancel in 10 days')).toBeTruthy();
+    expect(screen.getByText('Cancel by 2026-08-26')).toBeTruthy();
     expect(screen.queryByText('Expires in 10 days')).toBeNull();
+    expect(screen.queryByText('Cancel in 10 days')).toBeNull();
   });
 
-  it('keeps "Expires in N days" wording for a non-subscription item even when typed', () => {
+  it('keeps "Expires in N days" wording (a day count) for a non-subscription item even when typed', () => {
     render(<ExpiringSoonCard items={[item({ typeId: 1, typeName: 'Appliance' })]} today={TODAY} />);
     expect(screen.getByText('Expires in 10 days')).toBeTruthy();
-    expect(screen.queryByText('Cancel in 10 days')).toBeNull();
+    expect(screen.queryByText('Cancel by 2026-08-26')).toBeNull();
   });
 });

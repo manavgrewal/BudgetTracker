@@ -1,10 +1,15 @@
 import Link from 'next/link';
 import { daysBetweenIso } from '@/lib/dates';
-import { expiringSoonLabel } from '@/lib/warranty/constants';
+import { expiringSoonLabel, expiryPhrase } from '@/lib/warranty/constants';
 import type { WarrantyListItem } from '@/lib/warranty/search';
 
 /** §17.19 / MUST-10.5: top 5, hidden when empty. */
 export const EXPIRING_WIDGET_LIMIT = 5;
+
+/** Sentence-initial capitalization only — the phrase itself (verb + wording) is untouched. */
+function capitalize(text: string): string {
+  return text.length === 0 ? text : text.charAt(0).toUpperCase() + text.slice(1);
+}
 
 export function ExpiringSoonCard({ items, today }: { items: WarrantyListItem[]; today: string }) {
   // Hidden entirely when the count is zero — the dashboard already has enough on it.
@@ -36,10 +41,14 @@ export function ExpiringSoonCard({ items, today }: { items: WarrantyListItem[]; 
             <span className="text-amber-700 dark:text-amber-300">
               {/* Every row here already carries status 'expiring' (expiringSoonItems()'s own
                   filter), which per warrantyStatus() in expiry.ts is only ever reached with a
-                  non-null expiryDate. expiringSoonLabel() is the one place (besides
-                  StatusBadge) either verb is written (MUST-19.11) -- "Expires in N days" for a
-                  warranty, "Cancel in N days" for a subscription. */}
-              {expiringSoonLabel(row.isSubscription, daysBetweenIso(today, row.expiryDate as string))}
+                  non-null expiryDate. MUST-19.10 / MUST-19.13 / type-deltas.md T10: a warranty
+                  row stays a day count ("Expires in N days", via expiringSoonLabel — the same
+                  helper StatusBadge uses); a subscription row is the cancel-by DATE itself
+                  ("Cancel by 2027-03-01", via expiryPhrase()'s "cancel by <date>", capitalized
+                  to match this card's sentence-initial convention) rather than a day count. */}
+              {row.isSubscription
+                ? capitalize(expiryPhrase(true, row.expiryDate as string))
+                : expiringSoonLabel(false, daysBetweenIso(today, row.expiryDate as string))}
             </span>
           </li>
         ))}
