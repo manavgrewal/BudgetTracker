@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, cleanup, screen } from '@testing-library/react';
+import { render, cleanup, screen, fireEvent } from '@testing-library/react';
 import { WarrantyDetailClient } from '@/app/(app)/warranties/[id]/warranty-detail-client';
 import type { WarrantyItemRow, WarrantyReceiptRow } from '@/lib/warranty/items';
 
@@ -136,5 +136,25 @@ describe('WarrantyDetailClient', () => {
     expect(screen.getByText('Period start')).toBeTruthy();
     expect(screen.getByText('Cancel by')).toBeTruthy();
     expect(screen.queryByText('Purchase date')).toBeNull();
+  });
+
+  // --- reviewer M14 ---
+
+  it("preselects the edit form's type dropdown to the item's current type", () => {
+    const { container } = renderDetail({ item: item({ typeId: 2, typeName: 'Netflix plan' }) });
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    const select = container.querySelector('form select[name="typeId"]') as HTMLSelectElement;
+    expect(select).toBeTruthy();
+    expect(select.value).toBe('2');
+  });
+
+  // --- reviewer findings: busy states, action-slot isolation, attach reset ---
+
+  it('gives Re-run OCR and Remove their own busy state via useFormStatus (IMPORTANT 5)', () => {
+    renderDetail();
+    const rerun = screen.getByRole('button', { name: /re-run ocr/i }) as HTMLButtonElement;
+    const remove = screen.getByRole('button', { name: /remove/i }) as HTMLButtonElement;
+    expect(rerun.disabled).toBe(false);
+    expect(remove.disabled).toBe(false);
   });
 });

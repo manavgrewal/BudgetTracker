@@ -1,6 +1,7 @@
 'use client';
 
-import { useActionState, useCallback, useState } from 'react';
+import { useActionState, useCallback, useEffect, useState } from 'react';
+import { useFormStatus } from 'react-dom';
 import Link from 'next/link';
 import { FormError } from '@/components/FormError';
 import { SubmitButton } from '@/components/SubmitButton';
@@ -29,6 +30,21 @@ const OCR_CHIP: Record<WarrantyReceiptRow['ocrStatus'], string> = {
 
 type TypeOption = { id: number; name: string; isSubscription: boolean };
 
+/**
+ * IMPORTANT 5: a link-styled submit button with the same busy contract as SubmitButton,
+ * for the small per-receipt actions (Re-run OCR / Remove) that don't want the filled-button
+ * look. useFormStatus() only sees the nearest enclosing <form>, so each of these renders
+ * inside its own single-button form -- exactly like the ones it replaces.
+ */
+function LinkSubmitButton({ children }: { children: React.ReactNode }) {
+  const { pending } = useFormStatus();
+  return (
+    <button type="submit" disabled={pending} className="underline disabled:opacity-60">
+      {pending ? 'Working…' : children}
+    </button>
+  );
+}
+
 export function WarrantyDetailClient({
   item,
   receipts,
@@ -52,16 +68,66 @@ export function WarrantyDetailClient({
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);
   const [staged, setStaged] = useState<StagedFile[]>([]);
+  // M10: bumped after a successful attach to remount <ReceiptUploader> with a clean slate --
+  // otherwise a second click posts the SAME (now-consumed) staging ids and the action fails
+  // with "That upload expired". ReceiptUploader owns its file-tile state internally, so a
+  // fresh key is the only way to reset it from here.
+  const [uploaderKey, setUploaderKey] = useState(0);
   const onStagedChange = useCallback((files: StagedFile[]) => setStaged(files), []);
 
-  const [editState, editAction] = useActionState(updateWarrantyAction, initial);
-  const [deleteState, deleteAction] = useActionState(deleteWarrantyAction, initial);
-  const [attachState, attachAction] = useActionState(attachReceiptsAction, initial);
-  const [removeState, removeAction] = useActionState(deleteReceiptAction, initial);
-  const [ocrState, ocrAction] = useActionState(reRunOcrAction, initial);
+  // M13: which of the five actions below most recently ran. Without this, an error/message
+  // from one (e.g. a stale Re-run OCR result) could render beside an unrelated result from
+  // another (e.g. a fresh Remove) merged in by `??` -- only the latest action's own result is
+  // ever shown, mirroring settings/item-types/item-types-manager.tsx's activeSlot pattern.
+  type ActionSlot = 'edit' | 'delete' | 'attach' | 'remove' | 'ocr' | null;
+  const [activeSlot, setActiveSlot] = useState<ActionSlot>(null);
 
-  const error = editState.error ?? deleteState.error ?? attachState.error ?? removeState.error ?? ocrState.error;
-  const notice = editState.message ?? attachState.message ?? removeState.message ?? ocrState.message;
+  const [editState, editAction] = useActionState(async (prev: WarrantyActionState, formData: FormData) => {
+    setActiveSlot('edit');
+    return updateWarrantyAction(prev, formData);
+  }, initial);
+  const [deleteState, deleteAction] = useActionState(async (prev: WarrantyActionState, formData: FormData) => {
+    setActiveSlot('delete');
+    return deleteWarrantyAction(prev, formData);
+  }, initial);
+  const [attachState, attachAction] = useActionState(async (prev: WarrantyActionState, formData: FormData) => {
+    setActiveSlot('attach');
+    return attachReceiptsAction(prev, formData);
+  }, initial);
+  const [removeState, removeAction] = useActionState(async (prev: WarrantyActionState, formData: FormData) => {
+    setActiveSlot('remove');
+    return deleteReceiptAction(prev, formData);
+  }, initial);
+  const [ocrState, ocrAction] = useActionState(async (prev: WarrantyActionState, formData: FormData) => {
+    setActiveSlot('ocr');
+    return reRunOcrAction(prev, formData);
+  }, initial);
+
+  const slotState =
+    activeSlot === 'edit'
+      ? editState
+      : activeSlot === 'delete'
+        ? deleteState
+        : activeSlot === 'attach'
+          ? attachState
+          : activeSlot === 'remove'
+            ? removeState
+            : activeSlot === 'ocr'
+              ? ocrState
+              : undefined;
+  const error = slotState?.error;
+  const notice = slotState?.message;
+
+  // M10: a successful attach (a message with no error) clears the staged list and remounts
+  // the uploader. Keyed on the attachState object itself -- useActionState hands back a new
+  // object only when the action actually ran, so this fires exactly once per real attach.
+  useEffect(() => {
+    if (attachState.message && !attachState.error) {
+      setStaged([]);
+      setUploaderKey((key) => key + 1);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [attachState]);
 
   // Delta T9 (MUST-19.10): every date label on this page switches on the item's own
   // isSubscription flag through these three helpers -- the only place either wording lives.
@@ -140,7 +206,7 @@ export function WarrantyDetailClient({
                 <div className="flex gap-2">
                   <form action={ocrAction}>
                     <input type="hidden" name="receiptId" value={receipt.id} />
-                    <button type="submit" className="underline">Re-run OCR</button>
+                    <LinkSubmitButton>Re-run OCR</LinkSubmitButton>
                   </form>
                   <form
                     action={removeAction}
@@ -149,7 +215,7 @@ export function WarrantyDetailClient({
                     }}
                   >
                     <input type="hidden" name="receiptId" value={receipt.id} />
-                    <button type="submit" className="underline">Remove</button>
+                    <LinkSubmitButton>Remove</LinkSubmitButton>
                   </form>
                 </div>
               </li>
@@ -164,7 +230,7 @@ export function WarrantyDetailClient({
             name="staged"
             value={JSON.stringify(staged.map((f) => ({ stagingId: f.stagingId, originalFilename: f.originalFilename })))}
           />
-          <ReceiptUploader onStagedChange={onStagedChange} label="Add another receipt" />
+          <ReceiptUploader key={uploaderKey} onStagedChange={onStagedChange} label="Add another receipt" />
           <SubmitButton className="w-fit">Attach receipts</SubmitButton>
         </form>
       </section>

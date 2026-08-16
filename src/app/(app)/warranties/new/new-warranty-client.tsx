@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState, useCallback, useState } from 'react';
+import { useActionState, useCallback, useEffect, useRef, useState } from 'react';
 import { FormError } from '@/components/FormError';
 import { SubmitButton } from '@/components/SubmitButton';
 import { ReceiptUploader, type StagedFile, type SuggestedFieldsDto } from '@/components/warranty/ReceiptUploader';
@@ -50,6 +50,20 @@ export function NewWarrantyClient({
   });
   const [suggested, setSuggested] = useState({ purchaseDate: false, vendor: false, price: false });
 
+  // IMPORTANT 6: `touched` mirrored into a ref, kept in sync by the effect below. onSuggestions
+  // reads touchedRef.current directly instead of using setTouched's updater purely to PEEK at
+  // the latest value (as it did before) -- a setState updater must be a pure function of its
+  // previous value, and calling setPurchaseDate/setVendor/setPrice/setSuggested from inside
+  // one is a side effect that React StrictMode's double-invocation would run twice. Reading a
+  // ref carries no such contract and still sees the up-to-date value, since this callback only
+  // ever runs from an async fetch resolution that lands strictly after any render+effect
+  // cycle a same-tick keystroke would have already completed -- the race protection MUST-10.3
+  // depends on is unchanged.
+  const touchedRef = useRef(touched);
+  useEffect(() => {
+    touchedRef.current = touched;
+  }, [touched]);
+
   const [months, setMonths] = useState('');
   const [isLifetime, setIsLifetime] = useState(false);
   const [typeId, setTypeId] = useState('');
@@ -58,26 +72,21 @@ export function NewWarrantyClient({
   const onStagedChange = useCallback((files: StagedFile[]) => setStaged(files), []);
 
   /** MUST-10.3: only EMPTY, untouched fields are filled from a suggestion. */
-  const onSuggestions = useCallback(
-    (fields: SuggestedFieldsDto) => {
-      setTouched((current) => {
-        if (fields.purchaseDate && !current.purchaseDate) {
-          setPurchaseDate(fields.purchaseDate);
-          setSuggested((s) => ({ ...s, purchaseDate: true }));
-        }
-        if (fields.vendor && !current.vendor) {
-          setVendor(fields.vendor);
-          setSuggested((s) => ({ ...s, vendor: true }));
-        }
-        if (fields.priceCents !== undefined && !current.price) {
-          setPrice(centsToInput(fields.priceCents));
-          setSuggested((s) => ({ ...s, price: true }));
-        }
-        return current;
-      });
-    },
-    [],
-  );
+  const onSuggestions = useCallback((fields: SuggestedFieldsDto) => {
+    const current = touchedRef.current;
+    if (fields.purchaseDate && !current.purchaseDate) {
+      setPurchaseDate(fields.purchaseDate);
+      setSuggested((s) => ({ ...s, purchaseDate: true }));
+    }
+    if (fields.vendor && !current.vendor) {
+      setVendor(fields.vendor);
+      setSuggested((s) => ({ ...s, vendor: true }));
+    }
+    if (fields.priceCents !== undefined && !current.price) {
+      setPrice(centsToInput(fields.priceCents));
+      setSuggested((s) => ({ ...s, price: true }));
+    }
+  }, []);
 
   const monthsNumber = /^\d+$/.test(months) ? Number(months) : null;
   const expiry =

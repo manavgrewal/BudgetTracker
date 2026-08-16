@@ -57,10 +57,13 @@ describe('WarrantiesClient', () => {
     // Delta T9: the Expiry cell reads through expiryPhrase() -- "expires 2028-08-16" for a
     // non-subscription item -- rather than the bare date.
     expect(screen.getByText(/2028-08-16/)).toBeTruthy();
-    expect(screen.getByText('Active')).toBeTruthy();
-    // The owner filter's <select> also lists Alice by name, so scope to the table body to
-    // avoid a duplicate-text ambiguity between the two.
-    expect(container.querySelector('tbody')?.textContent).toContain('Alice');
+    // M15: the status filter's <select> now also spells out "Active" as an option label
+    // (statusLabel(), not the raw 'active' code), and the owner filter's <select> lists
+    // Alice by name -- scope both assertions to the table body to avoid a duplicate-text
+    // ambiguity against those two filter controls.
+    const tbodyText = container.querySelector('tbody')?.textContent;
+    expect(tbodyText).toContain('Active');
+    expect(tbodyText).toContain('Alice');
   });
 
   it('shows the expiring badge with a day count', () => {

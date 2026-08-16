@@ -7,7 +7,7 @@ import { formatCents } from '@/lib/money';
 // from search.ts -- search.ts imports @/db/client, and a VALUE import from it (as opposed to
 // a type-only one) drags better-sqlite3 into this client bundle and breaks `next build`.
 import { expiryPhrase, WARRANTY_SORTS, type WarrantySort } from '@/lib/warranty/constants';
-import { WARRANTY_STATUSES } from '@/lib/warranty/expiry';
+import { statusLabel, WARRANTY_STATUSES } from '@/lib/warranty/expiry';
 import type { WarrantySearchResult } from '@/lib/warranty/search';
 
 const SORT_LABELS: Record<WarrantySort, string> = {
@@ -39,6 +39,21 @@ export function WarrantiesClient({
   sort: WarrantySort;
 }) {
   const searching = query.trim().length > 0 || status !== '' || owner !== '' || typeId !== '';
+
+  // M12: Prev/Next must preserve every other filter/sort param currently in force -- page 2+
+  // was otherwise unreachable (no link anywhere pointed at it), which is silent data loss
+  // past WARRANTY_PAGE_SIZE (50) rows.
+  function pageHref(page: number): string {
+    const params = new URLSearchParams();
+    if (query.trim()) params.set('q', query);
+    if (status) params.set('status', status);
+    if (owner) params.set('owner', owner);
+    if (typeId) params.set('typeId', typeId);
+    if (sort !== 'expiry') params.set('sort', sort);
+    if (page > 1) params.set('page', String(page));
+    const qs = params.toString();
+    return qs ? `/warranties?${qs}` : '/warranties';
+  }
 
   return (
     <div className="flex flex-col gap-6">
@@ -73,7 +88,14 @@ export function WarrantiesClient({
           <select name="status" defaultValue={status} className="rounded border px-2 py-1 dark:bg-slate-900">
             <option value="">All</option>
             {WARRANTY_STATUSES.map((value) => (
-              <option key={value} value={value}>{value}</option>
+              // M15: statusLabel() gives the human-readable text ("Active", "Expiring
+              // soon", ...); the option's VALUE stays the raw status code the server
+              // filters on. statusLabel() is subscription-agnostic by construction, and
+              // that is deliberate here too -- a filter option applies across both
+              // warranties and subscriptions at once, so it uses the neutral wording
+              // rather than either verb (expiryPhrase()'s "expires"/"cancel by" swap is
+              // for a single item's own row, not this generic bucket).
+              <option key={value} value={value}>{statusLabel(value, null, today)}</option>
             ))}
           </select>
         </label>
@@ -153,9 +175,15 @@ export function WarrantiesClient({
       )}
 
       {result.pageCount > 1 ? (
-        <p className="text-xs text-slate-500">
-          Page {result.page} of {result.pageCount} · {result.total} items
-        </p>
+        <nav className="flex items-center gap-3 text-xs text-slate-500">
+          <span>Page {result.page} of {result.pageCount} · {result.total} items</span>
+          {result.page > 1 ? (
+            <Link href={pageHref(result.page - 1)} className="underline">Prev</Link>
+          ) : null}
+          {result.page < result.pageCount ? (
+            <Link href={pageHref(result.page + 1)} className="underline">Next</Link>
+          ) : null}
+        </nav>
       ) : null}
     </div>
   );

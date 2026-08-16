@@ -55,15 +55,21 @@ export function ReceiptUploader({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const timers = useRef<ReturnType<typeof setInterval>[]>([]);
+  // IMPORTANT 4: mirrors `files` so the unmount-cleanup effect below (which must run only
+  // once, with empty deps, to avoid re-registering on every render) can still revoke
+  // whatever object URLs exist AT UNMOUNT TIME rather than the ones captured in its stale
+  // closure over the first render's (empty) `files` array.
+  const filesRef = useRef<StagedFile[]>([]);
 
   useEffect(() => {
+    filesRef.current = files;
     onStagedChange(files);
   }, [files, onStagedChange]);
 
   useEffect(
     () => () => {
       for (const timer of timers.current) clearInterval(timer);
-      for (const file of files) if (file.previewUrl) URL.revokeObjectURL(file.previewUrl);
+      for (const file of filesRef.current) if (file.previewUrl) URL.revokeObjectURL(file.previewUrl);
     },
     // Cleanup on unmount only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -74,31 +80,45 @@ export function ReceiptUploader({
     (stagingId: string) => {
       const startedAt = Date.now();
       const timer = setInterval(async () => {
-        if (Date.now() - startedAt > POLL_GIVE_UP_MS) {
+        // IMPORTANT 2: a rejected fetch/json (offline, transient network blip) must not
+        // become an unhandled promise rejection, and must not kill this interval either --
+        // just skip this tick and retry at the next one. POLL_GIVE_UP_MS above still bounds
+        // how long that can go on.
+        try {
+          if (Date.now() - startedAt > POLL_GIVE_UP_MS) {
+            clearInterval(timer);
+            setNotice(POLL_GIVE_UP_MESSAGE);
+            return;
+          }
+          const response = await fetch(`/api/warranties/receipts/stage/${stagingId}`);
+          if (!response.ok) {
+            // IMPORTANT 3: a non-ok response (e.g. a 401 on session expiry) must not leave
+            // this tile reading "Reading…" forever -- mark it failed and stop polling it.
+            clearInterval(timer);
+            setFiles((prev) =>
+              prev.map((file) => (file.stagingId === stagingId ? { ...file, ocr: 'failed' } : file)),
+            );
+            setNotice('That receipt could not be read.');
+            return;
+          }
+          const body = (await response.json()) as PollResponse;
+          if (body.status === 'pending') return;
           clearInterval(timer);
-          setNotice(POLL_GIVE_UP_MESSAGE);
-          return;
-        }
-        const response = await fetch(`/api/warranties/receipts/stage/${stagingId}`);
-        if (!response.ok) {
-          clearInterval(timer);
-          return;
-        }
-        const body = (await response.json()) as PollResponse;
-        if (body.status === 'pending') return;
-        clearInterval(timer);
-        setFiles((prev) =>
-          prev.map((file) =>
-            file.stagingId === stagingId ? { ...file, ocr: body.status, error: body.error } : file,
-          ),
-        );
-        if (body.status === 'done') {
-          setNotice(null);
-          if (onSuggestions && body.suggestions) onSuggestions(body.suggestions);
-        } else {
-          // MUST-10.2 step 4: show the error and carry on. Rendered as a text node only
-          // (MUST-13.3) — never dangerouslySetInnerHTML.
-          setNotice(body.error ?? 'That receipt could not be read.');
+          setFiles((prev) =>
+            prev.map((file) =>
+              file.stagingId === stagingId ? { ...file, ocr: body.status, error: body.error } : file,
+            ),
+          );
+          if (body.status === 'done') {
+            setNotice(null);
+            if (onSuggestions && body.suggestions) onSuggestions(body.suggestions);
+          } else {
+            // MUST-10.2 step 4: show the error and carry on. Rendered as a text node only
+            // (MUST-13.3) — never dangerouslySetInnerHTML.
+            setNotice(body.error ?? 'That receipt could not be read.');
+          }
+        } catch {
+          // Transient failure this tick only -- leave the timer running.
         }
       }, POLL_INTERVAL_MS);
       timers.current.push(timer);
@@ -106,21 +126,27 @@ export function ReceiptUploader({
     [onSuggestions],
   );
 
-  async function upload(list: FileList): Promise<void> {
+  async function upload(chosen: File[]): Promise<void> {
     setError(null);
     setBusy(true);
     try {
       const form = new FormData();
-      for (const file of Array.from(list)) form.append('file', file);
+      for (const file of chosen) form.append('file', file);
       const response = await fetch('/api/warranties/receipts/stage', { method: 'POST', body: form });
       const body = (await response.json()) as StageResponse;
       if (!response.ok || !body.staged) {
         setError(body.error ?? 'That upload did not work.');
         return;
       }
+      // CRITICAL fix: `chosen` is a plain array snapshot taken BEFORE the input's value was
+      // reset, unlike the live FileList the input exposes -- browsers clear (not swap) that
+      // FileList in place, so by the time this line ran against the original FileList
+      // reference, `list[index]` would already be undefined and URL.createObjectURL() would
+      // throw, silently dropping every image receipt (PDFs were unaffected only because
+      // their branch never calls createObjectURL).
       const staged: StagedFile[] = body.staged.map((entry, index) => ({
         ...entry,
-        previewUrl: entry.mime.startsWith('image/') ? URL.createObjectURL(list[index]) : null,
+        previewUrl: entry.mime.startsWith('image/') ? URL.createObjectURL(chosen[index]) : null,
         ocr: 'pending' as const,
       }));
       setFiles((prev) => [...prev, ...staged]);
@@ -153,8 +179,14 @@ export function ReceiptUploader({
           multiple
           disabled={busy}
           onChange={(event) => {
+            // CRITICAL fix: snapshot the FileList into a plain array FIRST. Resetting
+            // event.target.value below clears the browser's underlying FileList object (it
+            // does not swap in a new, separate one) -- any reference to `list` taken after
+            // that point sees an empty list once the async upload() resumes past its first
+            // await, which is exactly what silently dropped every image receipt before.
             const list = event.target.files;
-            if (list && list.length > 0) void upload(list);
+            const chosen = list ? Array.from(list) : [];
+            if (chosen.length > 0) void upload(chosen);
             event.target.value = '';
           }}
           className="text-sm"
