@@ -1,7 +1,7 @@
 # Warranty Tracker — Design Spec
 
 **Date:** 2026-08-16
-**Status:** v1.0 — approved design (owner-locked decisions captured; §17 lists the defaults chosen on the owner's behalf for review).
+**Status:** v1.1 — approved design (owner-locked decisions captured; §17 lists the defaults chosen on the owner's behalf for review). §19 is the mid-build addendum for warranty item types and subscriptions; §1–§18 are unchanged and their numbering is stable because the implementation plan cites it.
 **Target release:** Budget Tracker **v1.1.0** (feature addition to the shipped v1.0.0 app).
 **Companion spec:** `docs/superpowers/specs/2026-08-15-budget-tracker-design.md` (the base app). That document is **not** modified by this feature; section references written as "base §N" point into it.
 
@@ -792,6 +792,161 @@ Defaults chosen while writing this spec. Each is a single constant or a one-para
 
 ---
 
+## 19. Addendum — item types and subscriptions (v1.1, mid-build)
+
+**Status of this section.** Requested by the owner on 2026-08-16, after Tasks 1–3 of the implementation plan had already landed (`drizzle/0002_warranty_tracker.sql` is committed and therefore immutable). Everything here is **additive**: no section above is renumbered, no committed migration is edited, and no rule in §1–§18 is withdrawn. Where this section says something that §3–§10 does not mention, this section governs; where the two overlap, they agree by construction.
+
+Two requirements:
+
+1. A warranty item has a **type** — laptop, appliance, subscription, whatever the household needs — chosen from a list an **admin** maintains in the settings area.
+2. **Subscriptions** are tracked in the same tracker, with a period start and end and a duration, and with a reminder to cancel before the period rolls over.
+
+The second requirement is met with **no new columns**: a subscription is a warranty item whose type is flagged `is_subscription`, and the existing purchase/term/expiry triple already describes a subscription period exactly (§19.5).
+
+### 19.1 Migration discipline
+
+**MUST-19.1** This is migration **`drizzle/0003_warranty_item_types.sql`**, journal idx **3**, `when` **1755475200000**, tag `0003_warranty_item_types`. `0002` is committed and immutable; nothing in it is edited. The discipline of §3.1 applies unchanged and in the same fixed order: hand-author the SQL, append the journal entry, mirror in `src/db/schema.ts`. `drizzle-kit generate` is still never run.
+
+**MUST-19.2** The journal entry appended to `drizzle/meta/_journal.json` is exactly:
+
+```json
+{ "idx": 3, "version": "6", "when": 1755475200000, "tag": "0003_warranty_item_types", "breakpoints": true }
+```
+
+**MUST-19.3** `0003` repeats the drizzle-kit warning header of `0000`/`0002` and **extends** the MUST-3.4 enumeration of objects that exist only in SQL. `0003` adds three: the `CHECK` constraints on `warranty_item_types`, the `COLLATE NOCASE` unique index on its `name`, and the fact that `warranty_items.type_id` arrives by `ALTER TABLE`. Statements are separated by `--> statement-breakpoint`, and — because Drizzle's splitter is comment-blind — that marker **never** appears inside a comment in the file.
+
+### 19.2 `warranty_item_types`
+
+```sql
+CREATE TABLE `warranty_item_types` (
+	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
+	`name` text NOT NULL,
+	`is_subscription` integer DEFAULT 0 NOT NULL,
+	`created_at` text NOT NULL,
+	CHECK (`is_subscription` IN (0, 1)),
+	CHECK (length(trim(`name`)) BETWEEN 1 AND 60)
+);
+--> statement-breakpoint
+CREATE UNIQUE INDEX `warranty_item_types_name_uq` ON `warranty_item_types` (`name` COLLATE NOCASE);
+```
+
+- **`id`** — `integer PRIMARY KEY AUTOINCREMENT`, matching every other table in this schema (§3.2, §3.3, base §3). Ids are integers in this app; TEXT is for dates, timestamps and free text.
+- **`name`** — required, trimmed by the application, 1–60 characters, **unique case-insensitively**. `Laptop` and `laptop` are the same type. Uniqueness is enforced by the `COLLATE NOCASE` unique index, and the app pre-checks with `where name = ? collate nocase` so the member sees "A type called 'Laptop' already exists." instead of a raw SQLite constraint message. **Known limit, accepted:** SQLite's `NOCASE` folds ASCII `A–Z` only, so `Café` and `CAFÉ` would both be storable. Household scale; not worth a custom collation.
+- **`is_subscription`** — `INTEGER` 0/1 (the app's boolean convention; `CHECK` pins the domain). It is the **only** thing that distinguishes a subscription from a warranty anywhere in this feature.
+- **`created_at`** — ISO datetime TEXT, as everywhere else.
+
+**MUST-19.4 (seeded in the migration).** `0003` inserts three rows so the dropdown is never empty on first boot:
+
+| `name` | `is_subscription` |
+|---|---|
+| Laptop | 0 |
+| Appliance | 0 |
+| Subscription | 1 |
+
+`created_at` is the literal `'2026-08-16T00:00:00.000Z'` — a migration cannot call `nowIso()`, and a fixed timestamp keeps the migration deterministic and its test exact. The rows are ordinary rows: an admin may rename or delete them like any other.
+
+### 19.3 `warranty_items.type_id`
+
+```sql
+ALTER TABLE `warranty_items` ADD COLUMN `type_id` integer REFERENCES `warranty_item_types`(`id`);
+--> statement-breakpoint
+CREATE INDEX `warranty_items_type_idx` ON `warranty_items` (`type_id`);
+```
+
+- **Nullable.** Type is optional: an item recorded before this feature existed, or one the member does not want to classify, has `type_id IS NULL` and behaves exactly as it does today. There is no "Uncategorised" row in the types table — NULL says it.
+- **`ALTER TABLE ADD COLUMN` is legal here** with `foreign_keys = ON` (set on every connection, `src/db/client.ts`) precisely because the added column's default is NULL, which is SQLite's stated condition for adding a column carrying a `REFERENCES` clause.
+- **No `ON DELETE` clause**, deliberately. See §19.4.
+- **The column is appended physically**, as `must_change_password` was in `0001`; the Drizzle mirror declares it last on `warrantyItems` for the same reason and with the same style of docblock.
+- **No trigger changes.** `warranty_search_item_au` fires `AFTER UPDATE OF name, vendor, model, notes` — `type_id` is not in that list, so changing an item's type does not re-tokenize its OCR blob. That is the intended behaviour (§19.8).
+
+### 19.4 Deleting a type that is in use is blocked in the app layer
+
+**MUST-19.5** `deleteItemType(id)` **refuses** when any `warranty_items` row references the type, and the refusal carries the count: *"3 items use this type. Change their type first, or rename this one."* The block is in the application layer, in `src/lib/warranty/types.ts`, as a typed error the server action catches and renders — not a stack trace and not a silent success.
+
+**MUST-19.6** There is **no `ON DELETE CASCADE`** (it would delete warranty items — the evidence this whole feature exists to keep) and **no `ON DELETE SET NULL`** (it would silently strip the type off every affected item, which is a data change the admin did not ask for and cannot see). With no clause, SQLite's default `NO ACTION` makes an unguarded delete raise `FOREIGN KEY constraint failed` — the database is the backstop, the app-layer check is the user-facing behaviour, and both are tested.
+
+**MUST-19.7** Renaming a type is always allowed, including while it is in use: the name is stored in exactly one place, so a rename is a single UPDATE with no fan-out and no reindex (§19.8). Toggling `is_subscription` is likewise always allowed and takes effect immediately on every item of that type — that is the point of putting the flag on the type rather than on the item.
+
+### 19.5 Subscriptions reuse the warranty fields verbatim
+
+**MUST-19.8** A subscription introduces **no new date columns and no new table**. The existing fields carry the subscription period:
+
+| Warranty field | Read as, when the item's type has `is_subscription = 1` |
+|---|---|
+| `purchase_date` | subscription period **start** |
+| `warranty_months` | subscription **duration** in months |
+| `expiry_date` | subscription period **end** — the date to cancel by |
+| `is_lifetime` | a perpetual/never-expiring subscription; unchanged semantics (MUST-3.5: months and expiry both NULL) |
+| everything else (`name`, `vendor`, `price_cents`, `owner_user_id`, `notes`, receipts, `transaction_id`) | unchanged |
+
+Every rule already written keeps working with no special case: `expiry_date` is still computed at write time by `addMonthsClamped()` (MUST-3.6, and the clamp is *right* for subscriptions — a 1-month subscription started Jan 31 ends Feb 28); coverage is still inclusive (MUST-3.14); the CHECK constraints of §3.2 still hold; a receipt is still a receipt.
+
+**MUST-19.9 (cancel reminders are the existing expiring-soon mechanics, nothing more).** "Remind me to cancel" is served by what §3.7 and §10.5 already build: `EXPIRING_SOON_DAYS = 60`, the derived `expiring` status, the list badge and filter, and the dashboard widget. **No scheduler tick, no email, no push, no per-item reminder date** — §16 item 1 stands for subscriptions exactly as it stands for warranties. The only thing that changes is the words on screen (§19.6).
+
+### 19.6 UI wording keyed on `is_subscription`
+
+**MUST-19.10** When an item's type has `is_subscription = 1`, the surfaces that talk about expiry switch nouns:
+
+| Surface | Warranty wording | Subscription wording |
+|---|---|---|
+| List row / expiry column | `expires 2027-03-01` | `cancel by 2027-03-01` |
+| Status badge, `expiring` | `Expires in 12 days` | `Cancel in 12 days` |
+| Dashboard widget row | `expires in 12 days` | `cancel by 2027-03-01` |
+| Detail page, date labels | Purchase date / Warranty length / Covered through | Period start / Period length / Cancel by |
+| Add & edit form, live computed date | `Covered through 2027-03-01` (MUST-10.4) | `Cancel by 2027-03-01` |
+
+**MUST-19.11** The rule lives in **one** place — `expiryNoun(isSubscription): 'expires' | 'cancel by'` and its siblings in `src/lib/warranty/constants.ts`, a **pure, client-safe module that imports no database code** (Ruling P4 precedent: anything a client component imports must not drag `better-sqlite3` into the bundle). Every list, badge, widget and detail row calls that helper; no component hard-codes either verb.
+
+**MUST-19.12** The status *derivation* is untouched. `warrantyStatus()`, `STATUS_CASE_SQL` and `EXPIRING_SOON_DAYS` in `src/lib/warranty/expiry.ts` do not learn about subscriptions — a subscription that ends in 12 days is `expiring`, exactly like a warranty. Only the label changes. This keeps the filter, the counts, the SQL and the badge in the single agreement §3.7 exists to guarantee.
+
+### 19.7 Type in the rest of the UI
+
+**MUST-19.13** Type appears as:
+
+- an **optional dropdown** on the add and edit forms (`— none —` plus every type, ordered by name, case-insensitively);
+- a **column and a filter** on the warranties list (`?typeId=` alongside the existing `?q=`, `?status=`, owner and sort parameters — filtering composes, it does not replace);
+- a **badge** on each dashboard-widget row, so "Netflix — cancel by 2027-03-01" reads as a subscription at a glance.
+
+**MUST-19.14 (admin-only management page).** `/settings/item-types`, listed under **Administration** in Settings as "Item types", implemented as `src/app/(app)/settings/item-types/{page.tsx, actions.ts, item-types-manager.tsx}` and gated exactly the way `settings/users` is gated: `await requireAdmin()` in the page, `await requireAdmin()` in every action, and the Settings index link rendered only for `role === 'admin'`. Non-admins never see the entry and cannot reach the actions. The page supports: list (with a usage count per type), add, rename, toggle `is_subscription`, and delete — delete refusing with the count message of MUST-19.5. Every mutating action calls `isSameOrigin(await headers())` **first** (MUST-13.1), validates with zod (MUST-13.7), and `revalidatePath('/settings/item-types')` on success.
+
+**MUST-19.15** Choosing, changing or clearing an item's type is **not** an admin action — any member may do it on any item, matching the household-trust model of §1.3. Only the *list of types* is admin-maintained.
+
+### 19.8 The type name is deliberately **not** in the FTS index
+
+**MUST-19.16** `warranty_search` is unchanged: five columns (`name`, `vendor`, `model`, `notes`, `ocr_text`), six triggers, no seventh. Type name is **not** indexed, and no trigger is added on `warranty_item_types`.
+
+Three reasons, in order of weight:
+
+1. **A type is a filter, not search text.** The list already offers a type filter (MUST-19.13); indexing the name would make typing `laptop` also return every laptop, drowning the item actually named "Laptop stand" in a result set the member cannot narrow.
+2. **A rename must stay a single UPDATE.** If the name were indexed, renaming a type would have to reindex every item of that type — an FTS rebuild fanning out over rows whose OCR blobs may run to 100 000 characters each (MUST-3.10's cap), triggered by an admin edit that changed nothing about those items. Keeping it out means a rename touches exactly one row.
+3. **The index would need a seventh trigger** on a table whose entire purpose is a 3-row lookup list, for no search the type filter does not already answer.
+
+### 19.9 Drizzle mirror
+
+**MUST-19.17** `warrantyItemTypes` is appended at the **end** of `src/db/schema.ts` (after `warrantyReceipts`, mirroring DDL order per MUST-3.15), and `typeId` is added as the **last** property of `warrantyItems` with a docblock explaining that `ALTER TABLE ADD COLUMN` appends physically — the same convention and the same reasoning as `users.mustChangePassword`. The `CHECK` constraints and the `COLLATE NOCASE` on the unique index have no Drizzle representation and are named in the docblock, per MUST-3.4/MUST-19.3.
+
+### 19.10 Testing additions
+
+On top of §15, all binding:
+
+- **Migration (`tests/db/warranty-item-types.test.ts`):** journal idx 3 / `when` 1755475200000 / tag / `breakpoints: true` exactly; the file contains `--> statement-breakpoint` and extends the SQL-only enumeration; `warranty_item_types` exists after `createTestDb()`; `warranty_items_type_idx` and `warranty_item_types_name_uq` exist; **the three seeded rows are present after migration** with the right `is_subscription` flags and nothing else; a duplicate name differing only in case is rejected by the unique index; `is_subscription = 2` and a blank/61-character name are rejected by their CHECKs; `type_id` accepts NULL, accepts a real id, and rejects an unknown id with `FOREIGN KEY constraint failed`; deleting a referenced type raises `FOREIGN KEY constraint failed` at the database level (the backstop behind MUST-19.5); the existing whole-schema assertions in `tests/db/schema.test.ts` are extended (`warranty_item_types` sorts **before** `warranty_items` under SQLite's binary `order by name`).
+- **Types library (`tests/lib/warranty/types.test.ts`):** create / list / rename / toggle / delete round-trip; name trimmed; empty and 61-character names rejected by zod; case-insensitive duplicate rejected with a readable message on both create and rename; `listItemTypes()` ordered case-insensitively by name; `typeUsageCount()` counts only items of that type; **`deleteItemType()` on a type used by two items throws the typed in-use error carrying `count === 2`**, and the type and both items are still there afterwards; deleting an unused type succeeds; rename succeeds *while* the type is in use and the items keep pointing at it.
+- **Wording (`tests/lib/warranty/constants.test.ts`):** `expiryNoun(true) === 'cancel by'`, `expiryNoun(false) === 'expires'`, and the subscription/warranty phrase swap for the list, detail and widget strings — asserted on the helper, and asserted again at the component level in the T9/T10 tests so a hard-coded verb cannot creep back in.
+- **Actions (`tests/app/item-types-actions.test.ts`):** every mutating action rejects a cross-origin request **before** touching the database, and rejects a non-admin caller.
+
+### 19.11 Decisions taken on the owner's behalf in this addendum
+
+Extending §17, same rules — each is one constant or one paragraph if the owner wants it different.
+
+28. **Integer primary key** for `warranty_item_types`, matching every other table (the request said "match §3's conventions"; §3's convention for ids is integer, for dates and timestamps TEXT).
+29. **`warranty_items_type_idx`** added alongside the column, so the type filter and the in-use count are indexed lookups rather than table scans — the same reasoning that gave `owner_user_id` and `transaction_id` their indexes in §3.2.
+30. **Three seeded types only** (Laptop, Appliance, Subscription), created and deletable like any other row; the seed exists so the first dropdown is not empty, not to be a taxonomy.
+31. **`NOCASE` uniqueness is ASCII-only** — accepted (§19.2).
+32. **The wording rule is a helper, not a column** — `expiryNoun()` in the client-safe `src/lib/warranty/constants.ts`; no denormalised "is_subscription" copy on `warranty_items`, so toggling the flag on a type is instantly correct everywhere.
+
+---
+
 ## Revision history
 
 - **v1.0** (2026-08-16): initial approved design for the warranty tracker, targeting Budget Tracker v1.1.0.
+- **v1.1** (2026-08-16): §19 addendum — warranty item types (admin-maintained list, migration `0003`) and subscriptions tracked through the existing purchase/term/expiry fields with `is_subscription`-keyed wording. User-requested mid-build, after Tasks 1–3 had landed; §1–§18 unchanged.
