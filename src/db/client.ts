@@ -14,6 +14,9 @@ export interface DbInstance {
 
 let instance: DbInstance | null = null;
 
+// BUDGET_DB_PATH / BUDGET_MIGRATIONS_DIR are dev/test-only overrides (not documented in
+// README/.env.example, not set by docker-compose.yml): the container path always resolves
+// through DATA_DIR and process.cwd()/drizzle below.
 export function databasePath(): string {
   const override = process.env.BUDGET_DB_PATH;
   if (override && override.length > 0) return override;
