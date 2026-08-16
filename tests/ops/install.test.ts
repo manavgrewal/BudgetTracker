@@ -546,3 +546,77 @@ describe('Dockerfile carries the rescue script', () => {
     expect(runtime).toMatch(/COPY .*\/app\/scripts \.\/scripts/);
   });
 });
+
+/** Recursively collects every ".ts"/".tsx" file under dir — a Node walk so this is meaningful with or without ripgrep on PATH. */
+function walkTsFiles(dir: string, out: string[] = []): string[] {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      walkTsFiles(full, out);
+    } else if (entry.isFile() && (entry.name.endsWith('.ts') || entry.name.endsWith('.tsx'))) {
+      out.push(full);
+    }
+  }
+  return out;
+}
+
+/**
+ * Strips block comments then line comments, so a prose mention of "fetch()"
+ * inside a doc comment doesn't false-positive as a real call site (this is
+ * not a full TS parser, just enough to tell code from commentary). The `//`
+ * strip requires a non-colon before it so `https://` URLs inside a string
+ * aren't truncated mid-line.
+ */
+function stripComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+}
+
+/**
+ * True when 'use client' is the file's directive prologue (the actual Next.js
+ * rule: it must be the first statement, before any import). A Server
+ * Component .tsx (a page.tsx with no directive) still renders server-side —
+ * a fetch() there is exactly what this invariant exists to catch, so it must
+ * NOT be exempted just because the file is a .tsx.
+ */
+function isClientComponent(source: string): boolean {
+  const withoutBom = source.charCodeAt(0) === 0xfeff ? source.slice(1) : source;
+  const prologue = withoutBom.trimStart().slice(0, 20);
+  return /^['"]use client['"]/.test(prologue);
+}
+
+describe('the app makes no network call unless SimpleFIN is configured', () => {
+  it('every real (non-comment) fetch() call site is either the SimpleFIN client or inside a client component', () => {
+    // Client components (files whose directive prologue is 'use client') make
+    // browser-initiated, same-origin fetch()es on user interaction — out of
+    // scope for "the app calls out on its own". Everything else (Server
+    // Components included — a page.tsx has no 'use client' and still renders
+    // server-side) must route through the one allowed server-side call site.
+    const srcRoot = path.join(root, 'src');
+    const allowedFile = path.join(srcRoot, 'lib', 'simplefin', 'client.ts');
+    const offenders: string[] = [];
+    const clientComponentHits: string[] = [];
+    for (const file of walkTsFiles(srcRoot)) {
+      const raw = fs.readFileSync(file, 'utf8');
+      const stripped = stripComments(raw);
+      if (!/\bfetch\s*\(/.test(stripped)) continue;
+
+      if (file === allowedFile) continue;
+      if (isClientComponent(raw)) {
+        clientComponentHits.push(path.relative(root, file));
+        continue;
+      }
+      offenders.push(path.relative(root, file));
+    }
+
+    expect(offenders).toEqual([]);
+    // Proves rule (b) is doing real work, not just a name-list of the known
+    // sites: every fetch()-calling file that isn't the allowed one must have
+    // been exempted BECAUSE it declared 'use client', not by coincidence.
+    expect(clientComponentHits.length).toBeGreaterThan(0);
+  });
+
+  it('the scheduler never triggers a sync', () => {
+    const scheduler = read('src/lib/scheduler.ts');
+    expect(scheduler).not.toMatch(/simplefin|runSync/i);
+  });
+});

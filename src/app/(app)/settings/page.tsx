@@ -52,6 +52,11 @@ export default async function SettingsPage() {
                 Backups
               </Link>
             </li>
+            <li>
+              <Link className="underline" href="/settings/connections">
+                Connections (SimpleFIN)
+              </Link>
+            </li>
           </ul>
         </section>
       ) : null}

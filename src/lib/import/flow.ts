@@ -1,5 +1,6 @@
 import { getAccount } from '@/lib/accounts';
 import { runEngine, type EngineResult } from '@/lib/categorize/engine';
+import { isSimplefinManaged } from '@/lib/simplefin/connection';
 import { commitImport } from './commit';
 import { computeRowHashes } from './dedup';
 import type { ImportMapping } from './mapping';
@@ -32,6 +33,13 @@ export function commitStagedImport(input: {
 }): CommitFlowResult {
   const account = getAccount(input.accountId);
   if (!account) throw new Error(`No account ${input.accountId}`);
+
+  // Spec section 3: an account is CSV-managed or SimpleFIN-managed, never both.
+  if (isSimplefinManaged(input.accountId)) {
+    throw new Error(
+      `"${account.name}" is synced from SimpleFIN. Importing a CSV into it would create duplicates, because the two sources dedup differently. Unlink it under Settings → Connections first.`,
+    );
+  }
 
   const buf = readStagedFile(input.stagingId);
 

@@ -166,4 +166,31 @@ describe('commitImport', () => {
     const result = commitImport({ accountId, profileId: null, filename: 'empty.csv', importedBy: userId, rows: [], errors: [] });
     expect(result).toMatchObject({ rowsAdded: 0, rowsDuplicate: 0, rowsError: 0 });
   });
+
+  it('treats an empty-string externalId as absent — it must never enter the partial unique index as a non-null value', () => {
+    // '' !== NULL in SQL: the transactions_external_id_uq partial index only
+    // excludes NULL, so writing '' verbatim would let two unrelated rows
+    // collide on (accountId, ''), or silently mark a CSV row as "provider-owned".
+    current = createSeededTestDb();
+    const userId = insertTestUser(current.db);
+    const accountId = insertTestAccount(current.db);
+    const { hashed } = tdRows(accountId);
+    const row = { ...hashed[0], externalId: '' };
+
+    const result = commitImport({ accountId, profileId: null, filename: 'td.csv', importedBy: userId, rows: [row], errors: [] });
+    expect(result.rowsAdded).toBe(1);
+
+    const stored = current.sqlite.prepare('select external_id, dedup_hash from transactions where id = ?').get(result.insertedTransactionIds[0]) as {
+      external_id: unknown;
+      dedup_hash: unknown;
+    };
+    expect(stored.external_id).toBeNull();
+    expect(stored.dedup_hash).toBe(hashed[0].dedupHash);
+
+    // A second row with the same empty-string externalId must dedup on its
+    // dedupHash (the CSV path), not collide as if both shared a real provider id.
+    const second = commitImport({ accountId, profileId: null, filename: 'td-again.csv', importedBy: userId, rows: [{ ...hashed[0], externalId: '' }], errors: [] });
+    expect(second.rowsDuplicate).toBe(1);
+    expect(second.rowsAdded).toBe(0);
+  });
 });

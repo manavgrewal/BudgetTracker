@@ -6,13 +6,23 @@ import { findExistingByHashes, type HashedRow } from './dedup';
 import { getImportHooks } from './hooks';
 import type { RowError } from './parse';
 
+export type CommitRow = HashedRow & { externalId?: string | null };
+
 /**
  * SQLite has no strict column typing, so a malformed row (e.g. a non-numeric
  * amountCents) would otherwise be silently written instead of failing the
  * whole import. Validate the fields we're about to persist so corruption
  * throws inside the transaction and rolls back, instead of landing in the DB.
+ *
+ * A SimpleFIN row dedups on external_id and never carries a CSV dedup hash
+ * (it is stamped '' by the caller and written as NULL), so the dedupHash
+ * check is skipped for those rows.
  */
-function assertInsertable(row: HashedRow): void {
+function assertInsertable(row: CommitRow): void {
+  // '' is not NULL: an empty-string external_id would still satisfy the
+  // partial unique index's `where external_id is not null` and could collide
+  // across unrelated rows, so it must coalesce to null exactly like nullish.
+  const providerId = row.externalId || null;
   if (typeof row.amountCents !== 'number' || !Number.isFinite(row.amountCents)) {
     throw new Error(`Invalid amountCents for row with dedupHash ${String(row.dedupHash)}`);
   }
@@ -22,7 +32,7 @@ function assertInsertable(row: HashedRow): void {
   if (typeof row.rawDescription !== 'string' || row.rawDescription.length === 0) {
     throw new Error(`Invalid rawDescription for row with dedupHash ${String(row.dedupHash)}`);
   }
-  if (typeof row.dedupHash !== 'string' || row.dedupHash.length === 0) {
+  if (!providerId && (typeof row.dedupHash !== 'string' || row.dedupHash.length === 0)) {
     throw new Error('Invalid dedupHash for row');
   }
   if (typeof row.hashVersion !== 'number') {
@@ -35,7 +45,7 @@ export interface CommitInput {
   profileId: number | null;
   filename: string;
   importedBy: number;
-  rows: HashedRow[];
+  rows: CommitRow[];
   errors: RowError[];
   at?: Date;
 }
@@ -67,6 +77,22 @@ export function commitImport(input: CommitInput): CommitResult {
     input.rows.map((row) => row.dedupHash),
   );
 
+  const externalIds = input.rows.map((row) => row.externalId ?? null).filter((value): value is string => value !== null && value.length > 0);
+  const existingByExternalId = new Map<string, number>();
+  if (externalIds.length > 0) {
+    const CHUNK = 400;
+    for (let offset = 0; offset < externalIds.length; offset += CHUNK) {
+      const chunk = externalIds.slice(offset, offset + CHUNK);
+      for (const found of db
+        .select({ id: transactions.id, externalId: transactions.externalId })
+        .from(transactions)
+        .where(and(eq(transactions.accountId, input.accountId), isNotNull(transactions.externalId), inArray(transactions.externalId, chunk)))
+        .all()) {
+        if (found.externalId) existingByExternalId.set(found.externalId, found.id);
+      }
+    }
+  }
+
   return db.transaction((tx) => {
     const importRow = tx
       .insert(imports)
@@ -96,7 +122,10 @@ export function commitImport(input: CommitInput): CommitResult {
     };
 
     for (const row of input.rows) {
-      const existingId = existing.get(row.dedupHash);
+      // Same '' -> null coalescing as assertInsertable: an empty string must
+      // never reach the external_id column, only a real provider id or NULL.
+      const providerId = row.externalId || null;
+      const existingId = providerId ? existingByExternalId.get(providerId) : existing.get(row.dedupHash);
       if (existingId !== undefined) {
         // Spec section 3: record the association for duplicates too — this is
         // what makes undo safe with overlapping date-range exports.
@@ -122,7 +151,9 @@ export function commitImport(input: CommitInput): CommitResult {
           confidence: null,
           isTransfer: false,
           notes: null,
-          dedupHash: row.dedupHash,
+          // Provider-id rows dedup on external_id; the CSV hash stays NULL on them.
+          dedupHash: providerId ? null : row.dedupHash,
+          externalId: providerId,
           hashVersion: row.hashVersion,
           createdBy: input.importedBy,
           createdAt: timestamp,
@@ -132,7 +163,8 @@ export function commitImport(input: CommitInput): CommitResult {
         .get();
 
       insertedTransactionIds.push(inserted.id);
-      existing.set(row.dedupHash, inserted.id);
+      if (providerId) existingByExternalId.set(providerId, inserted.id);
+      else existing.set(row.dedupHash, inserted.id);
       link(inserted.id);
     }
 
