@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import zlib from 'node:zlib';
 import { createHash } from 'node:crypto';
 import { createSeededTestDb, insertTestUser, type TestDb } from '../helpers/db';
 import { buildArchive } from '@/lib/backup/archive';
@@ -13,6 +14,52 @@ import {
   restoreFromArtifact,
 } from '../../scripts/restore-backup';
 import { STORED_NAME_RE } from '@/lib/warranty/receipts';
+
+/**
+ * A minimal, hand-rolled ustar-format tar writer, used only to fabricate archives with
+ * entry shapes node-tar's own `create()` either normalizes away (a leading "/" is stripped
+ * before it ever reaches disk) or cannot produce at all on this platform (creating a real
+ * symlink on Windows requires elevated privileges, which a CI runner may not have). An
+ * attacker crafting a hostile archive does not go through node-tar's create() either — they
+ * write the tar bytes directly — so this is the more faithful test fixture for the tar-slip
+ * defence, not a shortcut around it.
+ */
+function ustarHeader(fields: { name: string; typeflag: '0' | '2'; linkname?: string; size?: number }): Buffer {
+  const buf = Buffer.alloc(512);
+  buf.write(fields.name, 0, 100, 'utf8');
+  buf.write('0000644\0', 100, 8, 'utf8');
+  buf.write('0000000\0', 108, 8, 'utf8');
+  buf.write('0000000\0', 116, 8, 'utf8');
+  const size = fields.size ?? 0;
+  buf.write(`${size.toString(8).padStart(11, '0')}\0`, 124, 12, 'utf8');
+  buf.write('00000000000\0', 136, 12, 'utf8');
+  buf.write('        ', 148, 8, 'utf8'); // checksum placeholder: 8 ASCII spaces
+  buf.write(fields.typeflag, 156, 1, 'utf8');
+  if (fields.linkname) buf.write(fields.linkname, 157, 100, 'utf8');
+  buf.write('ustar\0', 257, 6, 'utf8');
+  buf.write('00', 263, 2, 'utf8');
+  let sum = 0;
+  for (let i = 0; i < 512; i += 1) sum += buf[i];
+  buf.write(`${sum.toString(8).padStart(6, '0')}\0 `, 148, 8, 'utf8');
+  return buf;
+}
+
+function buildRawTarGz(entries: { name: string; typeflag: '0' | '2'; linkname?: string; body?: string }[]): Buffer {
+  const blocks: Buffer[] = [];
+  for (const entry of entries) {
+    const bodyBuf = entry.body ? Buffer.from(entry.body, 'utf8') : Buffer.alloc(0);
+    blocks.push(
+      ustarHeader({ name: entry.name, typeflag: entry.typeflag, linkname: entry.linkname, size: bodyBuf.length }),
+    );
+    if (bodyBuf.length > 0) {
+      const padded = Buffer.alloc(Math.ceil(bodyBuf.length / 512) * 512);
+      bodyBuf.copy(padded);
+      blocks.push(padded);
+    }
+  }
+  blocks.push(Buffer.alloc(1024)); // two all-zero 512-byte blocks mark end-of-archive
+  return zlib.gzipSync(Buffer.concat(blocks));
+}
 
 let current: TestDb | null = null;
 let dataDir: string;
@@ -163,6 +210,86 @@ describe('tar-slip defence (MUST-12.6)', () => {
     const target = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-restore-target-'));
     expect(() => restoreFromArtifact(artifact, { dataDir: target })).toThrowError(/receipts/i);
     expect(fs.existsSync(path.join(target, 'budget.db'))).toBe(false);
+    fs.rmSync(target, { recursive: true, force: true });
+  });
+
+  // Fix report M5: the three tar-slip vectors the spec (MUST-12.6) names explicitly, each
+  // fabricated with a hand-rolled tar writer since node-tar's own create() either strips a
+  // leading "/" before it reaches disk (so it can never emit a genuinely absolute entry.path)
+  // or, for a real symlink, needs OS privileges a CI runner may not have on every platform.
+  it('aborts on an absolute-path entry and extracts nothing', () => {
+    const artifact = path.join(dataDir, 'abs.tar.gz');
+    fs.writeFileSync(artifact, buildRawTarGz([{ name: '/etc/evil.sh', typeflag: '0', body: 'x' }]));
+
+    const target = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-restore-target-'));
+    expect(() => restoreFromArtifact(artifact, { dataDir: target })).toThrowError(RestoreError);
+    expect(fs.readdirSync(target)).toEqual([]);
+    fs.rmSync(target, { recursive: true, force: true });
+  });
+
+  it('aborts on a ".." segment entry and extracts nothing', () => {
+    const artifact = path.join(dataDir, 'dotdot.tar.gz');
+    fs.writeFileSync(artifact, buildRawTarGz([{ name: '../evil.sh', typeflag: '0', body: 'x' }]));
+
+    const target = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-restore-target-'));
+    expect(() => restoreFromArtifact(artifact, { dataDir: target })).toThrowError(RestoreError);
+    expect(fs.readdirSync(target)).toEqual([]);
+    fs.rmSync(target, { recursive: true, force: true });
+  });
+
+  it('aborts on a symlink entry and extracts nothing', () => {
+    const artifact = path.join(dataDir, 'symlink.tar.gz');
+    fs.writeFileSync(
+      artifact,
+      buildRawTarGz([
+        { name: 'budget.db', typeflag: '0', body: 'SQLite format 3\0' },
+        { name: 'receipts/11111111-2222-3333-4444-555555555555.jpg', typeflag: '2', linkname: '/etc/passwd' },
+      ]),
+    );
+
+    const target = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-restore-target-'));
+    expect(() => restoreFromArtifact(artifact, { dataDir: target })).toThrowError(RestoreError);
+    expect(fs.readdirSync(target)).toEqual([]);
+    fs.rmSync(target, { recursive: true, force: true });
+  });
+});
+
+describe('allow-listed names must match their expected entry type (fix report M10)', () => {
+  it('rejects an archive where "receipts" is a plain file, not a directory', async () => {
+    const tar = await import('tar');
+    const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-hostile3-'));
+    fs.writeFileSync(path.join(stage, 'budget.db'), 'SQLite format 3\0');
+    fs.writeFileSync(path.join(stage, 'receipts'), 'not a directory');
+    const artifact = path.join(dataDir, 'hostile3.tar.gz');
+    tar.create({ file: artifact, cwd: stage, gzip: true, sync: true }, ['budget.db', 'receipts']);
+    fs.rmSync(stage, { recursive: true, force: true });
+
+    const target = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-restore-target-'));
+    expect(() => restoreFromArtifact(artifact, { dataDir: target })).toThrowError(RestoreError);
+    expect(fs.readdirSync(target)).toEqual([]);
+    fs.rmSync(target, { recursive: true, force: true });
+  });
+});
+
+describe('archive restore refuses a non-SQLite budget.db entry (fix report IMPORTANT 4, MUST-12.5 continued)', () => {
+  it('refuses to clobber the live database when the archive\'s budget.db is not really SQLite', async () => {
+    const tar = await import('tar');
+    const stage = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-hostile4-'));
+    fs.mkdirSync(path.join(stage, 'receipts'), { recursive: true });
+    fs.writeFileSync(path.join(stage, 'budget.db'), 'this looks like a file but is not a SQLite database');
+    const artifact = path.join(dataDir, 'hostile4.tar.gz');
+    tar.create({ file: artifact, cwd: stage, gzip: true, sync: true }, ['budget.db', 'receipts']);
+    fs.rmSync(stage, { recursive: true, force: true });
+
+    const target = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-restore-target-'));
+    fs.writeFileSync(path.join(target, 'budget.db'), 'ORIGINAL LIVE DATABASE');
+    fs.mkdirSync(path.join(target, 'receipts'), { recursive: true });
+    fs.writeFileSync(path.join(target, 'receipts', 'keepme.txt'), 'precious');
+
+    expect(() => restoreFromArtifact(artifact, { dataDir: target })).toThrowError(RestoreError);
+    // MUST-12.5's "refuse, touch nothing" must hold for what's INSIDE the archive too.
+    expect(fs.readFileSync(path.join(target, 'budget.db'), 'utf8')).toBe('ORIGINAL LIVE DATABASE');
+    expect(fs.existsSync(path.join(target, 'receipts', 'keepme.txt'))).toBe(true);
     fs.rmSync(target, { recursive: true, force: true });
   });
 });

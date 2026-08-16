@@ -240,6 +240,10 @@ never touches `data/receipts/`, since a database-only backup says nothing about 
 files should exist. Any warranty whose receipt is missing after a cross-version restore simply
 shows a missing-file state in the UI; the script prints how many receipt rows are affected.
 
+**This direction only goes one way.** A v1.1 `.tar.gz` archive is not restorable by a v1.0.0
+install — the restore tool says so if you hand it an artifact it cannot read. Downgrading a
+running install to an older version is not supported and never was: migrations are append-only.
+
 Deleting `-wal`/`-shm` files before writing the restored database is handled for you and is not
 optional: SQLite runs in WAL mode and would otherwise replay the old write-ahead log on top of
 the database you just restored.

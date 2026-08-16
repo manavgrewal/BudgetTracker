@@ -1,8 +1,28 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { createSeededTestDb, insertTestUser, type TestDb } from '../helpers/db';
+
+// Fix report IMPORTANT 2: forces one `tarCreate()` call inside buildArchive() to fail, to
+// prove a failed build cannot damage or masquerade as the previous good artifact. A plain
+// `vi.spyOn(tar, 'create')` cannot redefine a live ESM binding ("Cannot redefine property:
+// create"), so this uses vi.mock's supported module-replacement instead, gated by a
+// vi.hoisted() flag the test flips on and off around the one call it wants to fail.
+const tarCreateControl = vi.hoisted(() => ({ shouldFail: false }));
+vi.mock('tar', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('tar')>();
+  return {
+    ...actual,
+    create: (...args: Parameters<typeof actual.create>) => {
+      if (tarCreateControl.shouldFail) {
+        tarCreateControl.shouldFail = false;
+        throw new Error('disk full');
+      }
+      return actual.create(...args);
+    },
+  };
+});
 import {
   ARCHIVE_NAME_RE,
   LEGACY_NAME_RE,
@@ -40,6 +60,7 @@ afterEach(() => {
   if (originalDbPath === undefined) delete process.env.BUDGET_DB_PATH;
   else process.env.BUDGET_DB_PATH = originalDbPath;
   fs.rmSync(dataDir, { recursive: true, force: true });
+  vi.restoreAllMocks();
 });
 
 async function entriesOf(archivePath: string): Promise<string[]> {
@@ -98,6 +119,25 @@ describe('buildArchive (MUST-12.1, MUST-12.2)', () => {
     expect(path.dirname(file)).toBe(path.resolve(tempDir()));
     expect(path.basename(file)).toMatch(/^[0-9a-f-]{36}\.tar\.gz$/);
     expect(bytes).toBeGreaterThan(0);
+  });
+
+  it('a failed build leaves the prior artifact intact and no truncated corpse at the final name (fix report IMPORTANT 2)', () => {
+    const target = path.join(backupsDir(), 'budget-2026-08-16.tar.gz');
+    fs.mkdirSync(backupsDir(), { recursive: true });
+    buildArchive(target);
+    const goodBytes = fs.readFileSync(target);
+    expect(goodBytes.length).toBeGreaterThan(0);
+
+    tarCreateControl.shouldFail = true;
+    expect(() => buildArchive(target)).toThrow('disk full');
+
+    // The good artifact at the final name must be untouched — not deleted, not truncated.
+    expect(fs.readFileSync(target).equals(goodBytes)).toBe(true);
+    // No `.partial` leftover, and nothing else in backupsDir() that ARCHIVE_NAME_RE would
+    // treat as a second, corrupt, "healthy-looking" backup.
+    const entries = fs.readdirSync(backupsDir());
+    expect(entries).toEqual(['budget-2026-08-16.tar.gz']);
+    expect(entries.some((n) => n.endsWith('.partial'))).toBe(false);
   });
 });
 

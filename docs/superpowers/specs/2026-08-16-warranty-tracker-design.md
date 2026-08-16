@@ -41,7 +41,7 @@ Everything below is additive to base §2. No existing subsystem is redesigned.
 |---|---|
 | New pages | `/warranties`, `/warranties/new`, `/warranties/[id]` under `src/app/(app)/` |
 | New route handlers | exactly **three**: `POST /api/warranties/receipts/stage` (the only multipart upload), `GET /api/warranties/receipts/stage/[stagingId]` (OCR poll), `GET /api/warranties/receipts/[id]` (authenticated file stream). Every other mutation is a server action. |
-| New library dirs | `src/lib/warranty/` (items, receipts, search, expiry, suggest, sniff, staging, `ocr/`), `src/lib/backup/` gains `archive.ts` + `restore.ts` |
+| New library dirs | `src/lib/warranty/` (items, receipts, search, expiry, suggest, sniff, staging, `ocr/`), `src/lib/backup/` gains `archive.ts` (restore logic lives in `scripts/restore-backup.ts` instead of a `restore.ts` here — amended T11: standalone image ships no `src/`) |
 | New migration | `drizzle/0002_warranty_tracker.sql`, journal idx **2**, `when` **1755388800000** |
 | New runtime deps | `tesseract.js` (pulls `tesseract.js-core`), `pdfjs-dist`, `tar` |
 | New vendored asset | `vendor/tessdata/eng.traineddata.gz`, committed to the repo |
@@ -626,7 +626,7 @@ Nightly name `budget-YYYY-MM-DD.tar.gz` in `${DATA_DIR}/backups/`; on-demand dow
 
 ### 12.2 Restore
 
-**MUST-12.4** Restore stays what it is today — an **offline procedure with the container stopped** — now backed by a helper so it is testable and hard to get wrong: `src/lib/backup/restore.ts` exposing `restoreFromArtifact(artifactPath, { dataDir })`, driven by `scripts/restore-backup.ts` (`npm run restore-backup`), the same rescue-tooling pattern as `scripts/reset-admin-password.ts`. There is **no in-app restore button**: restoring under a live SQLite connection is how you corrupt a database.
+**MUST-12.4** Restore stays what it is today — an **offline procedure with the container stopped** — now backed by a helper so it is testable and hard to get wrong: `restoreFromArtifact(artifactPath, { dataDir })` exported directly from `scripts/restore-backup.ts` (`npm run restore-backup`) rather than from a separate `src/lib/backup/restore.ts` (amended T11: the runtime image ships Next's standalone output, which has no `src/` tree, so a rescue script cannot import from `@/lib/...` inside the container — the same constraint `scripts/reset-admin-password.ts` already lives under). There is **no in-app restore button**: restoring under a live SQLite connection is how you corrupt a database.
 
 **MUST-12.5 Format detection is by magic bytes, never by file extension:**
 

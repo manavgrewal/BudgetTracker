@@ -39,7 +39,10 @@ export function listBackups(): BackupFile[] {
   return fs
     .readdirSync(dir)
     // MUST-12.3: retention counting spans BOTH shapes, so a v1.0.0 install's existing
-    // .db backups stay visible and prunable after the upgrade.
+    // .db backups stay visible and prunable after the upgrade. Both patterns are anchored
+    // with `$`, so a `budget-....tar.gz.partial` left by an interrupted buildArchive()
+    // (src/lib/backup/archive.ts) never matches either one and is never listed, counted
+    // toward retention, or evicted-in-place-of.
     .filter((name) => ARCHIVE_NAME_RE.test(name) || LEGACY_NAME_RE.test(name))
     .map((name) => {
       const file = path.join(dir, name);

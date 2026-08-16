@@ -54,14 +54,27 @@ export function purgeStagedFiles(olderThanMs: number = DEFAULT_TTL_MS, now: Date
     } catch {
       continue;
     }
-    // Ruling P14: this directory is also where buildArchive() (src/lib/backup/archive.ts)
-    // stages a whole backup archive (budget.db + receipts/) under a UUID-suffixed
-    // subdirectory while a backup is being written. fs.rmSync on a directory without
-    // { recursive: true } throws (EISDIR/ENOTEMPTY), which would otherwise crash the
-    // entire nightly maintenance sweep the first time a container restart or crash left a
-    // stale staging directory behind. A directory can't be a staged upload; skip it.
-    if (!stats.isFile()) continue;
-    if (now.getTime() - stats.mtimeMs > olderThanMs) {
+    const aged = now.getTime() - stats.mtimeMs > olderThanMs;
+    // Ruling P14 (both halves): this directory is also where buildArchive()
+    // (src/lib/backup/archive.ts) stages a whole backup archive (budget.db + receipts/)
+    // under a `<uuid>-archive` subdirectory while a backup is being written. A directory
+    // can't be a staged upload, and fs.rmSync on a directory without { recursive: true }
+    // throws (EISDIR/ENOTEMPTY) — so directories in general are left alone, or a stale one
+    // would crash the entire nightly maintenance sweep. But a `-archive` directory left
+    // behind by a container killed mid-backup holds a full copy of the database (and,
+    // transiently, hard-linked receipts) — leaving THAT alone forever leaks disk space
+    // without bound. Once one is old enough that no backup could still be writing it, it is
+    // safe, and necessary, to remove it recursively. Any other directory shape is left
+    // completely untouched: this sweep only ever removes things it can positively identify
+    // as its own leftovers.
+    if (stats.isDirectory()) {
+      if (aged && entry.endsWith('-archive')) {
+        fs.rmSync(file, { recursive: true, force: true });
+        removed += 1;
+      }
+      continue;
+    }
+    if (aged) {
       fs.rmSync(file, { force: true });
       removed += 1;
     }

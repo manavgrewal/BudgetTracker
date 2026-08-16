@@ -140,30 +140,46 @@ undoing an import only deletes the transactions that no other import also covers
 
 ## 4. Backups and restore
 
-A job runs every night at **02:00 local time**. It writes `/data/backups/budget-YYYY-MM-DD.db`
-(a consistent `VACUUM INTO` copy, not a file copy), keeps the most recent 14 (configurable under
-**Settings → Backups**), then purges expired sessions and login attempts older than 30 days.
+A job runs every night at **02:00 local time**. It writes `/data/backups/budget-YYYY-MM-DD.tar.gz`
+— a `.tar.gz` archive containing a consistent `VACUUM INTO` copy of the database plus every receipt
+file, not a live-file copy — keeps the most recent 14 (configurable under **Settings → Backups**),
+then purges expired sessions and login attempts older than 30 days. Backups made before the
+receipts feature shipped are a bare `budget-YYYY-MM-DD.db` file; both shapes are still listed,
+still counted toward retention, and both still restore.
 
-**Settings → Backups → Download backup now** produces a fresh copy and streams it to your
+**Settings → Backups → Download backup now** produces a fresh archive and streams it to your
 browser.
 
-Backups are **unencrypted** SQLite files. That is a deliberate choice for a LAN-only app. For
-offsite copies, point Hyper Backup (or your NAS equivalent) at the `/data` share and turn on its
-client-side encryption there.
+Backups are **unencrypted**. That is a deliberate choice for a LAN-only app. Since receipts joined
+the archive, offsite copies can now carry receipt photographs too — these can show names,
+addresses and partial card numbers, not just transaction data — so for offsite copies, point Hyper
+Backup (or your NAS equivalent) at the `/data` share and turn on its client-side encryption there.
 
 ### Restore
 
+Restoring is always an offline, container-stopped procedure — there is deliberately no in-app
+restore button, since restoring under a live SQLite connection is how you corrupt a database. Use
+the bundled `restore-backup` script rather than copying files by hand: it detects which kind of
+backup you gave it by looking at the file's contents, not its name, refuses anything it doesn't
+recognise, and — for a `.tar.gz` archive — renames any existing `data/receipts/` aside instead of
+deleting it, so a mistaken restore is recoverable.
+
 ```bash
 docker compose down
-cd data
-rm -f budget.db budget.db-wal budget.db-shm
-cp backups/budget-2026-08-15.db budget.db
-cd ..
+docker compose run --rm --entrypoint node budget-tracker \
+  --experimental-strip-types scripts/restore-backup.ts /data/backups/budget-2026-08-16.tar.gz
 docker compose up -d
 ```
 
-Deleting the `-wal` and `-shm` files matters: SQLite in WAL mode will otherwise replay the old
-write-ahead log on top of your restored database.
+Restoring a v1.0.0 `.db` backup works the same way and only ever replaces `budget.db` — it never
+touches `data/receipts/`, since a database-only backup says nothing about which receipt files
+should exist; any warranty whose receipt is missing after a cross-version restore simply shows a
+missing-file state in the UI. A v1.1 `.tar.gz` archive is **not** restorable by a v1.0.0 install —
+this is one-way; downgrading is not supported.
+
+Deleting `-wal`/`-shm` files before writing the restored database is handled for you and is not
+optional: SQLite in WAL mode would otherwise replay the old write-ahead log on top of your
+restored database.
 
 ### Synology guidance
 

@@ -66,11 +66,19 @@ export function detectArtifactKind(filePath: string): ArtifactKind {
 }
 
 /**
- * MUST-12.6, tar-slip defence: extraction accepts ONLY the entry `budget.db` and entries
- * matching `receipts/<STORED_NAME_RE>`. Absolute paths, `..` segments, symlinks, hardlinks,
- * device nodes and anything else abort the whole restore. This runs as a FIRST PASS over the
- * archive listing, before a single byte is written, so "reject" really does mean "abort" and
- * not "skip". node-tar's own protections are relied on IN ADDITION TO this allow-list.
+ * MUST-12.6, tar-slip defence: extraction accepts ONLY the entry `budget.db` (a File),
+ * `receipts` (a Directory), and entries matching `receipts/<STORED_NAME_RE>` (each a File).
+ * Absolute paths, `..` segments, symlinks, hardlinks, device nodes, a `budget.db` that is
+ * itself a directory, a `receipts` that is itself a plain file, and anything else abort the
+ * whole restore. This runs as a FIRST PASS over the archive listing, before a single byte is
+ * written, so "reject" really does mean "abort" and not "skip". node-tar's own protections
+ * are relied on IN ADDITION TO this allow-list.
+ *
+ * Fix report M10: the original allow-list checked entry NAMES only, so an archive whose
+ * top-level `receipts` entry was itself a plain file (rather than a directory) — or whose
+ * `budget.db` was a directory — passed the name check and only failed later, deeper in
+ * extraction, in a less predictable way. Every accepted name now also pins the expected
+ * entry TYPE.
  */
 function assertArchiveEntriesAreSafe(artifactPath: string): void {
   const problems: string[] = [];
@@ -87,9 +95,18 @@ function assertArchiveEntriesAreSafe(artifactPath: string): void {
         problems.push(entry.path);
         return;
       }
-      if (name === 'budget.db' || name === 'receipts') return;
+      if (name === 'budget.db') {
+        if (entry.type !== 'File') problems.push(`${entry.path} (expected a file)`);
+        return;
+      }
+      if (name === 'receipts') {
+        if (entry.type !== 'Directory') problems.push(`${entry.path} (expected a directory)`);
+        return;
+      }
       const match = /^receipts\/(.+)$/.exec(name);
-      if (match === null || !RESTORE_STORED_NAME_RE.test(match[1])) problems.push(entry.path);
+      if (match === null || !RESTORE_STORED_NAME_RE.test(match[1]) || entry.type !== 'File') {
+        problems.push(entry.path);
+      }
     },
   });
   if (problems.length > 0) {
@@ -165,6 +182,18 @@ export function restoreFromArtifact(
 
     const extractedDb = path.join(stage, 'budget.db');
     if (!fs.existsSync(extractedDb)) throw new RestoreError('The archive contains no budget.db.');
+    // Fix report IMPORTANT 4, MUST-12.5 continued: the tar-slip allow-list only constrains
+    // entry NAMES and TYPES, not file CONTENT — an archive can be a perfectly well-formed
+    // gzip+tar with a `budget.db` entry that is a File but not actually a SQLite database
+    // (garbage bytes, a text file, anything). Verify it by the same magic-byte check used
+    // for the whole artifact BEFORE touching the live database: "refuse and touch nothing"
+    // must hold for the inside of the archive too, not just its outer envelope. This check
+    // runs before replaceDatabase() and before the receipts/ rename-aside below — nothing in
+    // dataDir has been modified yet at this point, so throwing here truly leaves the live
+    // install untouched.
+    if (detectArtifactKind(extractedDb) !== 'sqlite') {
+      throw new RestoreError("The archive's budget.db is not a valid SQLite database. Nothing was changed.");
+    }
     replaceDatabase(extractedDb, dataDir);
 
     const extractedReceipts = path.join(stage, 'receipts');

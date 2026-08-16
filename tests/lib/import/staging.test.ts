@@ -71,12 +71,12 @@ describe('staging', () => {
     expect(purgeStagedFiles()).toBe(0);
   });
 
-  it('skips a stale directory in the staging dir instead of crashing the sweep (Ruling P14)', () => {
+  it('does not crash on a directory in the staging dir instead of throwing (Ruling P14)', () => {
     // src/lib/backup/archive.ts's buildArchive() stages a whole backup (budget.db +
-    // receipts/) under a UUID-suffixed subdirectory of this same DATA_DIR/tmp while a
-    // backup is being written. If a container is killed mid-backup, that directory can be
-    // left behind; fs.rmSync on a directory without { recursive: true } throws, which
-    // would otherwise take down the entire nightly maintenance sweep.
+    // receipts/) under a `<uuid>-archive` subdirectory of this same DATA_DIR/tmp while a
+    // backup is being written. fs.rmSync on a directory without { recursive: true } throws,
+    // which would otherwise take down the entire nightly maintenance sweep the moment any
+    // directory — stale-archive or otherwise — turns up in this folder.
     const stale = writeStagedFile(Buffer.from('old'));
     const longAgo = new Date(Date.now() - 48 * 60 * 60 * 1000);
     fs.utimesSync(stagedFilePath(stale), longAgo, longAgo);
@@ -86,13 +86,44 @@ describe('staging', () => {
     fs.writeFileSync(path.join(staleDir, 'budget.db'), 'not actually swept by name');
     fs.utimesSync(staleDir, longAgo, longAgo);
 
-    let removed = -1;
-    expect(() => {
-      removed = purgeStagedFiles(24 * 60 * 60 * 1000);
-    }).not.toThrow();
-    expect(removed).toBe(1); // only the stale .csv file, not the directory
-    expect(fs.existsSync(stagedFilePath(stale))).toBe(false);
-    // The stale directory is left alone by this sweep — it is not a staged upload.
-    expect(fs.existsSync(staleDir)).toBe(true);
+    expect(() => purgeStagedFiles(24 * 60 * 60 * 1000)).not.toThrow();
+  });
+
+  it('recursively removes an aged-out "-archive" directory left by a killed backup (Ruling P14, fix report IMPORTANT 3)', () => {
+    // A stale, non-empty staging directory left behind by buildArchive() (e.g. the
+    // container was SIGKILLed mid-tar) holds a full copy of the database. Leaving it alone
+    // forever — the original P14 fix's behaviour — leaks disk space without bound, so once
+    // it's old enough that no in-progress backup could still be writing it, the sweep must
+    // remove it, and everything inside it, not just skip past it.
+    const staleDir = path.join(stagingDir(), 'deadbeef-0000-4000-8000-000000000000-archive');
+    fs.mkdirSync(path.join(staleDir, 'receipts'), { recursive: true });
+    fs.writeFileSync(path.join(staleDir, 'budget.db'), 'a full db snapshot');
+    fs.writeFileSync(path.join(staleDir, 'receipts', 'r.jpg'), 'x');
+    const longAgo = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    fs.utimesSync(staleDir, longAgo, longAgo);
+
+    expect(purgeStagedFiles(24 * 60 * 60 * 1000)).toBe(1);
+    expect(fs.existsSync(staleDir)).toBe(false);
+  });
+
+  it('leaves a fresh "-archive" directory alone — a backup still being written must not be swept mid-flight', () => {
+    const freshDir = path.join(stagingDir(), 'deadbeef-0000-4000-8000-000000000000-archive');
+    fs.mkdirSync(freshDir, { recursive: true });
+    fs.writeFileSync(path.join(freshDir, 'budget.db'), 'in progress');
+
+    expect(purgeStagedFiles(24 * 60 * 60 * 1000)).toBe(0);
+    expect(fs.existsSync(freshDir)).toBe(true);
+  });
+
+  it('leaves an aged-out directory alone when its name does not end in "-archive"', () => {
+    // This sweep only removes things it can positively identify as its own leftovers.
+    const otherDir = path.join(stagingDir(), 'some-other-directory');
+    fs.mkdirSync(otherDir, { recursive: true });
+    fs.writeFileSync(path.join(otherDir, 'file.txt'), 'not ours');
+    const longAgo = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    fs.utimesSync(otherDir, longAgo, longAgo);
+
+    expect(purgeStagedFiles(24 * 60 * 60 * 1000)).toBe(0);
+    expect(fs.existsSync(otherDir)).toBe(true);
   });
 });

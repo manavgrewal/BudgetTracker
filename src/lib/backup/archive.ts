@@ -58,12 +58,27 @@ function vacuumInto(target: string): void {
 }
 
 /**
- * MUST-12.2: delete the target if present, VACUUM INTO a temp snapshot, add it as
- * `budget.db`, add `receipts/`, then unlink the temp snapshot in a `finally`.
+ * MUST-12.2: VACUUM INTO a temp snapshot, add it as `budget.db`, add `receipts/`, write the
+ * tar+gzip to a `.partial` sibling of the target, then rename it into place — the temp
+ * snapshot and the staging directory are unlinked in a `finally` regardless of outcome.
  *
  * The staging directory holds HARD LINKS to the receipts rather than copies, so a 300 MB
  * receipt library is not duplicated on disk while the archive is written. Hard links are
  * read as ordinary files by tar; copyFileSync is the fallback if the filesystem refuses.
+ *
+ * Atomic write (fix report, IMPORTANT 2): the archive is built as `${targetPath}.partial` —
+ * in the SAME directory as the final target, so the final `renameSync` is a same-filesystem
+ * (and therefore atomic, even on a NAS-mounted backups dir) move, never a cross-device copy —
+ * and renamed into place only once `tarCreate` returns successfully. Without this, the old
+ * code deleted any existing same-day artifact BEFORE writing the new one; a crash or thrown
+ * error partway through `tarCreate` left a truncated `.tar.gz` at the final name. That
+ * filename still matched `ARCHIVE_NAME_RE`, so `listBackups()` would list it and
+ * `pruneBackups()` would count it as one of the retained backups — silently evicting a good
+ * older backup to make room for a corrupt one, and destroying the previous day's good backup
+ * outright when the same target is rewritten (the on-demand and nightly retry paths both
+ * reuse the same final name). `ARCHIVE_NAME_RE`/`ON_DEMAND_NAME_RE` are anchored with `$`, so
+ * a `name.tar.gz.partial` file never matches either pattern and `listBackups()` already
+ * ignores it structurally — nothing else needed there.
  */
 export function buildArchive(targetPath: string): void {
   const tmp = tempDir();
@@ -71,6 +86,7 @@ export function buildArchive(targetPath: string): void {
   const stage = path.join(tmp, `${randomUUID()}-archive`);
   const snapshotName = `${randomUUID()}.db`;
   const snapshot = resolveSafeTarget(tmp, snapshotName, SNAPSHOT_NAME_RE);
+  const partialTarget = `${targetPath}.partial`;
 
   try {
     fs.rmSync(snapshot, { force: true });
@@ -95,14 +111,19 @@ export function buildArchive(targetPath: string): void {
       }
     }
 
-    fs.rmSync(targetPath, { force: true });
+    fs.rmSync(partialTarget, { force: true });
     tarCreate(
-      { file: targetPath, cwd: stage, gzip: true, sync: true, portable: true, follow: false },
+      { file: partialTarget, cwd: stage, gzip: true, sync: true, portable: true, follow: false },
       ['budget.db', 'receipts'],
     );
+    // Only now, with a complete archive on disk, does the previous artifact at this name
+    // (if any) get replaced — and it's replaced atomically by the rename, never by a
+    // delete-then-write gap.
+    fs.renameSync(partialTarget, targetPath);
   } finally {
     fs.rmSync(snapshot, { force: true });
     fs.rmSync(stage, { recursive: true, force: true });
+    fs.rmSync(partialTarget, { force: true });
   }
 }
 
