@@ -132,10 +132,13 @@ something valid on your system, paste in your SECRET_KEY, and start it.
 1. Open the URL the installer printed. You land on the **setup wizard**.
 2. The account you create there is the **administrator**. Creating it also seeds the category
    list and the four built-in bank import profiles.
-3. **Settings → Users** — add the rest of the household with temporary passwords. They change
+3. The wizard then offers an optional **"add your bank accounts"** step. Skip it if you like —
+   **Settings → Bank accounts** does the same thing later — but every CSV import has to land in
+   an account, so this is the one thing worth doing straight away.
+4. **Settings → Users** — add the rest of the household with temporary passwords. They change
    them at first sign-in.
-4. **Import** — upload a bank CSV, check the preview, commit.
-5. **Recommended:** put HTTPS in front of it (reverse proxy or Tailscale) and set `TRUST_PROXY=1`
+5. **Import** — upload a bank CSV, check the preview, commit.
+6. **Recommended:** put HTTPS in front of it (reverse proxy or Tailscale) and set `TRUST_PROXY=1`
    in `.env`. See the README's transport-security section for why this matters on shared Wi-Fi.
 
 ---
@@ -272,6 +275,23 @@ signs out every one of that user's sessions, and clears the failed-login lockout
 password works immediately. Run it with no arguments to see the usage text and the list of known
 usernames.
 
+**It does not touch two-factor authentication.** If that account has an authenticator enrolled,
+sign-in still asks for a code after the new password. Add `--clear-mfa` when you also need to
+remove the enrollment (see the SECRET_KEY section below):
+
+```bash
+docker compose exec budget-tracker node --experimental-strip-types \
+  scripts/reset-admin-password.ts alice 'a brand new password' --clear-mfa
+```
+
+**On a Synology with no SSH,** you do not need a terminal on the NAS at all: **Container Manager
+→ Container → `budget-tracker` → Details → Terminal → Create**, which opens a shell *inside* the
+running container. Run the command there without the `docker compose exec budget-tracker` prefix:
+
+```bash
+node --experimental-strip-types scripts/reset-admin-password.ts alice 'a brand new password'
+```
+
 If another admin is still able to sign in, the easier route is **Settings → Users → Reset
 password**.
 
@@ -280,14 +300,50 @@ password**.
 If you forgot your SECRET_KEY: only two-factor authentication depends on it. Everything else —
 transactions, budgets, goals, passwords — is unaffected.
 
+Each user's TOTP secret is encrypted with a key derived from `SECRET_KEY`. Once the key is gone,
+those secrets can never be decrypted again, so **no authenticator app can ever produce a code the
+app will accept** for those accounts. A new password alone does not help — the sign-in still asks
+for the second factor.
+
 1. Generate a new one: `openssl rand -base64 48`
 2. Put it in `.env` (or the Synology project's environment) and restart.
-3. Every user who had two-factor authentication on now **cannot** complete sign-in with their
-   authenticator. An admin clears each stale enrollment with **Settings → Users → Reset MFA**,
-   and each user re-enrolls from **Settings → Profile**.
-4. If the *only* admin is locked out by this, use the password rescue script above to get in
-   (it bypasses two-factor by resetting the password and clearing sessions), then clear the MFA
-   enrollments from the UI.
+3. **Recovery codes still work.** They are stored as plain SHA-256 hashes and are *not* derived
+   from `SECRET_KEY`, so they survive its loss. If anyone still has an unused recovery code from
+   their enrollment, they can sign in with it right now — that is the quickest way back in.
+4. Once *any* admin is signed in, clear each stale enrollment from the UI with **Settings → Users
+   → Reset MFA**, and each user re-enrolls from **Settings → Profile**.
+5. **If every admin is locked out and nobody has a recovery code,** use the rescue script with
+   `--clear-mfa`. This is the only path that clears two-factor from outside the app:
+
+   ```bash
+   docker compose exec budget-tracker node --experimental-strip-types \
+     scripts/reset-admin-password.ts alice 'a brand new password' --clear-mfa
+   ```
+
+   It sets the new password, turns `totp_enabled` off, deletes the undecryptable TOTP secret, and
+   deletes that user's recovery codes — for **that one user only**. It prints exactly what it
+   cleared. Everyone else's enrollment is untouched, so clear those from **Settings → Users →
+   Reset MFA** after signing in. Without `--clear-mfa` the script only resets the password and
+   says so: two-factor stays on and the account stays unreachable.
+
+### "Cross-origin request rejected" on every form
+
+The app compares the browser's `Origin` header against the request's `Host` on every change it
+makes. A reverse proxy that rewrites `Host` to the container's own name (`localhost:3000`,
+`budget-tracker:3000`) breaks that comparison, so every save, sign-in and settings change is
+refused even though the page itself loads fine.
+
+Fix it on both sides:
+
+1. In `.env` (or the Synology project's environment), set `TRUST_PROXY=1` and restart. The app
+   then honours `X-Forwarded-Host`.
+2. Make the proxy actually send the browser's hostname. nginx:
+   `proxy_set_header X-Forwarded-Host $host;` (plus `X-Forwarded-Proto $scheme;`). Caddy and
+   Synology's built-in reverse proxy send it already. Traefik needs
+   `passHostHeader = true` or the same header rule.
+
+Only turn `TRUST_PROXY` on behind a proxy you control — with nothing in front of the container,
+any client could forge that header.
 
 ### Two-factor codes are rejected even though they look right
 

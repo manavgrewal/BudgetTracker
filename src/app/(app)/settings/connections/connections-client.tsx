@@ -85,11 +85,21 @@ export function ConnectionsClient({
   async function sync() {
     const result = await post('/api/simplefin/sync', {});
     if (!result) return;
-    setErrlist(result.errlist ?? []);
-    const perAccount = (result.accounts as { accountName: string; added: number; duplicates: number; skippedPending: number; errors: number; currencyWarning: string | null }[])
+    const errors: string[] = result.errlist ?? [];
+    setErrlist(errors);
+    const synced = result.accounts as { accountName: string; added: number; duplicates: number; skippedPending: number; errors: number; currencyWarning: string | null }[];
+    if (errors.length > 0 && synced.length === 0) {
+      // Spec section 12: a non-empty errlist with zero accounts IS a failed
+      // sync. Reporting "Nothing to import." in green next to the bridge's
+      // complaint reads as success and is exactly wrong.
+      setNotice(null);
+      return;
+    }
+    const perAccount = synced
       .map((a) => `${a.accountName}: ${a.added} added, ${a.duplicates} already had, ${a.skippedPending} still pending, ${a.errors} errors`)
       .join(' · ');
-    setNotice(`${perAccount || 'Nothing to import.'} — ${result.remainingRequests} of ${dailyLimit} requests left today.`);
+    const engineNote = result.engineFailed ? ' Categorization failed, so the new rows are waiting in the review queue.' : '';
+    setNotice(`${perAccount || 'Nothing to import.'} — ${result.remainingRequests} of ${dailyLimit} requests left today.${engineNote}`);
   }
 
   return (
@@ -159,7 +169,14 @@ export function ConnectionsClient({
                       ? ` This will also unlink ${affectedNames.join(', ')} — ${affectedNames.length === 1 ? 'it reverts' : 'they revert'} to CSV import.`
                       : '';
                   if (!window.confirm(`Remove the stored connection?${impact} You will need a fresh setup token to reconnect.`)) return;
-                  setNotice((await forgetConnectionAction()).message ?? null);
+                  const result = await forgetConnectionAction();
+                  if (result.error) {
+                    // A rejected action (cross-origin) must not look like a
+                    // successful removal followed by a page reload.
+                    setError(result.error);
+                    return;
+                  }
+                  setNotice(result.message ?? null);
                   window.location.reload();
                 }}
                 className="rounded border px-3 py-2 dark:border-slate-700"

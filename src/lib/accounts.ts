@@ -19,11 +19,16 @@ export interface AccountRecord {
 
 export const createAccountSchema = z.object({
   name: z.string().trim().min(1, 'Account name is required').max(80),
-  institution: z.string().trim().min(1, 'Institution is required').max(80),
+  // Optional: a cash jar or a credit union nobody has a tidy name for still
+  // deserves an account row. The column is NOT NULL, so it stores '' when the
+  // family leaves it blank rather than refusing the whole account.
+  institution: z.string().trim().max(80).default(''),
   type: z.enum(['chequing', 'credit', 'cash']),
   ownerUserId: z.number().int().positive().nullable(),
   importProfileId: z.number().int().positive().nullable().optional(),
 });
+
+export const renameAccountSchema = z.string().trim().min(1, 'Account name is required').max(80);
 
 export function listAccounts(opts: { includeInactive?: boolean } = {}): AccountRecord[] {
   const query = getDb().select().from(accounts);
@@ -39,7 +44,7 @@ export function getAccount(id: number): AccountRecord | null {
 
 export function createAccount(input: {
   name: string;
-  institution: string;
+  institution?: string;
   type: AccountType;
   ownerUserId: number | null;
   importProfileId?: number | null;
@@ -63,6 +68,16 @@ export function createAccount(input: {
 
 export function setAccountActive(id: number, active: boolean): void {
   getDb().update(accounts).set({ isActive: active }).where(eq(accounts.id, id)).run();
+}
+
+/** Display name only — never touches the id, so history, imports and dedup are unaffected. */
+export function renameAccount(id: number, name: string): void {
+  getDb().update(accounts).set({ name: renameAccountSchema.parse(name) }).where(eq(accounts.id, id)).run();
+}
+
+/** null = Joint/household (spec section 3: owner_user_id NULL means joint). */
+export function setAccountOwner(id: number, ownerUserId: number | null): void {
+  getDb().update(accounts).set({ ownerUserId }).where(eq(accounts.id, id)).run();
 }
 
 /** Each user gets one personal Cash account, created on demand for manual entries. */

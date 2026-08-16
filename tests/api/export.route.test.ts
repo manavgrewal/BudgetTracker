@@ -22,14 +22,18 @@ function setup() {
   return { token: createSession(alice).token };
 }
 
+/** Same-origin by default; the CSV route refuses anything else (m1). */
+function exportRequest(url: string, token: string | null, origin: string | null = 'http://nas.local:3000') {
+  const headers: Record<string, string> = { host: 'nas.local:3000' };
+  if (origin) headers.origin = origin;
+  if (token) headers.cookie = `${SESSION_COOKIE_NAME}=${token}`;
+  return new Request(url, { headers });
+}
+
 describe('GET /api/reports/export', () => {
   it('streams a CSV attachment for an authenticated user', async () => {
     const { token } = setup();
-    const response = await GET(
-      new Request('http://nas.local:3000/api/reports/export?from=2026-03-01&to=2026-03-31', {
-        headers: { cookie: `${SESSION_COOKIE_NAME}=${token}` },
-      }),
-    );
+    const response = await GET(exportRequest('http://nas.local:3000/api/reports/export?from=2026-03-01&to=2026-03-31', token));
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toContain('text/csv');
     expect(response.headers.get('content-disposition')).toContain('attachment; filename="budget-transactions-');
@@ -41,18 +45,57 @@ describe('GET /api/reports/export', () => {
 
   it('applies the query filters', async () => {
     const { token } = setup();
-    const response = await GET(
-      new Request('http://nas.local:3000/api/reports/export?from=2026-04-01&to=2026-04-30', {
-        headers: { cookie: `${SESSION_COOKIE_NAME}=${token}` },
-      }),
-    );
+    const response = await GET(exportRequest('http://nas.local:3000/api/reports/export?from=2026-04-01&to=2026-04-30', token));
     const body = await response.text();
     expect(body.trim().split('\r\n')).toHaveLength(1); // header only
   });
 
   it('401s without a session', async () => {
     setup();
-    const response = await GET(new Request('http://nas.local:3000/api/reports/export'));
+    const response = await GET(exportRequest('http://nas.local:3000/api/reports/export', null));
     expect(response.status).toBe(401);
+  });
+
+  it('403s a cross-origin request even with a valid session cookie (m1)', async () => {
+    // Same ruling as /api/backup/download: a GET is normally CSRF-exempt, but
+    // this one streams every transaction in the household, so a forged
+    // cross-origin request riding the session cookie must be refused.
+    const { token } = setup();
+    const response = await GET(
+      exportRequest('http://nas.local:3000/api/reports/export?from=2026-03-01&to=2026-03-31', token, 'http://evil.example'),
+    );
+    expect(response.status).toBe(403);
+    expect(await response.text()).not.toContain('LOBLAWS');
+  });
+
+  it('403s before the session is even considered when the origin is wrong', async () => {
+    setup();
+    const response = await GET(exportRequest('http://nas.local:3000/api/reports/export', null, 'http://evil.example'));
+    expect(response.status).toBe(403);
+  });
+
+  it('serves a header-less request — the plain-HTTP LAN default deployment', async () => {
+    // Controller ruling: the Export CSV link on a plain-HTTP install sends
+    // neither Origin nor Sec-Fetch-*, and refusing that would break the
+    // feature on the documented default deployment. Auth still applies.
+    const { token } = setup();
+    const response = await GET(exportRequest('http://nas.local:3000/api/reports/export?from=2026-03-01&to=2026-03-31', token, null));
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain('LOBLAWS');
+  });
+
+  it('still 401s a header-less request with no session', async () => {
+    setup();
+    expect((await GET(exportRequest('http://nas.local:3000/api/reports/export', null, null))).status).toBe(401);
+  });
+
+  it('403s a header-less request that declares a cross-site fetch', async () => {
+    const { token } = setup();
+    const response = await GET(
+      new Request('http://nas.local:3000/api/reports/export', {
+        headers: { host: 'nas.local:3000', 'sec-fetch-site': 'cross-site', cookie: `${SESSION_COOKIE_NAME}=${token}` },
+      }),
+    );
+    expect(response.status).toBe(403);
   });
 });

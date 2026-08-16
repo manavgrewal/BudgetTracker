@@ -6,8 +6,14 @@ import { createSeededTestDb, type TestDb } from '../helpers/db';
 
 const FAKE_USER = { id: 1, name: 'Alice', username: 'alice', role: 'admin' as const };
 
+let requestHeaders = new Headers({ origin: 'http://nas.local:3000', host: 'nas.local:3000' });
+
 vi.mock('@/lib/auth/session', () => ({
   requireUser: vi.fn(async () => FAKE_USER),
+}));
+
+vi.mock('next/headers', () => ({
+  headers: async () => requestHeaders,
 }));
 
 vi.mock('next/cache', () => ({
@@ -23,6 +29,7 @@ let tempDir: string;
 let originalDataDir: string | undefined;
 
 beforeEach(() => {
+  requestHeaders = new Headers({ origin: 'http://nas.local:3000', host: 'nas.local:3000' });
   tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-wizard-'));
   originalDataDir = process.env.DATA_DIR;
   process.env.DATA_DIR = tempDir;
@@ -76,6 +83,20 @@ describe('saveWizardProfileAction (new-bank wizard)', () => {
 
     expect(result.error).toMatch(/already exists/i);
     expect(listProfiles()).toHaveLength(before);
+  });
+
+  it('rejects a cross-origin request before creating a profile (I2)', async () => {
+    const before = listProfiles().length;
+    requestHeaders = new Headers({ origin: 'http://evil.example', host: 'nas.local:3000' });
+
+    const result = await saveWizardProfileAction(
+      {},
+      formData({ name: 'Attacker Bank', institution: 'Evil', mapping: JSON.stringify(getBuiltinPreset('TD Visa')) }),
+    );
+
+    expect(result.error).toBe('Cross-origin request rejected');
+    expect(listProfiles()).toHaveLength(before);
+    expect(getProfileByName('Attacker Bank')).toBeNull();
   });
 
   it('rejects a malformed mapping instead of saving a broken profile', async () => {

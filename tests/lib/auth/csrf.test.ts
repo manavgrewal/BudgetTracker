@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isSameOrigin, assertSameOrigin, CsrfError } from '@/lib/auth/csrf';
+import { isSameOrigin, isSameOriginOrHeaderless, assertSameOrigin, CsrfError } from '@/lib/auth/csrf';
 import { securityHeaders } from '@/lib/auth/security-headers';
 import type { AppEnv } from '@/lib/env';
 
@@ -56,6 +56,43 @@ describe('isSameOrigin', () => {
         envWith(false),
       ),
     ).toBe(false);
+  });
+});
+
+describe('isSameOriginOrHeaderless (read-only download GETs only)', () => {
+  it('allows a request carrying NEITHER Origin nor Sec-Fetch-Site', () => {
+    // The plain-HTTP LAN case: a same-origin navigation sends no Origin, and
+    // browsers omit Sec-Fetch-* on non-trustworthy origins. Strict
+    // isSameOrigin() refuses exactly this — which broke the backup download on
+    // the documented default deployment.
+    expect(isSameOrigin(headersFor({ host: 'nas.local:3000' }))).toBe(false);
+    expect(isSameOriginOrHeaderless(headersFor({ host: 'nas.local:3000' }))).toBe(true);
+  });
+
+  it('still rejects a PRESENT and mismatched Origin', () => {
+    expect(isSameOriginOrHeaderless(headersFor({ origin: 'http://evil.local', host: 'nas.local:3000' }))).toBe(false);
+    expect(isSameOriginOrHeaderless(headersFor({ origin: 'http://nas.local:3001', host: 'nas.local:3000' }))).toBe(false);
+  });
+
+  it('still rejects a PRESENT and mismatched Sec-Fetch-Site', () => {
+    expect(isSameOriginOrHeaderless(headersFor({ host: 'nas.local:3000', 'sec-fetch-site': 'cross-site' }))).toBe(false);
+    expect(isSameOriginOrHeaderless(headersFor({ host: 'nas.local:3000', 'sec-fetch-site': 'same-site' }))).toBe(false);
+  });
+
+  it('treats "Origin: null" as present, not absent (sandboxed iframe / cross-origin redirect)', () => {
+    expect(isSameOriginOrHeaderless(headersFor({ origin: 'null', host: 'nas.local:3000' }))).toBe(false);
+  });
+
+  it('accepts the ordinary matching-header cases exactly as isSameOrigin does', () => {
+    expect(isSameOriginOrHeaderless(headersFor({ origin: 'http://nas.local:3000', host: 'nas.local:3000' }))).toBe(true);
+    expect(isSameOriginOrHeaderless(headersFor({ host: 'nas.local:3000', 'sec-fetch-site': 'same-origin' }))).toBe(true);
+    expect(isSameOriginOrHeaderless(headersFor({ host: 'nas.local:3000', 'sec-fetch-site': 'none' }))).toBe(true);
+  });
+
+  it('honours TRUST_PROXY the same way, since it delegates to isSameOrigin for present headers', () => {
+    const proxied = headersFor({ origin: 'https://budget.example.com', host: 'internal:3000', 'x-forwarded-host': 'budget.example.com' });
+    expect(isSameOriginOrHeaderless(proxied, envWith(true))).toBe(true);
+    expect(isSameOriginOrHeaderless(proxied, envWith(false))).toBe(false);
   });
 });
 

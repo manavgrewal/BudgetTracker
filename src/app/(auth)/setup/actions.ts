@@ -52,5 +52,7 @@ export async function setupAction(_prev: SetupFormState, formData: FormData): Pr
   } catch (error) {
     return { error: error instanceof Error ? error.message : 'Setup failed.' };
   }
-  redirect('/dashboard');
+  // On to the optional accounts step (spec section 6). It is skippable and
+  // hands off to /dashboard either way.
+  redirect('/setup/accounts');
 }

@@ -116,15 +116,18 @@ turns on two-factor authentication) at their first sign-in.
 ## 3. Use it
 
 1. **Settings → Users** — add the rest of the household.
-2. **Import** — pick or create an account, upload a CSV, check the preview, adjust the column
+2. **Settings → Bank accounts** — add one account per bank account you import from (name,
+   institution, type, and whether it is joint or belongs to one person). The first-run wizard
+   offers this too. Accounts are deactivated, never deleted.
+3. **Import** — pick an account, upload a CSV, check the preview, adjust the column
    mapping if the bank's layout differs, then commit. Editing a built-in profile automatically
    saves a private copy for that account; the shared preset is never modified.
-3. **Review** — accept or fix the app's guesses. Every confirmation teaches it: it creates a rule
+4. **Review** — accept or fix the app's guesses. Every confirmation teaches it: it creates a rule
    for that merchant and updates the classifier.
-4. **Budgets** — set monthly limits per category, at household level and per person. A limit you
+5. **Budgets** — set monthly limits per category, at household level and per person. A limit you
    set in March applies to March and every month after it until you change it again.
-5. **Goals** — log money you set aside and watch the pace projection.
-6. **Reports** — category breakdowns, month-over-month trends, who-spent-what, CSV export.
+6. **Goals** — log money you set aside and watch the pace projection.
+7. **Reports** — category breakdowns, month-over-month trends, who-spent-what, CSV export.
 
 Re-importing an overlapping date range is safe: duplicate rows are detected and skipped, and
 undoing an import only deletes the transactions that no other import also covers.
@@ -225,6 +228,12 @@ is unaffected — it hashes the raw date string from the file, not the parsed da
 **Accented merchant names look like `MÃ‰TRO`.** The file is windows-1252 but was decoded as
 UTF-8, or the reverse. Set the profile's encoding explicitly in the preview mapping editor
 instead of leaving it on automatic.
+
+**Every form fails with "Cross-origin request rejected".** The CSRF check compares `Origin`
+against `Host`, and a reverse proxy that rewrites `Host` to the container's own name breaks the
+comparison. Set `TRUST_PROXY=1` (so the app honours `X-Forwarded-Host`) and make the proxy send
+the browser's hostname — nginx: `proxy_set_header X-Forwarded-Host $host;`. Only do this behind a
+proxy you control.
 
 **A user is locked out.** Failed sign-ins lock an account for 15 minutes, doubling on repeat
 bursts. Either wait it out, or have an admin reset that user's password under

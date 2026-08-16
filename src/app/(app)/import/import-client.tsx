@@ -138,6 +138,26 @@ export function ImportClient({
         </p>
       ) : null}
 
+      {accounts.length === 0 ? (
+        <section className="flex flex-col gap-2 rounded border border-slate-200 p-4 text-sm dark:border-slate-800">
+          <h2 className="font-medium">No accounts to import into yet</h2>
+          <p className="text-slate-600 dark:text-slate-400">
+            {simplefinManaged.length > 0
+              ? 'Every account you have is synced from SimpleFIN, so there is nothing here to upload a CSV for. Add a CSV account to import one.'
+              : 'A CSV has to land somewhere, so add the bank account first — name, type, and whether it is joint or one person’s.'}{' '}
+            <a className="underline" href="/settings/accounts">
+              Add a bank account
+            </a>
+            {' '}(Settings → Bank accounts).
+          </p>
+          <div className="flex flex-wrap items-end gap-3">
+            <input type="file" accept=".csv,text/csv" disabled aria-label="Upload a CSV" className="text-sm" />
+            <button type="button" disabled className="rounded bg-slate-900 px-3 py-2 text-white disabled:opacity-60 dark:bg-slate-100 dark:text-slate-900">
+              Preview
+            </button>
+          </div>
+        </section>
+      ) : (
       <form action={upload} className="flex flex-wrap items-end gap-3 text-sm">
         <label className="flex flex-col gap-1">
           Account
@@ -146,11 +166,17 @@ export function ImportClient({
             onChange={(e) => {
               const id = Number(e.target.value);
               setAccountId(id);
-              const remembered = accounts.find((a) => a.id === id)?.importProfileId;
-              if (remembered) {
-                setProfileId(remembered);
-                setMapping(profiles.find((p) => p.id === remembered)?.mapping ?? null);
-              }
+              // Switching accounts switches banks: the previous account's
+              // remembered profile, its column mapping and any preview built
+              // from it all belong to the file that is no longer selected.
+              // Fall back to the first profile when this account has never
+              // been imported into, rather than silently keeping the old one.
+              const remembered = accounts.find((a) => a.id === id)?.importProfileId ?? profiles[0]?.id ?? 0;
+              setProfileId(remembered);
+              setMapping(profiles.find((p) => p.id === remembered)?.mapping ?? null);
+              setPreview(null);
+              setSummary(null);
+              setError(null);
             }}
             className="rounded border px-2 py-1 dark:bg-slate-900"
           >
@@ -185,6 +211,7 @@ export function ImportClient({
           {busy ? 'Working…' : 'Preview'}
         </button>
       </form>
+      )}
 
       {preview && mapping ? (
         <section className="flex flex-col gap-3">

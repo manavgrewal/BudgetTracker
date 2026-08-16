@@ -1,5 +1,20 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../../helpers/db';
+
+// The categorizer is real everywhere except the one test that forces it to
+// throw (m2): a failure there must not lose rows or block markSynced().
+let engineThrows = false;
+vi.mock('@/lib/categorize/engine', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/categorize/engine')>();
+  return {
+    ...actual,
+    runEngine: (ids: number[]) => {
+      if (engineThrows) throw new Error('categorizer exploded');
+      return actual.runEngine(ids);
+    },
+  };
+});
+
 import { amountToCents, postedToIsoDate, runSync, syncWindow } from '@/lib/simplefin/sync';
 import { DAILY_REQUEST_LIMIT, getConnection, linkAccount, listLinks, remainingRequestsToday, saveClaimedConnection } from '@/lib/simplefin/connection';
 import type { Fetcher } from '@/lib/simplefin/client';
@@ -7,6 +22,7 @@ import { listImportHistory } from '@/lib/import/commit';
 
 let current: TestDb | null = null;
 afterEach(() => {
+  engineThrows = false;
   current?.cleanup();
   current = null;
 });
@@ -111,6 +127,36 @@ describe('runSync', () => {
     expect(history).toHaveLength(1);
     expect(history[0].filename).toMatch(/^simplefin /);
     expect(history[0].rowsAdded).toBe(2);
+  });
+
+  it('survives a categorizer failure: rows stay, markSynced still runs, engineFailed is reported (m2)', async () => {
+    const { sqlite, userId } = setup();
+    const fetcher = bridge(
+      accountSet([
+        { id: 'txn-1', posted: Math.floor(Date.parse('2026-08-10T15:00:00Z') / 1000), amount: '-12.34', description: 'TIM HORTONS', pending: false },
+        { id: 'txn-2', posted: Math.floor(Date.parse('2026-08-11T15:00:00Z') / 1000), amount: '-45.00', description: 'PETRO-CANADA', pending: false },
+      ]),
+    );
+    engineThrows = true;
+
+    const result = await runSync({ userId, fetcher, now: NOW });
+
+    // Not a thrown sync, not a lost import.
+    expect(result.engineFailed).toBe(true);
+    expect(result.engine).toEqual({ processed: 0, categorized: 0, transfers: 0, skipped: 0 });
+    expect(result.totalAdded).toBe(2);
+    expect((sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c).toBe(2);
+    // Uncategorized, which is exactly what the review queue picks up.
+    expect((sqlite.prepare('select count(*) as c from transactions where category_id is null').get() as { c: number }).c).toBe(2);
+    // markSynced still ran, so the next window narrows instead of re-fetching.
+    expect(getConnection()?.lastSyncAt).toBe(NOW.toISOString());
+    expect(listImportHistory()).toHaveLength(1);
+  });
+
+  it('reports engineFailed false on a normal sync', async () => {
+    const { userId } = setup();
+    const result = await runSync({ userId, fetcher: bridge(accountSet([])), now: NOW });
+    expect(result.engineFailed).toBe(false);
   });
 
   it('runs the categorization engine on the inserted rows', async () => {

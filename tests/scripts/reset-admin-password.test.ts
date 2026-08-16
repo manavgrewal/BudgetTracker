@@ -6,6 +6,7 @@ import { createUser, findUserByUsername, setUserActive } from '@/lib/auth/users'
 import { verifyPassword, hashPassword, MIN_PASSWORD_LENGTH as APP_MIN_PASSWORD_LENGTH } from '@/lib/auth/password';
 import { createSession, validateSession } from '@/lib/auth/session';
 import { checkLockout, recordLoginAttempt } from '@/lib/auth/ratelimit';
+import { countUnusedRecoveryCodes, enableTotpForUser, generateRecoveryCodes, generateTotpSecret, storeRecoveryCodes } from '@/lib/auth/totp';
 import { ARGON2_OPTIONS, MIN_PASSWORD_LENGTH, resetPassword, resolveDatabasePath } from '../../scripts/reset-admin-password';
 
 /** Parses the "m=...,t=...,p=..." parameter segment out of a PHC-format argon2id hash. */
@@ -28,6 +29,18 @@ async function setup() {
   current = createTestDb();
   const alice = await createUser({ name: 'Alice', username: 'alice', password: OLD_PASSWORD, role: 'admin' });
   return { alice, dbPath: current.path };
+}
+
+/** Puts a user in the exact state the SECRET_KEY-loss FAQ describes: TOTP on, codes issued. */
+function enrollTotp(userId: number): void {
+  enableTotpForUser(userId, generateTotpSecret());
+  storeRecoveryCodes(userId, generateRecoveryCodes());
+}
+
+function totpRow(userId: number): { totp_enabled: number; totp_secret_encrypted: string | null } {
+  return current!.sqlite
+    .prepare('select totp_enabled, totp_secret_encrypted from users where id = ?')
+    .get(userId) as { totp_enabled: number; totp_secret_encrypted: string | null };
 }
 
 describe('resolveDatabasePath', () => {
@@ -84,7 +97,15 @@ describe('resetPassword', () => {
     recordLoginAttempt({ username: 'alice', ip: '10.0.0.5', success: false });
 
     const result = await resetPassword({ dbPath, username: 'alice', newPassword: NEW_PASSWORD });
-    expect(result).toEqual({ userId: alice.id, username: 'alice', sessionsRevoked: 2, attemptsCleared: 1 });
+    expect(result).toEqual({
+      userId: alice.id,
+      username: 'alice',
+      sessionsRevoked: 2,
+      attemptsCleared: 1,
+      mfaCleared: false,
+      recoveryCodesDeleted: 0,
+      mfaStillRequired: false,
+    });
   });
 
   it('signs every existing session out', async () => {
@@ -134,6 +155,63 @@ describe('resetPassword', () => {
   });
 });
 
+describe('--clear-mfa — the documented SECRET_KEY-loss recovery path (C2)', () => {
+  it('without the flag, TOTP is left completely alone and the result says so', async () => {
+    const { alice, dbPath } = await setup();
+    enrollTotp(alice.id);
+
+    const result = await resetPassword({ dbPath, username: 'alice', newPassword: NEW_PASSWORD });
+
+    expect(result.mfaCleared).toBe(false);
+    expect(result.mfaStillRequired).toBe(true);
+    expect(result.recoveryCodesDeleted).toBe(0);
+    // The account is STILL unreachable if SECRET_KEY was lost — this is the
+    // exact false claim the old INSTALL.md made ("bypasses two-factor").
+    const row = totpRow(alice.id);
+    expect(row.totp_enabled).toBe(1);
+    expect(row.totp_secret_encrypted).not.toBeNull();
+    expect(countUnusedRecoveryCodes(alice.id)).toBe(8);
+  });
+
+  it('with the flag, TOTP is off, the undecryptable secret is gone, and the recovery codes are deleted', async () => {
+    const { alice, dbPath } = await setup();
+    enrollTotp(alice.id);
+
+    const result = await resetPassword({ dbPath, username: 'alice', newPassword: NEW_PASSWORD, clearMfa: true });
+
+    expect(result.mfaCleared).toBe(true);
+    expect(result.mfaStillRequired).toBe(false);
+    expect(result.recoveryCodesDeleted).toBe(8);
+    const row = totpRow(alice.id);
+    expect(row.totp_enabled).toBe(0);
+    expect(row.totp_secret_encrypted).toBeNull();
+    expect(countUnusedRecoveryCodes(alice.id)).toBe(0);
+    // And the password reset still happened.
+    expect(await verifyPassword(findUserByUsername('alice')!.passwordHash, NEW_PASSWORD)).toBe(true);
+  });
+
+  it('touches only the named user — everyone else keeps their enrollment', async () => {
+    const { alice, dbPath } = await setup();
+    const bob = await createUser({ name: 'Bob', username: 'bob', password: OLD_PASSWORD, role: 'member' });
+    enrollTotp(alice.id);
+    enrollTotp(bob.id);
+
+    await resetPassword({ dbPath, username: 'alice', newPassword: NEW_PASSWORD, clearMfa: true });
+
+    expect(totpRow(bob.id).totp_enabled).toBe(1);
+    expect(totpRow(bob.id).totp_secret_encrypted).not.toBeNull();
+    expect(countUnusedRecoveryCodes(bob.id)).toBe(8);
+  });
+
+  it('is a no-op-but-honest when the account never had two-factor on', async () => {
+    const { dbPath } = await setup();
+    const result = await resetPassword({ dbPath, username: 'alice', newPassword: NEW_PASSWORD, clearMfa: true });
+    expect(result.mfaCleared).toBe(false);
+    expect(result.mfaStillRequired).toBe(false);
+    expect(result.recoveryCodesDeleted).toBe(0);
+  });
+});
+
 describe('the CLI as it runs inside the container', () => {
   const [major, minor] = process.versions.node.split('.').map(Number);
   const stripTypesSupported = major > 22 || (major === 22 && minor >= 6);
@@ -174,5 +252,42 @@ describe('the CLI as it runs inside the container', () => {
     const result = runCli(['--help'], dbPath);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('Usage:');
+    expect(result.stdout).toContain('--clear-mfa');
+  });
+
+  it.runIf(stripTypesSupported)('warns that two-factor is still on when --clear-mfa was not passed (C2)', async () => {
+    const { alice, dbPath } = await setup();
+    enrollTotp(alice.id);
+
+    const result = runCli(['alice', NEW_PASSWORD], dbPath);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/still ON/i);
+    expect(result.stdout).toContain('--clear-mfa');
+    expect(result.stdout).not.toMatch(/sign in with the new password immediately/i);
+    expect(totpRow(alice.id).totp_enabled).toBe(1);
+  });
+
+  it.runIf(stripTypesSupported)('states exactly what --clear-mfa cleared', async () => {
+    const { alice, dbPath } = await setup();
+    enrollTotp(alice.id);
+
+    const result = runCli(['alice', NEW_PASSWORD, '--clear-mfa'], dbPath);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('Password reset for "alice"');
+    expect(result.stdout).toMatch(/Two-factor authentication cleared/i);
+    expect(result.stdout).toContain('8 recovery code(s) were deleted');
+    expect(result.stdout).toMatch(/transactions, budgets, goals and every other user are unchanged/i);
+    expect(totpRow(alice.id).totp_enabled).toBe(0);
+    expect(totpRow(alice.id).totp_secret_encrypted).toBeNull();
+  });
+
+  it.runIf(stripTypesSupported)('accepts --clear-mfa before the positional arguments too', async () => {
+    const { alice, dbPath } = await setup();
+    enrollTotp(alice.id);
+    const result = runCli(['--clear-mfa', 'alice', NEW_PASSWORD], dbPath);
+    expect(result.status).toBe(0);
+    expect(totpRow(alice.id).totp_enabled).toBe(0);
   });
 });

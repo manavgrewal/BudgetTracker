@@ -499,6 +499,31 @@ describe('INSTALL.md', () => {
     expect(install).toContain('docker compose exec');
   });
 
+  it('gives no-SSH Synology users a way to run the rescue script (m5)', () => {
+    expect(install).toMatch(/Container Manager/);
+    expect(install).toMatch(/Terminal/);
+    expect(install).toMatch(/node --experimental-strip-types scripts\/reset-admin-password\.ts/);
+  });
+
+  it('describes the SECRET_KEY-loss recovery accurately: recovery codes survive, --clear-mfa is the escape hatch (C2)', () => {
+    const section = install.slice(install.indexOf('### I forgot / lost my SECRET_KEY'));
+    expect(section).toMatch(/recovery code/i);
+    expect(section).toMatch(/SHA-256/);
+    expect(section).toContain('--clear-mfa');
+    // The old false claim: the password reset alone does NOT bypass two-factor.
+    expect(install).not.toMatch(/bypasses two-factor/i);
+    expect(install).toMatch(/does not touch two-factor authentication/i);
+  });
+
+  it('has a cross-origin FAQ entry naming TRUST_PROXY and X-Forwarded-Host (m4)', () => {
+    expect(install).toMatch(/Cross-origin request rejected/);
+    expect(install).toContain('TRUST_PROXY');
+    expect(install).toContain('X-Forwarded-Host');
+    const readme = read('README.md');
+    expect(readme).toMatch(/Cross-origin request rejected/);
+    expect(readme).toContain('X-Forwarded-Host');
+  });
+
   it('states that local build is the default and GHCR is deferred', () => {
     expect(install).toMatch(/built locally|local (image )?build/i);
     expect(install).toContain('GHCR');
@@ -528,6 +553,26 @@ describe('docs/INSTALL-SYNOLOGY.md', () => {
   it('tells the reader where the SECRET_KEY goes', () => {
     expect(synology).toContain('PASTE-YOUR-GENERATED-KEY-HERE');
     expect(synology).toContain('synology-compose.yml');
+  });
+
+  it('makes the data folder writable before the first start, in File Station (I1)', () => {
+    const permissionStep = synology.slice(synology.indexOf('2. '), synology.indexOf('3. '));
+    expect(permissionStep).toMatch(/File Station/);
+    expect(permissionStep).toMatch(/Propert/i);
+    expect(permissionStep).toMatch(/Permission/);
+    expect(permissionStep).toMatch(/Read\/Write/);
+    expect(permissionStep).toMatch(/uid 1000/);
+    // It has to come before the project is created and started.
+    expect(synology.indexOf('Read/Write')).toBeLessThan(synology.indexOf('Create the Project'));
+  });
+
+  it('names BOTH restart-loop causes and points at /api/health to tell them apart (I1)', () => {
+    const troubleshooting = synology.slice(synology.indexOf('Check it started'), synology.indexOf('Open the app'));
+    expect(troubleshooting).toMatch(/writable|permission/i);
+    expect(troubleshooting).toMatch(/SECRET_KEY/);
+    expect(troubleshooting).toContain('/api/health');
+    expect(troubleshooting).toContain('dataDir');
+    expect(troubleshooting).toContain('db');
   });
 });
 

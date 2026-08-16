@@ -1,12 +1,16 @@
-import { isSameOrigin } from '@/lib/auth/csrf';
+import { isSameOriginOrHeaderless } from '@/lib/auth/csrf';
 import { userFromRequest } from '@/lib/auth/session';
 import { PROFILES_PACK_FORMAT, exportProfilesPack, packFilename } from '@/lib/packs';
 
 export const dynamic = 'force-dynamic';
 
-/** Controller ruling (b): same-origin + admin — see rules/export/route.ts for why a GET needs this explicitly. */
+/**
+ * Controller ruling (b): origin-checked + admin — see rules/export/route.ts for
+ * why a GET needs this explicitly, and isSameOriginOrHeaderless()'s docblock for
+ * why a header-less request is allowed while a mismatched one is not.
+ */
 export async function GET(request: Request): Promise<Response> {
-  if (!isSameOrigin(request.headers)) return new Response('Forbidden', { status: 403 });
+  if (!isSameOriginOrHeaderless(request.headers)) return new Response('Forbidden', { status: 403 });
 
   const user = userFromRequest(request);
   if (!user) return new Response('Unauthorized', { status: 401 });

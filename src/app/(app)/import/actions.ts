@@ -1,7 +1,9 @@
 'use server';
 
+import { headers } from 'next/headers';
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
+import { isSameOrigin } from '@/lib/auth/csrf';
 import { requireUser } from '@/lib/auth/session';
 import { importMappingSchema } from '@/lib/import/mapping';
 import { createProfile, getProfileByName } from '@/lib/import/presets';
@@ -12,6 +14,8 @@ export interface WizardState {
   message?: string;
 }
 
+const CROSS_ORIGIN_ERROR = 'Cross-origin request rejected';
+
 const saveSchema = z.object({
   name: z.string().trim().min(1, 'Give the profile a name').max(80),
   institution: z.string().trim().min(1, 'Which bank is this?').max(80),
@@ -20,6 +24,8 @@ const saveSchema = z.object({
 });
 
 export async function saveWizardProfileAction(_prev: WizardState, formData: FormData): Promise<WizardState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+
   await requireUser();
   const parsed = saveSchema.safeParse({
     name: formData.get('name') ?? '',

@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 /**
- * Rescue tool: reset a user's password and clear their lockout.
+ * Rescue tool: reset a user's password, clear their lockout, and (with
+ * --clear-mfa) clear their two-factor enrollment.
  *
  * Run it inside the container:
  *   docker compose exec budget-tracker node --experimental-strip-types \
- *     scripts/reset-admin-password.ts <username> '<new password>'
+ *     scripts/reset-admin-password.ts <username> '<new password>' [--clear-mfa]
  *
  * This script is DELIBERATELY self-contained. The runtime image ships Next's
  * standalone output, which does not include the project's src/ tree, so the
@@ -40,12 +41,25 @@ export interface ResetResult {
   username: string;
   sessionsRevoked: number;
   attemptsCleared: number;
+  /** true only when --clear-mfa was asked for AND the user actually had TOTP on. */
+  mfaCleared: boolean;
+  /** Rows deleted from totp_recovery_codes for this user (0 when --clear-mfa was not given). */
+  recoveryCodesDeleted: number;
+  /** true when the account still has TOTP enrollment after this run — the caller must say so. */
+  mfaStillRequired: boolean;
 }
 
 export async function resetPassword(input: {
   dbPath: string;
   username: string;
   newPassword: string;
+  /**
+   * Clears TOTP enrollment as well. This is the SECRET_KEY-loss escape hatch:
+   * a secret encrypted under a key nobody has anymore can never produce a
+   * valid code again, so a password reset alone leaves the account
+   * permanently unreachable.
+   */
+  clearMfa?: boolean;
 }): Promise<ResetResult> {
   if (input.newPassword.length < MIN_PASSWORD_LENGTH) {
     throw new Error(`The new password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
@@ -57,8 +71,8 @@ export async function resetPassword(input: {
     db.pragma('foreign_keys = ON');
     db.pragma('busy_timeout = 5000');
 
-    const user = db.prepare('select id, username from users where username = ?').get(username) as
-      | { id: number; username: string }
+    const user = db.prepare('select id, username, totp_enabled from users where username = ?').get(username) as
+      | { id: number; username: string; totp_enabled: number }
       | undefined;
     if (!user) {
       const known = (db.prepare('select username from users order by username').all() as { username: string }[])
@@ -70,6 +84,18 @@ export async function resetPassword(input: {
     const hash = await argon2.hash(input.newPassword, ARGON2_OPTIONS);
     db.prepare('update users set password_hash = ?, is_active = 1 where id = ?').run(hash, user.id);
 
+    const hadMfa = Number(user.totp_enabled) === 1;
+    let recoveryCodesDeleted = 0;
+    if (input.clearMfa === true) {
+      // Mirrors clearTotpEnrollment() in src/lib/auth/totp.ts: disable the
+      // flag, drop the (now undecryptable) secret, and delete the recovery
+      // codes, which are SHA-256 hashes tied to the enrollment being removed.
+      db.prepare('update users set totp_enabled = 0, totp_secret_encrypted = null where id = ?').run(user.id);
+      recoveryCodesDeleted = Number(
+        db.prepare('delete from totp_recovery_codes where user_id = ?').run(user.id).changes ?? 0,
+      );
+    }
+
     const sessions = db.prepare('delete from sessions where user_id = ?').run(user.id);
     const attempts = db.prepare('delete from login_attempts where username = ?').run(username);
 
@@ -78,6 +104,9 @@ export async function resetPassword(input: {
       username: user.username,
       sessionsRevoked: Number(sessions.changes ?? 0),
       attemptsCleared: Number(attempts.changes ?? 0),
+      mfaCleared: input.clearMfa === true && hadMfa,
+      recoveryCodesDeleted,
+      mfaStillRequired: hadMfa && input.clearMfa !== true,
     };
   } finally {
     db.close();
@@ -88,7 +117,7 @@ function usage(): void {
   console.log(`Reset a Budget Tracker password and clear that account's lockout.
 
 Usage:
-  node --experimental-strip-types scripts/reset-admin-password.ts <username> '<new password>'
+  node --experimental-strip-types scripts/reset-admin-password.ts <username> '<new password>' [--clear-mfa]
 
 Inside Docker:
   docker compose exec budget-tracker node --experimental-strip-types \\
@@ -98,11 +127,21 @@ The password must be at least ${MIN_PASSWORD_LENGTH} characters. The account is
 reactivated if it was deactivated, every one of its sessions is signed out, and
 its failed-login history is cleared so the lockout lifts immediately.
 
+  --clear-mfa   Also turn off two-factor authentication for that user: clears
+                totp_enabled, deletes the stored (encrypted) TOTP secret, and
+                deletes their unused recovery codes. Use this when SECRET_KEY
+                was lost or rotated — the stored secret is undecryptable then,
+                so no authenticator app can ever produce an accepted code
+                again. WITHOUT this flag the sign-in still asks for a
+                two-factor code.
+
 Database location: $BUDGET_DB_PATH, else $DATA_DIR/budget.db, else /data/budget.db.`);
 }
 
 export async function main(argv: string[]): Promise<number> {
-  const args = argv.slice(2);
+  const raw = argv.slice(2);
+  const clearMfa = raw.includes('--clear-mfa');
+  const args = raw.filter((arg) => arg !== '--clear-mfa');
   if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
     usage();
     return args.length === 0 ? 2 : 0;
@@ -115,12 +154,28 @@ export async function main(argv: string[]): Promise<number> {
 
   const dbPath = resolveDatabasePath();
   try {
-    const result = await resetPassword({ dbPath, username: args[0], newPassword: args[1] });
+    const result = await resetPassword({ dbPath, username: args[0], newPassword: args[1], clearMfa });
     console.log(
       `Password reset for "${result.username}" (id ${result.userId}). ` +
         `${result.sessionsRevoked} session(s) signed out, ${result.attemptsCleared} failed-login record(s) cleared.`,
     );
-    console.log('They can sign in with the new password immediately.');
+    if (clearMfa) {
+      console.log(
+        result.mfaCleared
+          ? `Two-factor authentication cleared: TOTP is off and ${result.recoveryCodesDeleted} recovery code(s) were deleted. ` +
+              'They can sign in with the new password alone, and can enroll a fresh authenticator from Settings → Profile.'
+          : `Two-factor authentication was already off for this account; nothing to clear (${result.recoveryCodesDeleted} recovery code(s) deleted).`,
+      );
+      console.log('Nothing else was touched: transactions, budgets, goals and every other user are unchanged.');
+    } else if (result.mfaStillRequired) {
+      console.log(
+        'Two-factor authentication is still ON for this account and was NOT touched — sign-in will ask for an ' +
+          'authenticator code (or a recovery code) after the new password. If SECRET_KEY was lost or rotated, that ' +
+          'code can never be accepted: re-run this with --clear-mfa.',
+      );
+    } else {
+      console.log('They can sign in with the new password immediately.');
+    }
     return 0;
   } catch (error) {
     console.error(`error: ${error instanceof Error ? error.message : String(error)}`);

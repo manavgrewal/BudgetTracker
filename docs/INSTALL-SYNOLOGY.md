@@ -21,12 +21,22 @@ You will need about 20 minutes, most of it waiting for the image to build.
    folder called `budget-tracker`, and inside that one, a folder called `data`.
    You should end up with `/volume1/docker/budget-tracker/data`.
 
-2. **Upload the source.** Still in File Station, open `docker/budget-tracker` and use
+2. **Let the container write to `data`.** The app runs as **uid 1000** inside the container, and
+   it stores the whole database in that folder — if it cannot write there, the container starts
+   and then dies in a restart loop. In **File Station**, right-click the `data` folder →
+   **Properties** → **Permission** tab → **Create**, and add a permission entry granting
+   **Read/Write** (owner `docker` group, or `Everyone` on a home NAS if you would rather not
+   create a user). Tick **Apply to this folder, sub-folders and files**, then **Save**.
+
+   Do this *before* the first start. Fixing it afterwards works too — same steps, then restart
+   the project — but the container will have been crash-looping in the meantime.
+
+3. **Upload the source.** Still in File Station, open `docker/budget-tracker` and use
    **Upload → Upload - Skip** to copy the whole project folder's contents into it (the
    `Dockerfile`, `package.json`, `src`, `drizzle`, `public`, `install`, and the rest). When you
    are done, `docker/budget-tracker/Dockerfile` must exist.
 
-3. **Generate a SECRET_KEY.** This is the one secret the app needs. Any random string of at
+4. **Generate a SECRET_KEY.** This is the one secret the app needs. Any random string of at
    least 32 bytes works. Pick whichever is easiest:
    - On your computer, in a terminal: `openssl rand -base64 48`
    - On Windows PowerShell:
@@ -36,18 +46,18 @@ You will need about 20 minutes, most of it waiting for the image to build.
    Copy the result. **Keep it somewhere safe** — if you lose it, everyone who turned on
    two-factor authentication has to re-enroll. Nothing else is affected.
 
-4. **Prepare the compose file.** Open `install/synology-compose.yml` from the project folder in
+5. **Prepare the compose file.** Open `install/synology-compose.yml` from the project folder in
    any text editor. Find the line:
    ```
    SECRET_KEY: "PASTE-YOUR-GENERATED-KEY-HERE"
    ```
-   Replace `PASTE-YOUR-GENERATED-KEY-HERE` with the key from step 3, keeping the quotes. Leave
+   Replace `PASTE-YOUR-GENERATED-KEY-HERE` with the key from step 4, keeping the quotes. Leave
    everything else alone. Copy the whole file to your clipboard.
 
-5. **Create the Project.** Open **Container Manager → Project → Create**.
+6. **Create the Project.** Open **Container Manager → Project → Create**.
    - **Project name:** `budget-tracker`
    - **Path:** browse to `/volume1/docker/budget-tracker`
-   - **Source:** choose **Create docker-compose.yml**, then paste the text from step 4 into the
+   - **Source:** choose **Create docker-compose.yml**, then paste the text from step 5 into the
      editor.
    - Click **Next**. Skip the web portal settings. Click **Done**.
 
@@ -60,25 +70,38 @@ You will need about 20 minutes, most of it waiting for the image to build.
    File Station, import it with **Container Manager → Image → Add → Add from file**, then edit
    the project's compose file to comment out the `build: .` line so it uses the loaded image.
 
-6. **Check it started.** In **Container Manager → Container**, the `budget-tracker` container
-   should be **Running** and its health should turn green within about 30 seconds. If it is
-   restarting in a loop, click it → **Log**; the usual cause is a missing or malformed
-   SECRET_KEY.
+7. **Check it started.** In **Container Manager → Container**, the `budget-tracker` container
+   should be **Running** and its health should turn green within about 30 seconds.
 
-7. **Open the app.** In a browser on the same network, go to:
+   **If it is restarting in a loop,** click it → **Log**. There are two causes, and they look
+   different:
+
+   - **The `data` folder is not writable** (step 2). The log says `EACCES`, `SQLITE_CANTOPEN` or
+     `attempt to write a readonly database`. Redo step 2's Read/Write permission and restart the
+     project.
+   - **SECRET_KEY is missing, too short or still the placeholder** (steps 4–5). The log says the
+     app refuses to start without at least 32 bytes. Edit the project's compose file and restart.
+
+   You can tell them apart without reading logs: open `http://<your-nas-ip>:3000/api/health` in a
+   browser. It answers with `"db"` and `"dataDir"` fields — `{"dataDir":"error"}` is the
+   permission problem, and a page that never answers at all (container down) with a healthy
+   folder is the SECRET_KEY one.
+
+8. **Open the app.** In a browser on the same network, go to:
    ```
    http://<your-nas-ip>:3000
    ```
    (Find the IP in Control Panel → Network → Network Interface.)
 
-8. **Create the first account.** The setup wizard appears automatically. The account you create
+9. **Create the first account.** The setup wizard appears automatically. The account you create
    here is the administrator. It also seeds the category list and the four built-in bank import
-   profiles.
+   profiles, then offers an optional step to add your bank accounts (you can skip it and do it
+   later under **Settings → Bank accounts**).
 
-9. **Add the household.** Settings → Users → add each family member with a temporary password.
-   They change it at first sign-in.
+10. **Add the household.** Settings → Users → add each family member with a temporary password.
+    They change it at first sign-in.
 
-10. **Turn on HTTPS (recommended).** Control Panel → Login Portal → Advanced → **Reverse Proxy**
+11. **Turn on HTTPS (recommended).** Control Panel → Login Portal → Advanced → **Reverse Proxy**
     → Create. Source: your chosen hostname on port 443 (HTTPS). Destination: `localhost` port
     `3000`. Then edit the project's compose file and set `TRUST_PROXY: "1"`, and restart the
     project.

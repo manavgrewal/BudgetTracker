@@ -1,5 +1,6 @@
 import Link from 'next/link';
 import { requireUser } from '@/lib/auth/session';
+import { listAccounts } from '@/lib/accounts';
 import { listUsers } from '@/lib/auth/users';
 import { budgetProgress, budgetTotals } from '@/lib/budgets';
 import { reviewQueueCount } from '@/lib/categorize/engine';
@@ -31,6 +32,10 @@ export default async function DashboardPage({
   const goals = listGoals();
   const reviewCount = reviewQueueCount();
   const people = listUsers().filter((u) => u.isActive);
+  // Nothing can be imported until at least one account exists, and a fresh
+  // install has none — so say so here rather than letting the Import page
+  // dead-end.
+  const hasAccounts = listAccounts().length > 0;
 
   return (
     <div className="flex flex-col gap-8">
@@ -45,6 +50,20 @@ export default async function DashboardPage({
           ))}
         </nav>
       </div>
+
+      {!hasAccounts ? (
+        user.role === 'admin' ? (
+          <Link href="/settings/accounts" className="w-fit rounded bg-sky-100 px-3 py-2 text-sm dark:bg-sky-950">
+            Add your bank accounts to get started
+          </Link>
+        ) : (
+          // Only admins can create accounts, so pointing a member at a page
+          // that would bounce them straight back here helps nobody.
+          <p className="w-fit rounded bg-sky-100 px-3 py-2 text-sm dark:bg-sky-950">
+            No bank accounts yet — ask an admin to add them to get started.
+          </p>
+        )
+      ) : null}
 
       {reviewCount > 0 ? (
         <Link href="/review" className="w-fit rounded bg-amber-100 px-3 py-2 text-sm dark:bg-amber-950">

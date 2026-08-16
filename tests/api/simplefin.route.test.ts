@@ -50,6 +50,18 @@ function getRequest(url: string, token: string | null, origin = 'http://nas.loca
   });
 }
 
+/**
+ * A GET with neither Origin nor Sec-Fetch-Site — what a plain-HTTP LAN install
+ * actually sends. Allowed on this read-only route by controller ruling; a
+ * present-but-mismatched header is still refused.
+ */
+function headerlessGetRequest(url: string, token: string | null) {
+  return new Request(url, {
+    method: 'GET',
+    headers: { host: 'nas.local:3000', ...(token ? { cookie: `${SESSION_COOKIE_NAME}=${token}` } : {}) },
+  });
+}
+
 /** Fakes a POST Request whose json() throws if ever called, to prove the content-length cap short-circuits before it. */
 function oversizedRequest(token: string | null): { request: Request; jsonSpy: ReturnType<typeof vi.fn> } {
   const jsonSpy = vi.fn(async () => {
@@ -221,6 +233,18 @@ describe('GET /api/simplefin/accounts', () => {
     const { memberToken } = setup();
     expect((await accountsRoute(getRequest('http://nas.local:3000/api/simplefin/accounts', null))).status).toBe(401);
     expect((await accountsRoute(getRequest('http://nas.local:3000/api/simplefin/accounts', memberToken))).status).toBe(403);
+  });
+
+  it('serves a header-less GET (plain-HTTP LAN) with an admin session, and still enforces auth on one', async () => {
+    const { adminToken, memberToken } = setup();
+    saveClaimedConnection(ACCESS_URL);
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify({ accounts: [], errlist: [] }), { status: 200 })),
+    );
+    expect((await accountsRoute(headerlessGetRequest('http://nas.local:3000/api/simplefin/accounts', adminToken))).status).toBe(200);
+    expect((await accountsRoute(headerlessGetRequest('http://nas.local:3000/api/simplefin/accounts', null))).status).toBe(401);
+    expect((await accountsRoute(headerlessGetRequest('http://nas.local:3000/api/simplefin/accounts', memberToken))).status).toBe(403);
   });
 
   it('lists remote accounts and consumes a request against the budget on a same-origin admin call', async () => {

@@ -1,6 +1,15 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { createSeededTestDb, insertTestUser, type TestDb } from '../helpers/db';
-import { createAccount, createAccountSchema, getAccount, getOrCreateCashAccount, listAccounts, setAccountActive } from '@/lib/accounts';
+import {
+  createAccount,
+  createAccountSchema,
+  getAccount,
+  getOrCreateCashAccount,
+  listAccounts,
+  renameAccount,
+  setAccountActive,
+  setAccountOwner,
+} from '@/lib/accounts';
 
 let current: TestDb | null = null;
 afterEach(() => {
@@ -26,6 +35,32 @@ describe('accounts', () => {
     expect(createAccountSchema.safeParse({ name: '', institution: 'TD', type: 'chequing', ownerUserId: null }).success).toBe(false);
     expect(createAccountSchema.safeParse({ name: 'X', institution: 'TD', type: 'savings', ownerUserId: null }).success).toBe(false);
     expect(createAccountSchema.safeParse({ name: 'X', institution: 'TD', type: 'cash', ownerUserId: null }).success).toBe(true);
+  });
+
+  it('treats institution as optional — a cash jar has no bank', () => {
+    current = createSeededTestDb();
+    expect(createAccountSchema.safeParse({ name: 'Grocery Cash', institution: '', type: 'cash', ownerUserId: null }).success).toBe(true);
+    const id = createAccount({ name: 'Grocery Cash', type: 'cash', ownerUserId: null });
+    expect(getAccount(id)).toMatchObject({ name: 'Grocery Cash', institution: '' });
+  });
+
+  it('renames in place, keeping the id every transaction and import points at', () => {
+    current = createSeededTestDb();
+    const id = createAccount({ name: 'Chequeing', institution: 'TD', type: 'chequing', ownerUserId: null });
+    renameAccount(id, '  Joint Chequing  ');
+    expect(getAccount(id)).toMatchObject({ id, name: 'Joint Chequing' });
+    expect(() => renameAccount(id, '   ')).toThrowError();
+    expect(getAccount(id)!.name).toBe('Joint Chequing');
+  });
+
+  it('moves an account between a person and Joint', () => {
+    current = createSeededTestDb();
+    const alice = insertTestUser(current.db, { username: 'alice' });
+    const id = createAccount({ name: 'Joint Chequing', institution: 'TD', type: 'chequing', ownerUserId: null });
+    setAccountOwner(id, alice);
+    expect(getAccount(id)!.ownerUserId).toBe(alice);
+    setAccountOwner(id, null);
+    expect(getAccount(id)!.ownerUserId).toBeNull();
   });
 
   it('creates a personal cash account on demand and returns the same one afterwards', () => {

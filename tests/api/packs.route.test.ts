@@ -30,6 +30,17 @@ const headers = (token: string | null, origin = 'http://nas.local:3000') => ({
   ...(token ? { cookie: `${SESSION_COOKIE_NAME}=${token}` } : {}),
 });
 
+/**
+ * What a plain-HTTP LAN install actually sends on a download link: no Origin
+ * (same-origin navigation) and no Sec-Fetch-* (browsers omit fetch metadata on
+ * non-trustworthy origins). Controller ruling: allowed on read-only download
+ * GETs; a present-but-mismatched header is still refused.
+ */
+const headerlessHeaders = (token: string | null) => ({
+  host: 'nas.local:3000',
+  ...(token ? { cookie: `${SESSION_COOKIE_NAME}=${token}` } : {}),
+});
+
 function uploadRequest(url: string, body: string, token: string | null, fields: Record<string, string> = {}, origin = 'http://nas.local:3000') {
   const form = new FormData();
   form.append('file', new File([body], 'pack.json', { type: 'application/json' }));
@@ -68,7 +79,7 @@ describe('GET /api/packs/rules/export', () => {
     expect((await rulesExport(new Request('http://nas.local:3000/api/packs/rules/export', { headers: headers(null) }))).status).toBe(401);
   });
 
-  // Controller ruling (b): same-origin is enforced on every pack route, including
+  // Controller ruling (b): the origin is checked on every pack route, including
   // this GET — matching the /api/backup/download precedent, since a plain
   // assertSameOrigin() is a no-op on safe methods.
   it('403s a cross-origin GET even from an authenticated admin', async () => {
@@ -77,6 +88,21 @@ describe('GET /api/packs/rules/export', () => {
       new Request('http://nas.local:3000/api/packs/rules/export', { headers: headers(adminToken, 'http://evil.local') }),
     );
     expect(response.status).toBe(403);
+  });
+
+  it('serves a header-less GET (plain-HTTP LAN navigation) with a valid session', async () => {
+    const { adminToken } = setup();
+    const response = await rulesExport(
+      new Request('http://nas.local:3000/api/packs/rules/export', { headers: headerlessHeaders(adminToken) }),
+    );
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-disposition')).toContain('attachment;');
+  });
+
+  it('still requires a session on a header-less GET', async () => {
+    setup();
+    const response = await rulesExport(new Request('http://nas.local:3000/api/packs/rules/export', { headers: headerlessHeaders(null) }));
+    expect(response.status).toBe(401);
   });
 });
 
@@ -185,6 +211,16 @@ describe('profiles pack routes', () => {
       new Request('http://nas.local:3000/api/packs/profiles/export', { headers: headers(adminToken, 'http://evil.local') }),
     );
     expect(response.status).toBe(403);
+  });
+
+  it('serves a header-less GET on export with a valid session, and still 401s without one', async () => {
+    const { adminToken } = setup();
+    expect(
+      (await profilesExport(new Request('http://nas.local:3000/api/packs/profiles/export', { headers: headerlessHeaders(adminToken) }))).status,
+    ).toBe(200);
+    expect(
+      (await profilesExport(new Request('http://nas.local:3000/api/packs/profiles/export', { headers: headerlessHeaders(null) }))).status,
+    ).toBe(401);
   });
 
   it('413s on the declared content-length alone, before formData() is ever called (controller fix — review finding 1 parity)', async () => {

@@ -43,6 +43,11 @@ export default async function SettingsPage() {
               </Link>
             </li>
             <li>
+              <Link className="underline" href="/settings/accounts">
+                Bank accounts
+              </Link>
+            </li>
+            <li>
               <Link className="underline" href="/settings/managers">
                 Categories, merchant rules and import profiles
               </Link>

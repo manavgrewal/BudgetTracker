@@ -1,4 +1,4 @@
-import { isSameOrigin } from '@/lib/auth/csrf';
+import { isSameOriginOrHeaderless } from '@/lib/auth/csrf';
 import { userFromRequest } from '@/lib/auth/session';
 import { SimplefinError, fetchAccounts } from '@/lib/simplefin/client';
 import { assertRequestBudget, consumeRequest, getAccessUrl, getConnection, listLinks, remainingRequestsToday } from '@/lib/simplefin/connection';
@@ -10,13 +10,19 @@ export const dynamic = 'force-dynamic';
  * Lists the remote accounts so the admin can map them. Costs one request against the budget.
  *
  * This is a GET, so the generic assertSameOrigin() (which only guards non-safe
- * methods) would be a no-op here — a forged same-site-looking <img>/navigation
- * from another origin must not be able to trigger an authenticated request
- * that spends part of the daily SimpleFIN budget, so the origin/fetch-metadata
- * check is enforced explicitly, same as api/backup/download/route.ts.
+ * methods) would be a no-op here — a forged cross-origin request must not be
+ * able to spend part of the daily SimpleFIN budget, so the origin check is
+ * enforced explicitly, same as api/backup/download/route.ts.
+ *
+ * Also the same variant, isSameOriginOrHeaderless(): a present-but-mismatched
+ * Origin/Sec-Fetch-Site is refused; a header-less request is allowed, because
+ * that is what the Connections page's own fetch produces on a plain-HTTP LAN
+ * install (browsers send no Origin on a same-origin GET and omit Sec-Fetch-* on
+ * non-trustworthy origins). Admin-only auth is unchanged, and every mutating
+ * SimpleFIN route (claim, link, sync) keeps the strict assertSameOrigin().
  */
 export async function GET(request: Request): Promise<Response> {
-  if (!isSameOrigin(request.headers)) return Response.json({ error: 'Forbidden' }, { status: 403 });
+  if (!isSameOriginOrHeaderless(request.headers)) return Response.json({ error: 'Forbidden' }, { status: 403 });
 
   const user = userFromRequest(request);
   if (!user) return Response.json({ error: 'Unauthorized' }, { status: 401 });

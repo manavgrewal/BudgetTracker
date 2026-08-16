@@ -1,10 +1,21 @@
+import { isSameOriginOrHeaderless } from '@/lib/auth/csrf';
 import { userFromRequest } from '@/lib/auth/session';
 import { transactionsCsv } from '@/lib/reports';
 import { todayIso } from '@/lib/dates';
 import type { TransactionFilter } from '@/lib/transactions';
 
+/**
+ * Session required, and the origin is checked even though a GET is normally
+ * CSRF-exempt: this one streams every transaction the household has, so a
+ * request whose headers positively identify another origin is refused.
+ *
+ * isSameOriginOrHeaderless(), same as /api/backup/download — a header-less
+ * request is allowed because the Export CSV link produces exactly that on a
+ * plain-HTTP LAN install. See the helper's docblock for the ruling.
+ */
 export async function GET(request: Request): Promise<Response> {
-  // GET is a safe method, so no Origin check — but it still requires a session.
+  if (!isSameOriginOrHeaderless(request.headers)) return new Response('Forbidden', { status: 403 });
+
   const user = userFromRequest(request);
   if (!user) return new Response('Unauthorized', { status: 401 });
 

@@ -1,6 +1,8 @@
 'use server';
 
+import { headers } from 'next/headers';
 import { revalidatePath } from 'next/cache';
+import { isSameOrigin } from '@/lib/auth/csrf';
 import { requireAdmin } from '@/lib/auth/session';
 import { getAccount } from '@/lib/accounts';
 import { deleteConnection, listLinks } from '@/lib/simplefin/connection';
@@ -10,7 +12,11 @@ export interface ConnectionsState {
   message?: string;
 }
 
+const CROSS_ORIGIN_ERROR = 'Cross-origin request rejected';
+
 export async function forgetConnectionAction(): Promise<ConnectionsState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+
   await requireAdmin();
 
   // Capture the affected account names BEFORE deleting: deleteConnection()

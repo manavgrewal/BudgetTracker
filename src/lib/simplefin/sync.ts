@@ -70,6 +70,8 @@ export interface SyncResult {
   totalAdded: number;
   totalDuplicates: number;
   engine: EngineResult;
+  /** true when runEngine threw after the rows were already committed — same contract as import/flow.ts. */
+  engineFailed: boolean;
 }
 
 function syncLabel(at: Date): string {
@@ -196,7 +198,20 @@ export async function runSync(input: { userId: number; fetcher?: Fetcher; now?: 
     });
   }
 
-  const engine = runEngine(insertedIds);
+  // The rows are already committed here, so a categorizer failure must not
+  // throw out of the sync (import/flow.ts makes the same trade): throwing
+  // would skip markSynced(), leaving last_sync_at stale so the next sync
+  // re-fetches a window it already stored, and would surface as "sync failed"
+  // even though every row is safely in the database. Uncategorized rows are
+  // exactly what the review queue is for.
+  let engine: EngineResult;
+  let engineFailed = false;
+  try {
+    engine = runEngine(insertedIds);
+  } catch {
+    engineFailed = true;
+    engine = { processed: 0, categorized: 0, transfers: 0, skipped: 0 };
+  }
   markSynced(now);
 
   return {
@@ -206,5 +221,6 @@ export async function runSync(input: { userId: number; fetcher?: Fetcher; now?: 
     totalAdded: results.reduce((sum, row) => sum + row.added, 0),
     totalDuplicates: results.reduce((sum, row) => sum + row.duplicates, 0),
     engine,
+    engineFailed,
   };
 }
