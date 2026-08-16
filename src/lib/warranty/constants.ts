@@ -33,3 +33,16 @@ export function expiryDateLabel(isSubscription: boolean): string {
 export function coveredThroughLabel(isSubscription: boolean): string {
   return isSubscription ? 'Cancel by' : 'Covered through';
 }
+
+/**
+ * Ruling P4: the list page's sort control is rendered by a client component, so the sort
+ * names themselves must not transitively import @/db or the native db driver -- src/lib/
+ * warranty/search.ts (which does) re-exports these for server-side use instead of
+ * redeclaring them.
+ */
+export type WarrantySort = 'expiry' | 'name' | 'purchase';
+export const WARRANTY_SORTS: readonly WarrantySort[] = ['expiry', 'name', 'purchase'];
+
+export function isWarrantySort(value: string): value is WarrantySort {
+  return (WARRANTY_SORTS as readonly string[]).includes(value);
+}

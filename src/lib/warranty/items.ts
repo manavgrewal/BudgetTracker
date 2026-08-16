@@ -1,0 +1,415 @@
+import fs from 'node:fs';
+import { and, eq } from 'drizzle-orm';
+import { z } from 'zod';
+import { getDb } from '@/db/client';
+import { users, warrantyItemTypes, warrantyItems, warrantyReceipts } from '@/db/schema';
+import { nowIso } from '@/lib/clock';
+import { isIsoDate } from '@/lib/dates';
+import { computeExpiryDate } from '@/lib/warranty/expiry';
+import { enqueueOcrJob } from '@/lib/warranty/ocr/queue';
+import {
+  adoptReceiptFile,
+  deleteReceiptFile,
+  receiptFileExists,
+  sha256Bytes,
+} from '@/lib/warranty/receipts';
+import { sniffReceiptType, type ReceiptMime } from '@/lib/warranty/sniff';
+import { deleteSidecar, findStagedReceipt, readSidecar } from '@/lib/warranty/staging';
+
+export const MAX_NAME_CHARS = 200;
+export const MAX_TEXT_CHARS = 200;
+export const MAX_NOTES_CHARS = 2000;
+export const MIN_PURCHASE_DATE = '1970-01-01';
+
+export const LIFETIME_WITH_TERM_ERROR =
+  'A lifetime warranty has no length — clear the months or untick Lifetime.';
+export const FUTURE_PURCHASE_DATE_ERROR = 'Purchase date cannot be in the future.';
+
+export interface WarrantyItemRow {
+  id: number;
+  name: string;
+  vendor: string | null;
+  model: string | null;
+  serial: string | null;
+  purchaseDate: string;
+  warrantyMonths: number | null;
+  isLifetime: boolean;
+  expiryDate: string | null;
+  priceCents: number | null;
+  ownerUserId: number;
+  ownerName: string;
+  transactionId: number | null;
+  /**
+   * Delta T6 (spec §19.3): nullable -- NULL means "unclassified", there is no
+   * Uncategorised row. typeName/isSubscription come from a LEFT JOIN onto
+   * warranty_item_types, so an untyped item still lists normally (typeName null,
+   * isSubscription false) instead of disappearing.
+   */
+  typeId: number | null;
+  typeName: string | null;
+  isSubscription: boolean;
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WarrantyReceiptRow {
+  id: number;
+  warrantyItemId: number;
+  originalFilename: string;
+  storedFilename: string;
+  mime: ReceiptMime;
+  sizeBytes: number;
+  sha256: string;
+  ocrStatus: 'pending' | 'done' | 'failed';
+  ocrError: string | null;
+  createdAt: string;
+  /** MUST-4.10: a row whose file is absent is a display state, not an error. */
+  fileExists: boolean;
+}
+
+/** What the client posts back after staging: the id plus the display name it uploaded. */
+export interface StagedReceiptRef {
+  stagingId: string;
+  originalFilename: string;
+}
+
+export interface WarrantyInput {
+  name: string;
+  vendor: string | null;
+  model: string | null;
+  serial: string | null;
+  purchaseDate: string;
+  warrantyMonths: number | null;
+  isLifetime: boolean;
+  priceCents: number | null;
+  ownerUserId: number;
+  transactionId: number | null;
+  /** Delta T6: nullable -- NULL is a legitimate "unclassified" value, not an omission. */
+  typeId: number | null;
+  notes: string | null;
+}
+
+/** Blank optional text is stored as NULL, never as an empty string. */
+function optionalText(max: number) {
+  return z.preprocess(
+    (value) => (typeof value === 'string' && value.trim().length === 0 ? null : value),
+    z.string().trim().max(max).nullable(),
+  );
+}
+
+/**
+ * MUST-13.7: zod on every action input. `today` is injected (never read from a clock in
+ * here) so the future-date rule is deterministic in tests and honours TZ at the boundary.
+ */
+export function warrantyInputSchema(today: string) {
+  return z
+    .object({
+      name: z.string().trim().min(1, 'Name is required').max(MAX_NAME_CHARS),
+      vendor: optionalText(MAX_TEXT_CHARS),
+      model: optionalText(MAX_TEXT_CHARS),
+      // §17.25: serial is stored but deliberately NOT unique and NOT validated — an OCR
+      // mis-read and a blank must both be storable.
+      serial: optionalText(MAX_TEXT_CHARS),
+      purchaseDate: z
+        .string()
+        .refine(isIsoDate, 'Purchase date must be YYYY-MM-DD')
+        .refine((value) => value <= today, FUTURE_PURCHASE_DATE_ERROR)
+        .refine((value) => value >= MIN_PURCHASE_DATE, 'Purchase date is before 1970-01-01'),
+      warrantyMonths: z.number().int().positive('Warranty length must be at least one month').nullable(),
+      isLifetime: z.boolean(),
+      priceCents: z.number().int('Price must be a whole number of cents').nonnegative().nullable(),
+      ownerUserId: z.number().int().positive(),
+      transactionId: z.number().int().positive().nullable(),
+      // Delta T6: nullable is a legitimate value ("unclassified") -- there is no
+      // Uncategorised row to fall back to, so null must parse, not just be omitted.
+      typeId: z.number().int().positive().nullable(),
+      notes: optionalText(MAX_NOTES_CHARS),
+    })
+    .superRefine((value, ctx) => {
+      // MUST-3.5, enforced by zod at the action boundary AND by a CHECK in 0002.
+      if (value.isLifetime && value.warrantyMonths !== null) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['warrantyMonths'], message: LIFETIME_WITH_TERM_ERROR });
+      }
+    });
+}
+
+const ITEM_COLUMNS = {
+  id: warrantyItems.id,
+  name: warrantyItems.name,
+  vendor: warrantyItems.vendor,
+  model: warrantyItems.model,
+  serial: warrantyItems.serial,
+  purchaseDate: warrantyItems.purchaseDate,
+  warrantyMonths: warrantyItems.warrantyMonths,
+  isLifetime: warrantyItems.isLifetime,
+  expiryDate: warrantyItems.expiryDate,
+  priceCents: warrantyItems.priceCents,
+  ownerUserId: warrantyItems.ownerUserId,
+  ownerName: users.name,
+  transactionId: warrantyItems.transactionId,
+  typeId: warrantyItems.typeId,
+  typeName: warrantyItemTypes.name,
+  isSubscription: warrantyItemTypes.isSubscription,
+  notes: warrantyItems.notes,
+  createdAt: warrantyItems.createdAt,
+  updatedAt: warrantyItems.updatedAt,
+};
+
+/**
+ * Delta T6: the LEFT JOIN onto warrantyItemTypes means isSubscription comes back `null`
+ * for an untyped item (no matching type row) rather than `false` -- normalise it here so
+ * every caller sees a plain boolean, never a three-state value.
+ */
+function toItemRow<T extends { isSubscription: boolean | null }>(
+  row: T,
+): Omit<T, 'isSubscription'> & { isSubscription: boolean } {
+  return { ...row, isSubscription: row.isSubscription ?? false };
+}
+
+export function getWarrantyItem(id: number): WarrantyItemRow | null {
+  const row = getDb()
+    .select(ITEM_COLUMNS)
+    .from(warrantyItems)
+    .innerJoin(users, eq(users.id, warrantyItems.ownerUserId))
+    // LEFT, not INNER: a typeId of null (or a type that got deleted, though that path is
+    // blocked at the app layer) must not make the item itself disappear (spec §19.3).
+    .leftJoin(warrantyItemTypes, eq(warrantyItemTypes.id, warrantyItems.typeId))
+    .where(eq(warrantyItems.id, id))
+    .get();
+  return row ? toItemRow(row) : null;
+}
+
+/**
+ * MUST-6.8: one DB transaction per item — the row and every staged receipt land together
+ * or not at all. Files are moved inside it; a throw unlinks whatever was already adopted.
+ */
+export function createWarrantyItem(
+  input: WarrantyInput,
+  staged: StagedReceiptRef[] = [],
+  at: string = nowIso(),
+): number {
+  const db = getDb();
+  const expiryDate = computeExpiryDate(input);
+  // Ruling P9: tracked DURING the adoption loop (append as each rename succeeds inside
+  // commitStaged), not reconstructed after the fact -- so a mid-transaction throw only
+  // unlinks files that were actually renamed onto disk, never ones that were skipped.
+  const adopted: string[] = [];
+  try {
+    return db.transaction((tx) => {
+      const row = tx
+        .insert(warrantyItems)
+        .values({ ...input, expiryDate, createdAt: at, updatedAt: at })
+        .returning({ id: warrantyItems.id })
+        .get();
+      commitStaged(tx, row.id, staged, at, adopted);
+      return row.id;
+    });
+  } catch (error) {
+    // MUST-4.7: if the insert throws, every file this call adopted is unlinked.
+    for (const name of adopted) deleteReceiptFile(name);
+    throw error;
+  }
+}
+
+/** MUST-3.6: any write that touches purchase_date, months or lifetime recomputes expiry. */
+export function updateWarrantyItem(id: number, input: WarrantyInput, at: string = nowIso()): boolean {
+  const result = getDb()
+    .update(warrantyItems)
+    .set({ ...input, expiryDate: computeExpiryDate(input), updatedAt: at })
+    .where(eq(warrantyItems.id, id))
+    .run();
+  return result.changes > 0;
+}
+
+/**
+ * MUST-4.8 delete order: rows first (inside the transaction, so the FTS triggers fire),
+ * then the files, best effort.
+ */
+export function deleteWarrantyItem(id: number): boolean {
+  const db = getDb();
+  const stored = db
+    .select({ storedFilename: warrantyReceipts.storedFilename })
+    .from(warrantyReceipts)
+    .where(eq(warrantyReceipts.warrantyItemId, id))
+    .all()
+    .map((row) => row.storedFilename);
+
+  // warranty_receipts rows cascade with the item (ON DELETE CASCADE in 0002).
+  const result = db.delete(warrantyItems).where(eq(warrantyItems.id, id)).run();
+  if (result.changes === 0) return false;
+  for (const name of stored) deleteReceiptFile(name);
+  return true;
+}
+
+function toReceiptRow(row: {
+  id: number;
+  warrantyItemId: number;
+  originalFilename: string;
+  storedFilename: string;
+  mime: ReceiptMime;
+  sizeBytes: number;
+  sha256: string;
+  ocrStatus: 'pending' | 'done' | 'failed';
+  ocrError: string | null;
+  createdAt: string;
+}): WarrantyReceiptRow {
+  return { ...row, fileExists: receiptFileExists(row.storedFilename) };
+}
+
+const RECEIPT_COLUMNS = {
+  id: warrantyReceipts.id,
+  warrantyItemId: warrantyReceipts.warrantyItemId,
+  originalFilename: warrantyReceipts.originalFilename,
+  storedFilename: warrantyReceipts.storedFilename,
+  mime: warrantyReceipts.mime,
+  sizeBytes: warrantyReceipts.sizeBytes,
+  sha256: warrantyReceipts.sha256,
+  ocrStatus: warrantyReceipts.ocrStatus,
+  ocrError: warrantyReceipts.ocrError,
+  createdAt: warrantyReceipts.createdAt,
+};
+
+export function listWarrantyReceipts(itemId: number): WarrantyReceiptRow[] {
+  return getDb()
+    .select(RECEIPT_COLUMNS)
+    .from(warrantyReceipts)
+    .where(eq(warrantyReceipts.warrantyItemId, itemId))
+    .orderBy(warrantyReceipts.id)
+    .all()
+    .map(toReceiptRow);
+}
+
+export function getWarrantyReceipt(id: number): WarrantyReceiptRow | null {
+  const row = getDb().select(RECEIPT_COLUMNS).from(warrantyReceipts).where(eq(warrantyReceipts.id, id)).get();
+  return row ? toReceiptRow(row) : null;
+}
+
+export function attachStagedReceipts(
+  itemId: number,
+  staged: StagedReceiptRef[],
+  at: string = nowIso(),
+): number[] {
+  const db = getDb();
+  // Ruling P9: same during-the-loop tracking as createWarrantyItem's adoption pass.
+  const adopted: string[] = [];
+  try {
+    return db.transaction((tx) => {
+      const committed = commitStaged(tx, itemId, staged, at, adopted);
+      return committed.receiptIds;
+    });
+  } catch (error) {
+    for (const name of adopted) deleteReceiptFile(name);
+    throw error;
+  }
+}
+
+/**
+ * MUST-6.8, per staging id: re-validate the file still exists AND still sniffs to an
+ * accepted type, rename it into receipts/ under a fresh stored_filename, insert the row
+ * with the sidecar's text/status when present (otherwise 'pending', for the sweep to pick
+ * up), then delete the sidecar. The staging id is NEVER trusted as a path — findStagedReceipt
+ * applies the UUID guard.
+ *
+ * Ruling P9: `adopted` is the caller's own tracking array, pushed to IMMEDIATELY after each
+ * successful rename (i.e. during the loop, not reconstructed from the return value after
+ * the fact) so a throw partway through this loop -- e.g. the INSERT below violating a CHECK
+ * constraint -- still lets the caller's catch block unlink exactly the files that made it to
+ * disk before the throw, not zero of them and not files that were only ever skipped.
+ */
+function commitStaged(
+  tx: ReturnType<typeof getDb>,
+  itemId: number,
+  staged: StagedReceiptRef[],
+  at: string,
+  adopted: string[],
+): { receiptIds: number[] } {
+  const receiptIds: number[] = [];
+
+  for (const ref of staged) {
+    const found = findStagedReceipt(ref.stagingId);
+    // Purged by the 24 h sweep, or lost to a restart. Skip it — the save still succeeds.
+    if (found === null) continue;
+    const buf = fs.readFileSync(found.path);
+    // Re-sniff: the file must STILL be an accepted type at commit time, not just at upload.
+    const mime = sniffReceiptType(buf);
+    if (mime === null) continue;
+
+    const sidecar = readSidecar(ref.stagingId);
+    const storedFilename = adoptReceiptFile(found.path, mime);
+    adopted.push(storedFilename);
+
+    const inserted = tx
+      .insert(warrantyReceipts)
+      .values({
+        warrantyItemId: itemId,
+        // MUST-3.8: display only. Capped at 255 and never a path component.
+        originalFilename: ref.originalFilename.slice(0, 255) || `receipt.${storedFilename.split('.').pop()}`,
+        storedFilename,
+        mime,
+        sizeBytes: buf.length,
+        sha256: sha256Bytes(buf),
+        ocrText: sidecar?.status === 'done' ? (sidecar.text ?? null) : null,
+        ocrStatus: sidecar === null ? 'pending' : sidecar.status,
+        ocrError: sidecar?.status === 'failed' ? (sidecar.error ?? null) : null,
+        createdAt: at,
+      })
+      .returning({ id: warrantyReceipts.id })
+      .get();
+
+    receiptIds.push(inserted.id);
+    deleteSidecar(ref.stagingId);
+    // No sidecar means OCR had not finished when the member saved: record 'pending' and let
+    // the queue (and, after a crash, the scheduler sweep) pick it up (§7.5).
+    if (sidecar === null) enqueueOcrJob({ kind: 'receipt', receiptId: inserted.id });
+  }
+
+  return { receiptIds };
+}
+
+export function deleteWarrantyReceipt(id: number): boolean {
+  const db = getDb();
+  const row = db
+    .select({ storedFilename: warrantyReceipts.storedFilename })
+    .from(warrantyReceipts)
+    .where(eq(warrantyReceipts.id, id))
+    .get();
+  if (!row) return false;
+  // Row first (the FTS trigger fires), file afterwards, best effort (MUST-4.8).
+  db.delete(warrantyReceipts).where(eq(warrantyReceipts.id, id)).run();
+  deleteReceiptFile(row.storedFilename);
+  return true;
+}
+
+/**
+ * MUST-7.16: reset to 'pending', clear text and error, enqueue. Idempotent — a second
+ * click on a claimed row is a no-op inside enqueueOcrJob().
+ */
+export function resetReceiptForReOcr(id: number): boolean {
+  const result = getDb()
+    .update(warrantyReceipts)
+    .set({ ocrStatus: 'pending', ocrText: null, ocrError: null })
+    .where(eq(warrantyReceipts.id, id))
+    .run();
+  if (result.changes === 0) return false;
+  enqueueOcrJob({ kind: 'receipt', receiptId: id });
+  return true;
+}
+
+export function listStoredFilenames(): string[] {
+  return getDb()
+    .select({ storedFilename: warrantyReceipts.storedFilename })
+    .from(warrantyReceipts)
+    .all()
+    .map((row) => row.storedFilename);
+}
+
+/** MUST-6.9: a duplicate is a user judgement, so this WARNS — it never blocks. */
+export function sha256AlreadyOnItem(itemId: number, sha256: string): boolean {
+  const row = getDb()
+    .select({ id: warrantyReceipts.id })
+    .from(warrantyReceipts)
+    .where(and(eq(warrantyReceipts.warrantyItemId, itemId), eq(warrantyReceipts.sha256, sha256)))
+    .get();
+  return row !== undefined;
+}

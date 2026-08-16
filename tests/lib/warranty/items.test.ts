@@ -1,0 +1,353 @@
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { sql } from 'drizzle-orm';
+import { createSeededTestDb, insertTestUser, type TestDb } from '../../helpers/db';
+import {
+  FUTURE_PURCHASE_DATE_ERROR,
+  LIFETIME_WITH_TERM_ERROR,
+  attachStagedReceipts,
+  createWarrantyItem,
+  deleteWarrantyItem,
+  deleteWarrantyReceipt,
+  getWarrantyItem,
+  getWarrantyReceipt,
+  listStoredFilenames,
+  listWarrantyReceipts,
+  resetReceiptForReOcr,
+  sha256AlreadyOnItem,
+  updateWarrantyItem,
+  warrantyInputSchema,
+  type WarrantyInput,
+} from '@/lib/warranty/items';
+import { receiptFileExists } from '@/lib/warranty/receipts';
+import { findStagedReceipt, readSidecar, writeSidecar, writeStagedReceipt } from '@/lib/warranty/staging';
+import { drainOcrQueue, resetOcrQueueForTests } from '@/lib/warranty/ocr/queue';
+import { setOcrEngineForTests } from '@/lib/warranty/ocr/engine';
+import { createItemType, renameItemType } from '@/lib/warranty/types';
+
+let current: TestDb | null = null;
+let dataDir: string;
+let originalDataDir: string | undefined;
+let ownerId: number;
+
+const TODAY = '2026-08-16';
+const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(64)]);
+
+beforeEach(() => {
+  dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-warranty-items-'));
+  originalDataDir = process.env.DATA_DIR;
+  process.env.DATA_DIR = dataDir;
+  current = createSeededTestDb();
+  ownerId = insertTestUser(current.db, { name: 'Alice', username: 'alice' });
+  resetOcrQueueForTests();
+  setOcrEngineForTests({ recognize: async () => ({ text: 'ENGINE TEXT' }) });
+});
+
+afterEach(() => {
+  setOcrEngineForTests(null);
+  resetOcrQueueForTests();
+  current?.cleanup();
+  current = null;
+  if (originalDataDir === undefined) delete process.env.DATA_DIR;
+  else process.env.DATA_DIR = originalDataDir;
+  fs.rmSync(dataDir, { recursive: true, force: true });
+});
+
+const ref = (stagingId: string, originalFilename = 'receipt.jpg') => ({ stagingId, originalFilename });
+
+function input(over: Partial<WarrantyInput> = {}): WarrantyInput {
+  return {
+    name: 'Fridge',
+    vendor: 'Home Depot',
+    model: 'GDT645SYNFS',
+    serial: null,
+    purchaseDate: TODAY,
+    warrantyMonths: 24,
+    isLifetime: false,
+    priceCents: 129999,
+    ownerUserId: ownerId,
+    transactionId: null,
+    typeId: null,
+    notes: null,
+    ...over,
+  };
+}
+
+describe('warrantyInputSchema', () => {
+  const schema = () => warrantyInputSchema(TODAY);
+
+  it('accepts a well-formed item', () => {
+    expect(schema().safeParse(input()).success).toBe(true);
+  });
+
+  it('rejects lifetime combined with a term (MUST-3.5)', () => {
+    const parsed = schema().safeParse(input({ isLifetime: true, warrantyMonths: 12 }));
+    expect(parsed.success).toBe(false);
+    expect(parsed.success === false && parsed.error.issues[0].message).toBe(LIFETIME_WITH_TERM_ERROR);
+  });
+
+  it('accepts lifetime with no term', () => {
+    expect(schema().safeParse(input({ isLifetime: true, warrantyMonths: null })).success).toBe(true);
+  });
+
+  it('accepts an unknown term (null months, not lifetime)', () => {
+    expect(schema().safeParse(input({ warrantyMonths: null })).success).toBe(true);
+  });
+
+  it('rejects a future purchase date and a pre-1970 one', () => {
+    const future = schema().safeParse(input({ purchaseDate: '2026-08-17' }));
+    expect(future.success).toBe(false);
+    expect(future.success === false && future.error.issues[0].message).toBe(FUTURE_PURCHASE_DATE_ERROR);
+    expect(schema().safeParse(input({ purchaseDate: '1969-12-31' })).success).toBe(false);
+    expect(schema().safeParse(input({ purchaseDate: 'not-a-date' })).success).toBe(false);
+    expect(schema().safeParse(input({ purchaseDate: TODAY })).success).toBe(true);
+  });
+
+  it('rejects a name over 200 chars, notes over 2000, and a non-integer price', () => {
+    expect(schema().safeParse(input({ name: 'x'.repeat(201) })).success).toBe(false);
+    expect(schema().safeParse(input({ name: '   ' })).success).toBe(false);
+    expect(schema().safeParse(input({ notes: 'x'.repeat(2001) })).success).toBe(false);
+    expect(schema().safeParse(input({ priceCents: 12.5 })).success).toBe(false);
+    expect(schema().safeParse(input({ priceCents: -1 })).success).toBe(false);
+    expect(schema().safeParse(input({ warrantyMonths: 0 })).success).toBe(false);
+  });
+
+  it('normalises blank optional text to null', () => {
+    const parsed = schema().parse(input({ vendor: '  ', model: '', serial: '  ', notes: '' }));
+    expect(parsed).toMatchObject({ vendor: null, model: null, serial: null, notes: null });
+  });
+
+  it('accepts a null typeId ("unclassified") and rejects a non-positive one (delta T6)', () => {
+    expect(schema().safeParse(input({ typeId: null })).success).toBe(true);
+    expect(schema().safeParse(input({ typeId: 0 })).success).toBe(false);
+    expect(schema().safeParse(input({ typeId: -1 })).success).toBe(false);
+    expect(schema().safeParse(input({ typeId: 1.5 })).success).toBe(false);
+  });
+});
+
+describe('createWarrantyItem', () => {
+  it('computes and stores expiry_date at write time (MUST-3.6)', () => {
+    const id = createWarrantyItem(input({ purchaseDate: '2026-01-31', warrantyMonths: 1 }));
+    expect(getWarrantyItem(id)?.expiryDate).toBe('2026-02-28');
+  });
+
+  it('stores null expiry for lifetime and for an unknown term', () => {
+    const lifetime = createWarrantyItem(input({ isLifetime: true, warrantyMonths: null }));
+    expect(getWarrantyItem(lifetime)?.expiryDate).toBeNull();
+    expect(getWarrantyItem(lifetime)?.isLifetime).toBe(true);
+    const unknown = createWarrantyItem(input({ warrantyMonths: null }));
+    expect(getWarrantyItem(unknown)?.expiryDate).toBeNull();
+  });
+
+  it('joins the owner name for display', () => {
+    const id = createWarrantyItem(input());
+    expect(getWarrantyItem(id)?.ownerName).toBe('Alice');
+  });
+
+  it('returns null for an unknown id', () => {
+    expect(getWarrantyItem(999)).toBeNull();
+  });
+});
+
+describe('item types (delta T6)', () => {
+  it('writes type_id and surfaces typeName/isSubscription true for a subscription type', () => {
+    const sub = createItemType('Streaming Items', true);
+    const id = createWarrantyItem(input({ typeId: sub.id }));
+    const row = getWarrantyItem(id)!;
+    expect(row.typeId).toBe(sub.id);
+    expect(row.typeName).toBe('Streaming Items');
+    expect(row.isSubscription).toBe(true);
+  });
+
+  it('an untyped item surfaces typeName null and isSubscription false, and is still listed', () => {
+    const id = createWarrantyItem(input({ typeId: null }));
+    const row = getWarrantyItem(id)!;
+    expect(row.typeId).toBeNull();
+    expect(row.typeName).toBeNull();
+    expect(row.isSubscription).toBe(false);
+  });
+
+  it('updateWarrantyItem writes a new type_id', () => {
+    const type = createItemType('Laptop Items', false);
+    const id = createWarrantyItem(input({ typeId: null }));
+    updateWarrantyItem(id, input({ typeId: type.id }));
+    const row = getWarrantyItem(id)!;
+    expect(row.typeId).toBe(type.id);
+    expect(row.typeName).toBe('Laptop Items');
+    expect(row.isSubscription).toBe(false);
+  });
+
+  it('renaming a type changes typeName on the next read with no FTS row change', () => {
+    const type = createItemType('Gadget Items', false);
+    const id = createWarrantyItem(input({ typeId: type.id, name: 'Rename Probe Item' }));
+    const before = current!.db.get<{ c: number }>(
+      sql`select count(*) as c from warranty_search where warranty_search match ${'"Probe"'}`,
+    );
+    renameItemType(type.id, 'Gizmo Items');
+    expect(getWarrantyItem(id)?.typeName).toBe('Gizmo Items');
+    const after = current!.db.get<{ c: number }>(
+      sql`select count(*) as c from warranty_search where warranty_search match ${'"Probe"'}`,
+    );
+    expect(after.c).toBe(before.c);
+  });
+});
+
+describe('updateWarrantyItem', () => {
+  it('recomputes expiry in the same write when the term changes', () => {
+    const id = createWarrantyItem(input({ purchaseDate: '2026-08-16', warrantyMonths: 24 }));
+    updateWarrantyItem(id, input({ purchaseDate: '2026-08-16', warrantyMonths: 12 }));
+    expect(getWarrantyItem(id)?.expiryDate).toBe('2027-08-16');
+    updateWarrantyItem(id, input({ purchaseDate: '2026-03-31', warrantyMonths: 1 }));
+    expect(getWarrantyItem(id)?.expiryDate).toBe('2026-04-30');
+  });
+
+  it('clears months and expiry when switched to lifetime', () => {
+    const id = createWarrantyItem(input());
+    updateWarrantyItem(id, input({ isLifetime: true, warrantyMonths: null }));
+    const row = getWarrantyItem(id)!;
+    expect(row.isLifetime).toBe(true);
+    expect(row.warrantyMonths).toBeNull();
+    expect(row.expiryDate).toBeNull();
+  });
+
+  it('bumps updated_at and returns false for an unknown id', () => {
+    const id = createWarrantyItem(input(), [], '2026-08-16T00:00:00.000Z');
+    updateWarrantyItem(id, input({ name: 'Dishwasher' }), '2026-08-17T00:00:00.000Z');
+    const row = getWarrantyItem(id)!;
+    expect(row.name).toBe('Dishwasher');
+    expect(row.updatedAt).toBe('2026-08-17T00:00:00.000Z');
+    expect(row.createdAt).toBe('2026-08-16T00:00:00.000Z');
+    expect(updateWarrantyItem(999, input())).toBe(false);
+  });
+});
+
+describe('attachStagedReceipts (MUST-6.8)', () => {
+  it('moves the file into receipts/, inserts the row, and deletes the sidecar', async () => {
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    writeSidecar(stagingId, { status: 'done', text: 'STAGED RECEIPT TEXT' });
+    const id = createWarrantyItem(input(), [ref(stagingId)]);
+
+    const receipts = listWarrantyReceipts(id);
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0].ocrStatus).toBe('done');
+    expect(receipts[0].mime).toBe('image/jpeg');
+    expect(receipts[0].sizeBytes).toBe(JPEG.length);
+    expect(receipts[0].fileExists).toBe(true);
+    expect(receiptFileExists(receipts[0].storedFilename)).toBe(true);
+    expect(findStagedReceipt(stagingId)).toBeNull();
+    expect(readSidecar(stagingId)).toBeNull();
+
+    // The OCR text landed in the index, not just the row.
+    const hit = current!.db.get<{ id: number }>(
+      sql`select rowid as id from warranty_search where warranty_search match ${'"STAGED"'}`,
+    );
+    expect(hit.id).toBe(id);
+  });
+
+  it('inserts as pending and enqueues an OCR job when there is no sidecar', async () => {
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const id = createWarrantyItem(input(), [ref(stagingId)]);
+    const [receipt] = listWarrantyReceipts(id);
+    // The commit enqueued it; draining runs the injected fake engine.
+    await drainOcrQueue();
+    expect(getWarrantyReceipt(receipt.id)?.ocrStatus).toBe('done');
+  });
+
+  it('skips a staging id whose file has already been purged, without failing the save', () => {
+    const id = createWarrantyItem(input(), [ref('11111111-2222-3333-4444-555555555555')]);
+    expect(listWarrantyReceipts(id)).toHaveLength(0);
+    expect(getWarrantyItem(id)).not.toBeNull();
+  });
+
+  it('skips a staged file that no longer sniffs to an accepted type', () => {
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    fs.writeFileSync(findStagedReceipt(stagingId)!.path, Buffer.from('PK not an image'));
+    const id = createWarrantyItem(input(), [ref(stagingId)]);
+    expect(listWarrantyReceipts(id)).toHaveLength(0);
+  });
+
+  it('attaches to an existing item and flags a duplicate sha256 without blocking (MUST-6.9)', () => {
+    const first = writeStagedReceipt(JPEG, 'image/jpeg');
+    const id = createWarrantyItem(input(), [ref(first)]);
+    const digest = listWarrantyReceipts(id)[0].sha256;
+    expect(sha256AlreadyOnItem(id, digest)).toBe(true);
+    expect(sha256AlreadyOnItem(id, 'b'.repeat(64))).toBe(false);
+
+    const second = writeStagedReceipt(JPEG, 'image/jpeg');
+    expect(attachStagedReceipts(id, [ref(second)])).toHaveLength(1);
+    expect(listWarrantyReceipts(id)).toHaveLength(2);
+  });
+});
+
+describe('deletion (MUST-4.8)', () => {
+  it('removes the receipt row, its FTS text and its file', () => {
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    writeSidecar(stagingId, { status: 'done', text: 'DELETEME TOKEN' });
+    const id = createWarrantyItem(input(), [ref(stagingId)]);
+    const [receipt] = listWarrantyReceipts(id);
+
+    expect(deleteWarrantyReceipt(receipt.id)).toBe(true);
+    expect(listWarrantyReceipts(id)).toHaveLength(0);
+    expect(receiptFileExists(receipt.storedFilename)).toBe(false);
+    const hit = current!.db.get<{ c: number }>(
+      sql`select count(*) as c from warranty_search where warranty_search match ${'"DELETEME"'}`,
+    );
+    expect(hit.c).toBe(0);
+    expect(deleteWarrantyReceipt(receipt.id)).toBe(false);
+  });
+
+  it('deleting the item cascades the rows and unlinks every file', () => {
+    const a = writeStagedReceipt(JPEG, 'image/jpeg');
+    const b = writeStagedReceipt(JPEG, 'image/jpeg');
+    const id = createWarrantyItem(input(), [ref(a), ref(b)]);
+    const stored = listWarrantyReceipts(id).map((r) => r.storedFilename);
+    expect(stored).toHaveLength(2);
+
+    expect(deleteWarrantyItem(id)).toBe(true);
+    expect(getWarrantyItem(id)).toBeNull();
+    for (const name of stored) expect(receiptFileExists(name)).toBe(false);
+    const count = current!.db.get<{ c: number }>(sql`select count(*) as c from warranty_search`);
+    expect(count.c).toBe(0);
+    expect(deleteWarrantyItem(id)).toBe(false);
+  });
+});
+
+describe('resetReceiptForReOcr (MUST-7.16)', () => {
+  it('sets pending, clears text and error, and re-enqueues', async () => {
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    writeSidecar(stagingId, { status: 'failed', error: 'OCR timed out.' });
+    const id = createWarrantyItem(input(), [ref(stagingId)]);
+    const [receipt] = listWarrantyReceipts(id);
+    expect(receipt.ocrStatus).toBe('failed');
+    expect(receipt.ocrError).toBe('OCR timed out.');
+
+    expect(resetReceiptForReOcr(receipt.id)).toBe(true);
+    await drainOcrQueue();
+
+    const after = getWarrantyReceipt(receipt.id)!;
+    expect(after.ocrStatus).toBe('done');
+    expect(after.ocrError).toBeNull();
+    expect(resetReceiptForReOcr(999)).toBe(false);
+  });
+});
+
+describe('listStoredFilenames', () => {
+  it('returns every stored_filename for the orphan sweep', () => {
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const id = createWarrantyItem(input(), [ref(stagingId)]);
+    expect(listStoredFilenames()).toEqual([listWarrantyReceipts(id)[0].storedFilename]);
+  });
+});
+
+describe('missing files degrade quietly (MUST-4.10)', () => {
+  it('reports fileExists false instead of throwing', () => {
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const id = createWarrantyItem(input(), [ref(stagingId)]);
+    const [receipt] = listWarrantyReceipts(id);
+    fs.rmSync(path.join(dataDir, 'receipts', receipt.storedFilename), { force: true });
+    expect(listWarrantyReceipts(id)[0].fileExists).toBe(false);
+    expect(getWarrantyReceipt(receipt.id)?.fileExists).toBe(false);
+  });
+});
