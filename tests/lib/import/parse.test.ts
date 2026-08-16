@@ -19,7 +19,7 @@ describe('TD Chequing/Debit preset', () => {
 
   it('treats the debit column as money out and the credit column as money in', () => {
     const { rows } = parseCsv(fixture('td-chequing.csv'), mapping);
-    expect(rows[0]).toMatchObject({ rowIndex: 0, rawDate: '03/02/2026', date: '2026-03-02', amountCents: -485 });
+    expect(rows[0]).toMatchObject({ rowIndex: 0, rawDate: '2026-03-02', date: '2026-03-02', amountCents: -485 });
     expect(rows[2]).toMatchObject({ date: '2026-03-04', amountCents: 214567 });
   });
 
@@ -29,8 +29,11 @@ describe('TD Chequing/Debit preset', () => {
   });
 
   it('preserves the raw date string separately from the parsed date', () => {
+    // The real export's date column is already ISO, so rawDate and date coincide here —
+    // the point of the assertion is that rawDate is read verbatim from the cell (trimmed,
+    // unmodified), not reconstructed from the parsed components.
     const { rows } = parseCsv(fixture('td-chequing.csv'), mapping);
-    expect(rows[6].rawDate).toBe('03/07/2026');
+    expect(rows[6].rawDate).toBe('2026-03-07');
     expect(rows[6].date).toBe('2026-03-07');
   });
 });
@@ -61,13 +64,16 @@ describe('Amex Canada preset', () => {
   it('skips the header row and flips the sign (positive = charge)', () => {
     const { rows, errors } = parseCsv(fixture('amex.csv'), mapping);
     expect(errors).toEqual([]);
-    expect(rows).toHaveLength(5);
+    expect(rows).toHaveLength(6);
     expect(rows[0]).toMatchObject({ rowIndex: 0, date: '2026-03-02', rawDescription: 'CAFE DEPOT MONTREAL', amountCents: -1875 });
   });
 
   it('handles quoted embedded newlines without shifting the row alignment', () => {
+    // Real export's multi-line quoting lives in Address/City-Province (cols 12-13), not
+    // Description (col 2) or Amount (col 5) — this proves those newlines don't leak into
+    // the columns the mapping actually reads.
     const { rows } = parseCsv(fixture('amex.csv'), mapping);
-    expect(rows.map((r) => r.date)).toEqual(['2026-03-02', '2026-03-04', '2026-03-06', '2026-03-07', '2026-03-09']);
+    expect(rows.map((r) => r.date)).toEqual(['2026-03-02', '2026-03-04', '2026-03-06', '2026-03-07', '2026-03-09', '2026-03-11']);
   });
 
   it('turns a negative Amex amount into a positive credit', () => {
@@ -76,15 +82,22 @@ describe('Amex Canada preset', () => {
     expect(rows[4]).toMatchObject({ rawDescription: 'UNIQLO CANADA TORONTO', amountCents: 5999 });
   });
 
-  it('ignores the Amex Category column in v1', () => {
+  it('ignores the Amex Merchant/Card Member/Reference columns in v1 (real export has no Category column)', () => {
+    // rawDescription must come from column 2 only; the Merchant column (11) intentionally
+    // carries different text ("... STORE ...") to prove neighbouring columns don't leak in.
     const { rows } = parseCsv(fixture('amex.csv'), mapping);
-    expect(rows[0].rawDescription).not.toContain('Restaurant');
+    expect(rows[0].rawDescription).not.toContain('STORE');
   });
 });
 
 describe('windows-1252 fixture', () => {
+  // td-chequing-win1252.csv is a generated, untouched fixture (scripts/make-fixtures.mjs)
+  // whose dates are still MM/DD/YYYY; only the encoding fallback is under test here, so
+  // the date format is overridden explicitly rather than regenerating the fixture.
+  const mapping: ImportMapping = { ...getBuiltinPreset('TD Chequing/Debit'), dateFormat: 'MM/DD/YYYY' };
+
   it('reports the detected encoding and keeps accented merchants intact', () => {
-    const result = parseCsv(fixture('td-chequing-win1252.csv'), getBuiltinPreset('TD Chequing/Debit'));
+    const result = parseCsv(fixture('td-chequing-win1252.csv'), mapping);
     expect(result.encoding).toBe('windows-1252');
     expect(result.errors).toEqual([]);
     expect(result.rows[0].rawDescription).toContain('CAFÉ RÉPUBLIQUE');
@@ -93,7 +106,10 @@ describe('windows-1252 fixture', () => {
 });
 
 describe('row-level errors', () => {
-  const mapping = getBuiltinPreset('TD Chequing/Debit');
+  // mint-like-edge-cases.csv is an untouched fixture whose dates are still MM/DD/YYYY;
+  // this block is about row-level error collection, not the TD Chequing preset's real
+  // date format, so it's overridden explicitly here rather than regenerating the fixture.
+  const mapping: ImportMapping = { ...getBuiltinPreset('TD Chequing/Debit'), dateFormat: 'MM/DD/YYYY' };
 
   it('collects each failure without aborting the file', () => {
     const result = parseCsv(fixture('mint-like-edge-cases.csv'), mapping);
@@ -169,7 +185,7 @@ describe('limits', () => {
   });
 
   it('rejects a file over 10,000 rows', () => {
-    const line = '03/02/2026,COFFEE,4.85,,0.00';
+    const line = '2026-03-02,COFFEE,4.85,,0.00';
     const csv = Buffer.from(Array.from({ length: MAX_ROWS + 1 }, () => line).join('\n'), 'utf8');
     try {
       parseCsv(csv, getBuiltinPreset('TD Chequing/Debit'));
@@ -181,7 +197,7 @@ describe('limits', () => {
   });
 
   it('accepts exactly 10,000 rows', () => {
-    const line = '03/02/2026,COFFEE,4.85,,0.00';
+    const line = '2026-03-02,COFFEE,4.85,,0.00';
     const csv = Buffer.from(Array.from({ length: MAX_ROWS }, () => line).join('\n'), 'utf8');
     expect(parseCsv(csv, getBuiltinPreset('TD Chequing/Debit')).rows).toHaveLength(MAX_ROWS);
   });
@@ -193,8 +209,9 @@ describe('previewRawRows', () => {
     expect(encoding).toBe('utf-8');
     expect(rows).toHaveLength(3);
     expect(rows[0][0]).toBe('Date');
-    expect(rows[1][0]).toBe('03/02/2026');
-    expect(rows[1][3]).toContain('\n');
+    expect(rows[1][0]).toBe('02 Mar 2026');
+    // Multi-line quoting lives in the City / Province column (index 13) in the real export.
+    expect(rows[1][13]).toContain('\n');
   });
 
   it('defaults to 10 rows', () => {

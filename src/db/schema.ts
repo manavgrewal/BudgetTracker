@@ -155,7 +155,7 @@ export const merchantRules = sqliteTable(
     id: integer('id').primaryKey({ autoIncrement: true }),
     pattern: text('pattern').notNull(),
     matchType: text('match_type', { enum: ['exact', 'contains'] }).notNull(),
-    ruleKind: text('rule_kind', { enum: ['category', 'transfer', 'rename'] }).notNull().default('category'),
+    ruleKind: text('rule_kind', { enum: ['category', 'transfer', 'rename', 'not_transfer'] }).notNull().default('category'),
     categoryId: integer('category_id').references(() => categories.id),
     /** Set only on rule_kind = 'rename'; NULL on category and transfer rules. */
     renameTo: text('rename_to'),

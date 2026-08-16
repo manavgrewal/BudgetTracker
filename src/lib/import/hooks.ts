@@ -1,4 +1,5 @@
-import { normalizeMerchant as learningNormalizeMerchant } from '@/lib/categorize/normalize';
+import { untrain as bayesUntrain } from '@/lib/categorize/bayes';
+import { normalizeMerchant as learningNormalizeMerchant, tokenize as learningTokenize } from '@/lib/categorize/normalize';
 
 export type NormalizeFn = (raw: string) => string;
 export type TokenizeFn = (normalizedMerchant: string) => string[];
@@ -10,11 +11,14 @@ export interface ImportHooks {
   untrain: UntrainFn;
 }
 
-/** Task 12 replaces `tokenize` and `untrain` with the Bayes implementations. */
+/**
+ * Final wiring. The indirection stays so `undoImport` can be tested with a spy
+ * (see tests/lib/import/undo.test.ts) without reaching into the Bayes tables.
+ */
 const DEFAULTS: ImportHooks = {
   normalizeMerchant: learningNormalizeMerchant,
-  tokenize: (normalized) => normalized.split(/[^0-9A-Za-zÀ-ÿ]+/u).filter((t) => t.length > 1),
-  untrain: () => {},
+  tokenize: learningTokenize,
+  untrain: bayesUntrain,
 };
 
 let hooks: ImportHooks = { ...DEFAULTS };

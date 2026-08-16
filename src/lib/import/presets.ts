@@ -32,7 +32,8 @@ export const BUILTIN_PRESETS: Record<BuiltinPresetName, BuiltinPreset> = {
       hasHeader: false,
       headerRows: 0,
       dateCol: 0,
-      dateFormat: 'MM/DD/YYYY',
+      // Real export (fixture-validated 2026-08-16): quote-all fields, LF-only, ISO date.
+      dateFormat: 'YYYY-MM-DD',
       descCols: [1],
       amountMode: 'debit_credit',
       amountCol: null,
@@ -86,10 +87,14 @@ export const BUILTIN_PRESETS: Record<BuiltinPresetName, BuiltinPreset> = {
       hasHeader: true,
       headerRows: 1,
       dateCol: 0,
-      dateFormat: 'MM/DD/YYYY',
-      descCols: [1],
+      // Real export (fixture-validated 2026-08-16): 17 columns, "DD Mon YYYY" dates —
+      // dates.ts's 'DD-MMM-YYYY' regex already accepts the space-separated form.
+      dateFormat: 'DD-MMM-YYYY',
+      // Real column order pushes Description/Amount right of the preset's original
+      // guess: Date, Date Processed, Description, Card Member, Account #, Amount, ...
+      descCols: [2],
       amountMode: 'signed',
-      amountCol: 2,
+      amountCol: 5,
       debitCol: null,
       creditCol: null,
       // Amex reports charges as POSITIVE numbers.

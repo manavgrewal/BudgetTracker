@@ -9,6 +9,7 @@ node_modules/
 coverage/
 
 .tmp-data/
+real-statements/
 next-env.d.ts
 *.tsbuildinfo
 /.next/

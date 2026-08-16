@@ -127,7 +127,7 @@ describe('computeRowHashes over real fixtures', () => {
   it('gives the two identical TD rows different hashes', () => {
     const { rows } = parseCsv(fixture('td-chequing.csv'), getBuiltinPreset('TD Chequing/Debit'));
     const hashed = computeRowHashes(1, rows);
-    const timmies = hashed.filter((r) => r.rawDate === '03/07/2026');
+    const timmies = hashed.filter((r) => r.rawDate === '2026-03-07');
     expect(timmies).toHaveLength(2);
     expect(timmies[0].occurrenceIndex).toBe(0);
     expect(timmies[1].occurrenceIndex).toBe(1);
@@ -158,7 +158,7 @@ describe('computeRowHashes over real fixtures', () => {
     // implementation that counts the error row (or lets it consume an index before
     // being dropped) would number the surviving pair [0, 2] instead of [0, 1].
     const csv = Buffer.from(
-      ['03/07/2026,TIM HORTONS,4.85,,', '13/45/2026,BAD DATE ROW,10.00,,', '03/07/2026,TIM HORTONS,4.85,,'].join('\n') + '\n',
+      ['2026-03-07,TIM HORTONS,4.85,,', '2026-13-45,BAD DATE ROW,10.00,,', '2026-03-07,TIM HORTONS,4.85,,'].join('\n') + '\n',
       'utf8',
     );
     const { rows, errors } = parseCsv(csv, getBuiltinPreset('TD Chequing/Debit'));

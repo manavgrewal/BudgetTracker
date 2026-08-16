@@ -163,3 +163,25 @@ describe('Bayes reversal on undo', () => {
     expect(untrain).not.toHaveBeenCalled();
   });
 });
+
+describe('Bayes reversal through the real wiring', () => {
+  it('decrements the real token counts when a confirmed row is deleted by undo', async () => {
+    const { db, userId, accountId, hashed } = setup();
+    const { confirmCategory } = await import('@/lib/categorize/engine');
+    const { getVocabSize } = await import('@/lib/categorize/bayes');
+    const groceries = categoryIdByName(db, 'Groceries');
+
+    const result = commitImport({ accountId, profileId: null, filename: 'td.csv', importedBy: userId, rows: hashed, errors: [] });
+    const first = result.insertedTransactionIds[0];
+    confirmCategory({ transactionId: first, categoryId: groceries, userId });
+
+    const before = current!.sqlite.prepare('select count(*) as c from bayes_tokens').get() as { c: number };
+    expect(before.c).toBeGreaterThan(0);
+
+    undoImport(result.importId);
+
+    const after = current!.sqlite.prepare('select count(*) as c from bayes_tokens').get() as { c: number };
+    expect(after.c).toBe(0);
+    expect(getVocabSize()).toBe(0);
+  });
+});

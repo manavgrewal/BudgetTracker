@@ -85,10 +85,10 @@ All money stored as **integer cents**, spend negative, income positive. Budget l
 **Built-in presets (4):**
 | Preset | Shape (best-effort default) |
 |---|---|
-| TD Chequing/Debit | Headerless: `MM/DD/YYYY, Description, Debit, Credit, Balance`. Debit column = money out. |
-| TD Visa | Same headerless 5-column shape as TD chequing. |
+| TD Chequing/Debit | Headerless: `YYYY-MM-DD, Description, Debit, Credit, Balance`. Debit column = money out. Fixture-validated against the user's real export (2026-08-16): every field quoted (including numeric; empty fields render as a bare `,,`), LF-only line endings, ISO date. |
+| TD Visa | Same headerless 5-column shape as TD chequing, `MM/DD/YYYY` dates. Fixture-validated against the user's real export (2026-08-16): unquoted fields, CRLF line endings — matched the preset exactly, no change needed. |
 | Scotiabank Chequing/Debit | Signed-amount CSV; negative = money out; exact column layout confirmed against user's real export during fixture work (first import runs the mapping preview regardless). |
-| Amex Canada | Headered, ~10 columns incl. Amex's own Category and multi-line quoted "Extended Details"; date, description, amount; positive = charge. Parser must handle quoted embedded newlines/commas. Amex Category column ignored in v1 (possible categorizer hint, v2). |
+| Amex Canada | Headered, 17 columns (`Date, Date Processed, Description, Card Member, Account #, Amount, Flexible, Foreign Spend Amount, Commission, Exchange Rate, Additional Information, Merchant, Address, City / Province, Postal Code, Country, Reference`); Description at column index 2, Amount at index 5; date format `DD Mon YYYY` (e.g. `02 Mar 2026`); positive = charge. Parser must handle quoted embedded newlines — the real export's multi-line quoting occurs in the **Address** and **City / Province** columns, not a "Category"/"Extended Details" column (there is no Category column in this export). Fixture-validated against the user's real export (2026-08-16); the extra Merchant/Card Member/Reference columns are ignored in v1 (possible categorizer hint, v2). |
 
 Presets are **best-effort defaults**: every first import of an account runs through the preview step, where the user confirms parsing looks right and can adjust the mapping (forking the profile per above). During implementation, presets are validated against fixture files built from the user's real exports (values scrubbed). Format drift is self-correcting via the preview step.
 

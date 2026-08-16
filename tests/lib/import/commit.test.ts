@@ -128,7 +128,10 @@ describe('commitImport', () => {
     current = createSeededTestDb();
     const userId = insertTestUser(current.db, { name: 'Alice', username: 'alice' });
     const accountId = insertTestAccount(current.db);
-    const parsed = parseCsv(fixture('mint-like-edge-cases.csv'), getBuiltinPreset('TD Chequing/Debit'));
+    // mint-like-edge-cases.csv is an untouched fixture whose dates are still MM/DD/YYYY;
+    // this test is about row-error propagation into imports, not the real TD Chequing
+    // date format, so it's overridden explicitly here rather than regenerating the fixture.
+    const parsed = parseCsv(fixture('mint-like-edge-cases.csv'), { ...getBuiltinPreset('TD Chequing/Debit'), dateFormat: 'MM/DD/YYYY' });
     const hashed = computeRowHashes(accountId, parsed.rows);
 
     const result = commitImport({ accountId, profileId: null, filename: 'edge.csv', importedBy: userId, rows: hashed, errors: parsed.errors });
