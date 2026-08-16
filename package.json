@@ -13,6 +13,7 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "fixtures": "node scripts/make-fixtures.mjs",
+    "fetch-tessdata": "node scripts/fetch-tessdata.mjs",
     "reset-password": "node --experimental-strip-types scripts/reset-admin-password.ts",
     "install:linux": "bash install/install-linux.sh"
   },
@@ -25,10 +26,12 @@
     "node-cron": "^3.0.3",
     "otplib": "^12.0.1",
     "papaparse": "^5.4.1",
+    "pdfjs-dist": "^4.10.38",
     "qrcode": "^1.5.4",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "recharts": "^2.15.0",
+    "tesseract.js": "^6.0.1",
     "zod": "^3.23.8"
   },
   "devDependencies": {
