@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -56,7 +56,37 @@ describe('vendored language data (MUST-7.7)', () => {
 });
 
 describe('assertOcrAssets', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('reports ok with no missing entries on a healthy checkout', () => {
     expect(assertOcrAssets()).toEqual({ ok: true, missing: [] });
+  });
+
+  it('checks the core wasm builds on disk (CRITICAL 1), not just the package directory', () => {
+    const assets = resolveOcrAssets();
+    // tesseract.js runtime-detects SIMD support and picks between these two "-lstm" builds
+    // (worker-script/node/getCore.js) — both must actually be present, since a package
+    // directory existing is not proof its wasm payload is intact or wasn't stripped by an
+    // overzealous prune step.
+    for (const file of [
+      'tesseract-core-lstm.js',
+      'tesseract-core-lstm.wasm',
+      'tesseract-core-simd-lstm.js',
+      'tesseract-core-simd-lstm.wasm',
+    ]) {
+      expect(fs.existsSync(path.join(assets.corePath, file))).toBe(true);
+    }
+  });
+
+  it('reports a missing entry when a core wasm file is absent, even though the package directory itself exists', () => {
+    const assets = resolveOcrAssets();
+    const missingWasm = path.join(assets.corePath, 'tesseract-core-simd-lstm.wasm');
+    vi.spyOn(fs, 'existsSync').mockImplementation((target) => target !== missingWasm);
+
+    const result = assertOcrAssets();
+    expect(result.ok).toBe(false);
+    expect(result.missing.some((entry) => entry.includes('tesseract-core-simd-lstm.wasm'))).toBe(true);
   });
 });

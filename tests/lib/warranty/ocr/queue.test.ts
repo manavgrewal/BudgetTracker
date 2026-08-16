@@ -255,8 +255,14 @@ describe('queue depth (Ruling P6 — real assertions, not a vacuous +1)', () => 
   });
 });
 
-describe('Ruling P15 — enqueue during the final await of a draining job', () => {
-  it('a job enqueued while the only in-flight job is still awaiting still runs to completion', async () => {
+describe('queue never strands a job (IMPORTANT 3 fix report — Ruling P15 revisited)', () => {
+  // See the comment on runQueue() in src/lib/warranty/ocr/queue.ts for the full reasoning.
+  // The original P15 fix added a dead `if (queue.length > 0) continue;` branch: there is no
+  // await between `queue.shift()` returning undefined and `pump = null`, so no enqueue can
+  // land in that gap — the branch could never run and was removed. The invariant that
+  // actually prevents stranding has exactly two paths, both covered directly below.
+
+  it('path 1 — a job enqueued while another job is still in flight is picked up by the same drain, not dropped', async () => {
     let releaseFirst!: (value: { text: string }) => void;
     const first = new Promise<{ text: string }>((resolve) => {
       releaseFirst = resolve;
@@ -266,15 +272,12 @@ describe('Ruling P15 — enqueue during the final await of a draining job', () =
     const a = writeStagedReceipt(JPEG, 'image/jpeg');
     enqueueOcrJob({ kind: 'staged', stagingId: a });
 
-    // `a` is now the sole in-flight job (queue array empty, pump draining). Enqueue a SECOND
-    // job in this exact window — the window the reference drain loop can, in principle, miss
-    // if it decides to go idle without re-checking the queue one more time.
+    // `a` is now the sole in-flight job (queue array empty, pump draining, pump !== null).
+    // enqueueOcrJob for `b` must therefore take the "trust the existing pump" branch rather
+    // than starting a second one.
     const b = writeStagedReceipt(JPEG, 'image/jpeg');
     setOcrEngineForTests({
-      recognize: async () => {
-        // b's own recognize call: resolve immediately once it actually runs.
-        return { text: 'b-result' };
-      },
+      recognize: async () => ({ text: 'b-result' }),
     });
     expect(enqueueOcrJob({ kind: 'staged', stagingId: b })).toBe(true);
 
@@ -282,11 +285,28 @@ describe('Ruling P15 — enqueue during the final await of a draining job', () =
     await drainOcrQueue();
 
     expect(readSidecar(a)?.status).toBe('done');
-    // If b were stranded, this sidecar would never be written and drainOcrQueue would have
-    // resolved without processing it.
     expect(readSidecar(b)?.status).toBe('done');
     expect(readSidecar(b)?.text).toBe('b-result');
     expect(ocrQueueDepth()).toBe(0);
+  });
+
+  it('path 2 — an enqueue landing immediately after the queue has drained to idle starts a fresh pump', async () => {
+    setOcrEngineForTests({ recognize: async () => ({ text: 'a-result' }) });
+    const a = writeStagedReceipt(JPEG, 'image/jpeg');
+    enqueueOcrJob({ kind: 'staged', stagingId: a });
+    await drainOcrQueue();
+    // The queue is now fully idle: pump === null, queue empty. This is the OTHER half of
+    // the invariant — enqueueOcrJob's `pump === null` branch must itself start processing,
+    // with no unrelated external "kick" required.
+    expect(ocrQueueDepth()).toBe(0);
+
+    setOcrEngineForTests({ recognize: async () => ({ text: 'b-result' }) });
+    const b = writeStagedReceipt(JPEG, 'image/jpeg');
+    expect(enqueueOcrJob({ kind: 'staged', stagingId: b })).toBe(true);
+    await drainOcrQueue();
+
+    expect(readSidecar(b)?.status).toBe('done');
+    expect(readSidecar(b)?.text).toBe('b-result');
   });
 });
 

@@ -67,20 +67,31 @@ export function resetOcrQueueForTests(): void {
 }
 
 /**
- * Ruling P15: enqueueOcrJob only starts a fresh pump when `pump === null`; while a pump is
- * already draining, a newly-pushed job trusts that pump's own loop to notice it on its next
- * iteration. That is correct today because nothing between "the loop finds the queue empty"
- * and "the loop clears `pump`" ever yields to another task — but it is a fragile invariant
- * to lean on silently. This makes it explicit and self-healing: right before a drain loop
- * would go idle, it re-checks the queue one more time and, if something landed, keeps the
- * baton itself rather than clearing `pump` and relying on some *unrelated* future enqueue to
- * notice the stranded job.
+ * Ruling P15 fix report (IMPORTANT 3 finding): an earlier version of this function added a
+ * `if (queue.length > 0) continue;` re-check just before clearing `pump`, on the theory that
+ * enqueueOcrJob() pushing a job while this loop is about to go idle could otherwise strand
+ * it. That branch was dead code and has been removed — traced through fully below.
+ *
+ * enqueueOcrJob() only starts a fresh pump when `pump === null`; while a pump is already
+ * draining, a newly-pushed job trusts that pump's own loop to notice it on its next
+ * iteration. The invariant that makes this safe: there is NO `await` (no yield point of any
+ * kind — no microtask boundary either) between `queue.shift()` returning `undefined` on the
+ * line below and `pump = null` two lines after it. Both statements execute as one
+ * uninterruptible synchronous JS turn. Since enqueueOcrJob() is itself fully synchronous
+ * (`queue.push` then a plain `if` check, no `await`), there is no possible interleaving of
+ * its execution "inside" this stretch — either its push happens strictly before this check
+ * runs (and this very iteration's `queue.shift()` would have returned that job, not
+ * `undefined`), or it happens strictly after `pump` has already been set to `null` (and
+ * enqueueOcrJob()'s own `pump === null` branch starts a fresh drain for it). There is no
+ * third timing in which a job is pushed and neither path notices it — hence nothing to
+ * re-check. See tests/lib/warranty/ocr/queue.test.ts's "queue never strands a job" suite,
+ * which covers both of those paths directly (enqueue while another job is in flight, and
+ * enqueue immediately after the queue has drained to idle).
  */
 async function runQueue(): Promise<void> {
   for (;;) {
     const job = queue.shift();
     if (job === undefined) {
-      if (queue.length > 0) continue;
       pump = null;
       return;
     }

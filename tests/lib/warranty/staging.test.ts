@@ -97,6 +97,21 @@ describe('OCR sidecar (MUST-6.7)', () => {
     expect(readSidecar(stagingId)).toBeNull();
   });
 
+  it('reads null on a structurally-invalid sidecar (valid JSON, wrong shape) rather than trusting a bad cast (M4)', () => {
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    fs.writeFileSync(sidecarPath(stagingId), JSON.stringify({ status: 'not-a-real-status' }));
+    expect(readSidecar(stagingId)).toBeNull();
+
+    fs.writeFileSync(sidecarPath(stagingId), JSON.stringify({ status: 'done', priceCents: 4200 }));
+    // `priceCents` at the top level (not nested under `suggestions`) is not part of the
+    // schema, but zod's default (non-strict) object parsing ignores unknown keys rather
+    // than rejecting the whole payload — this asserts the still-valid subset comes back.
+    expect(readSidecar(stagingId)).toEqual({ status: 'done' });
+
+    fs.writeFileSync(sidecarPath(stagingId), JSON.stringify(['not', 'an', 'object']));
+    expect(readSidecar(stagingId)).toBeNull();
+  });
+
   it('deletes the sidecar and is safe to call twice', () => {
     const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
     writeSidecar(stagingId, { status: 'done', text: 'x' });

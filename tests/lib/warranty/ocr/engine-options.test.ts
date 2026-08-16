@@ -20,6 +20,10 @@ describe('tesseract worker construction', () => {
     expect(call).toContain("cacheMethod: 'none'");
   });
 
+  it('passes an errorHandler (CRITICAL 1): without one, createWorker.js throws inside a worker message listener and crashes the process', () => {
+    expect(call).toContain('errorHandler:');
+  });
+
   it('never mentions a URL or a CDN host', () => {
     expect(source).not.toMatch(/https?:\/\//);
     expect(source).not.toContain('unpkg');

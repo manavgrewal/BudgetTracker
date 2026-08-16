@@ -28,7 +28,9 @@ export function resolveOcrAssets(): OcrAssets {
   const root = process.cwd();
   return {
     workerPath: path.join(root, 'node_modules', 'tesseract.js', 'src', 'worker-script', 'node', 'index.js'),
-    // A DIRECTORY: the library selects the SIMD / non-SIMD build inside it.
+    // A DIRECTORY: the library runtime-detects SIMD support (wasm-feature-detect) and picks
+    // the matching *-lstm wasm build from inside it — which variant loads is not knowable
+    // ahead of time, so assertOcrAssets() below checks both.
     corePath: path.join(root, 'node_modules', 'tesseract.js-core'),
     langPath: path.join(root, 'vendor', 'tessdata'),
     // Belt and braces for any write path that ignores cacheMethod: 'none' — the container
@@ -36,6 +38,20 @@ export function resolveOcrAssets(): OcrAssets {
     cachePath: path.join(readEnv().dataDir, 'tmp'),
   };
 }
+
+/**
+ * CRITICAL 1 (fix report): worker-script/node/getCore.js picks between the non-SIMD and
+ * SIMD "-lstm" core builds via a runtime `wasm-feature-detect` probe — the OEM this app
+ * uses (DEFAULT, passed as `undefined` to createWorker) always resolves to one of these two
+ * pairs, never the non-lstm builds. Both must be checked because which one loads is a
+ * property of the machine the container runs on, not of the checkout.
+ */
+const CORE_FILES = [
+  'tesseract-core-lstm.js',
+  'tesseract-core-lstm.wasm',
+  'tesseract-core-simd-lstm.js',
+  'tesseract-core-simd-lstm.wasm',
+];
 
 /**
  * MUST-7.6: fail loudly, degrade gracefully. Called at boot; missing assets log one line
@@ -48,6 +64,7 @@ export function assertOcrAssets(): { ok: boolean; missing: string[] } {
   const required: [string, string][] = [
     ['workerPath', assets.workerPath],
     ['corePath', assets.corePath],
+    ...CORE_FILES.map((file): [string, string] => [`corePath/${file}`, path.join(assets.corePath, file)]),
     ['langPath', path.join(assets.langPath, 'eng.traineddata.gz')],
   ];
   const missing = required.filter(([, value]) => !fs.existsSync(value)).map(([name, value]) => `${name}=${value}`);
