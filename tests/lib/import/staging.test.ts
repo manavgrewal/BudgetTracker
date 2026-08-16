@@ -70,4 +70,29 @@ describe('staging', () => {
   it('purging an absent directory is a no-op', () => {
     expect(purgeStagedFiles()).toBe(0);
   });
+
+  it('skips a stale directory in the staging dir instead of crashing the sweep (Ruling P14)', () => {
+    // src/lib/backup/archive.ts's buildArchive() stages a whole backup (budget.db +
+    // receipts/) under a UUID-suffixed subdirectory of this same DATA_DIR/tmp while a
+    // backup is being written. If a container is killed mid-backup, that directory can be
+    // left behind; fs.rmSync on a directory without { recursive: true } throws, which
+    // would otherwise take down the entire nightly maintenance sweep.
+    const stale = writeStagedFile(Buffer.from('old'));
+    const longAgo = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    fs.utimesSync(stagedFilePath(stale), longAgo, longAgo);
+
+    const staleDir = path.join(stagingDir(), 'deadbeef-0000-4000-8000-000000000000-archive');
+    fs.mkdirSync(staleDir, { recursive: true });
+    fs.writeFileSync(path.join(staleDir, 'budget.db'), 'not actually swept by name');
+    fs.utimesSync(staleDir, longAgo, longAgo);
+
+    let removed = -1;
+    expect(() => {
+      removed = purgeStagedFiles(24 * 60 * 60 * 1000);
+    }).not.toThrow();
+    expect(removed).toBe(1); // only the stale .csv file, not the directory
+    expect(fs.existsSync(stagedFilePath(stale))).toBe(false);
+    // The stale directory is left alone by this sweep — it is not a staged upload.
+    expect(fs.existsSync(staleDir)).toBe(true);
+  });
 });

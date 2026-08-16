@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import { Readable } from 'node:stream';
 import { isSameOriginOrHeaderless } from '@/lib/auth/csrf';
 import { userFromRequest } from '@/lib/auth/session';
 import { createOnDemandBackup } from '@/lib/backup';
@@ -27,22 +28,25 @@ export async function GET(request: Request): Promise<Response> {
   if (!user) return new Response('Unauthorized', { status: 401 });
   if (user.role !== 'admin') return new Response('Forbidden', { status: 403 });
 
-  const { path: file } = createOnDemandBackup();
+  const { path: file, bytes } = createOnDemandBackup();
   try {
-    // Read then unlink: /data/tmp must not accumulate copies of the database.
-    const body = fs.readFileSync(file);
-    return new Response(new Uint8Array(body), {
+    // Streamed, not readFileSync: the archive now carries the whole receipt library.
+    // Unlink when the stream ends rather than in a `finally` — the file must outlive
+    // this function now that the response body is a lazy stream.
+    const stream = fs.createReadStream(file);
+    stream.once('close', () => fs.rmSync(file, { force: true }));
+    const body = Readable.toWeb(stream) as ReadableStream<Uint8Array>;
+    return new Response(body, {
       status: 200,
       headers: {
-        'content-type': 'application/octet-stream',
-        'content-length': String(body.length),
-        'content-disposition': `attachment; filename="budget-${todayIso()}.db"`,
+        'content-type': 'application/gzip',
+        'content-length': String(bytes),
+        'content-disposition': `attachment; filename="budget-${todayIso()}.tar.gz"`,
         'cache-control': 'no-store',
       },
     });
   } catch {
-    return new Response('Backup failed', { status: 500 });
-  } finally {
     fs.rmSync(file, { force: true });
+    return new Response('Backup failed', { status: 500 });
   }
 }

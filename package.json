@@ -15,6 +15,7 @@
     "fixtures": "node scripts/make-fixtures.mjs",
     "fetch-tessdata": "node scripts/fetch-tessdata.mjs",
     "reset-password": "node --experimental-strip-types scripts/reset-admin-password.ts",
+    "restore-backup": "node --experimental-strip-types scripts/restore-backup.ts",
     "install:linux": "bash install/install-linux.sh"
   },
   "dependencies": {
@@ -31,6 +32,7 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "recharts": "^2.15.0",
+    "tar": "^7.5.22",
     "tesseract.js": "^6.0.1",
     "zod": "^3.23.8"
   },

@@ -40,11 +40,12 @@ describe('GET /api/backup/download', () => {
     const admin = insertTestUser(current!.db, { username: 'admin', role: 'admin' });
     const response = await GET(request(createSession(admin).token));
     expect(response.status).toBe(200);
-    expect(response.headers.get('content-type')).toBe('application/octet-stream');
+    expect(response.headers.get('content-type')).toBe('application/gzip');
     expect(response.headers.get('content-disposition')).toContain('attachment; filename="budget-');
+    expect(response.headers.get('content-disposition')).toContain('.tar.gz"');
 
     const body = Buffer.from(await response.arrayBuffer());
-    expect(body.subarray(0, 15).toString('utf8')).toBe('SQLite format 3');
+    expect(body.subarray(0, 2).toJSON().data).toEqual([0x1f, 0x8b]);
 
     const leftovers = fs.existsSync(tempDir()) ? fs.readdirSync(tempDir()) : [];
     expect(leftovers).toEqual([]);
@@ -79,7 +80,7 @@ describe('GET /api/backup/download', () => {
     const admin = insertTestUser(current!.db, { username: 'admin4', role: 'admin' });
     const response = await GET(request(createSession(admin).token, ''));
     expect(response.status).toBe(200);
-    expect(Buffer.from(await response.arrayBuffer()).subarray(0, 15).toString('utf8')).toBe('SQLite format 3');
+    expect(Buffer.from(await response.arrayBuffer()).subarray(0, 2).toJSON().data).toEqual([0x1f, 0x8b]);
   });
 
   it('still 401s/403s a header-less request without an admin session', async () => {
@@ -98,10 +99,10 @@ describe('GET /api/backup/download', () => {
     expect(response.status).toBe(403);
   });
 
-  it('unlinks the temp file even when the stream read fails', async () => {
+  it('unlinks the temp file even when opening the stream fails', async () => {
     const admin = insertTestUser(current!.db, { username: 'admin3', role: 'admin' });
     const { token } = createSession(admin);
-    const spy = vi.spyOn(fs, 'readFileSync').mockImplementation(() => {
+    const spy = vi.spyOn(fs, 'createReadStream').mockImplementation(() => {
       throw new Error('disk read failed');
     });
 

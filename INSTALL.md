@@ -215,20 +215,34 @@ Container Manager → Project → **Build**, then **Start**.
 
 ## Restoring from a backup
 
-The app writes a nightly copy to `data/backups/budget-YYYY-MM-DD.db` and keeps the most recent
-14. **Settings → Backups → Download backup now** makes one on demand.
+The app writes a nightly archive to `data/backups/budget-YYYY-MM-DD.tar.gz` and keeps the most
+recent 14. **Settings → Backups → Download backup now** makes one on demand. Each archive contains
+the database (a consistent `VACUUM INTO` snapshot) and every receipt file attached to a warranty —
+not just the database. Backups made before the receipts feature shipped are a bare `budget-YYYY-MM-DD.db`
+file; both shapes are still listed and still restore.
+
+Restoring is always an offline, container-stopped procedure — there is deliberately no in-app
+restore button, because restoring under a live SQLite connection is how you corrupt a database.
+Use the bundled `restore-backup` script rather than copying files by hand: it works out which
+kind of backup you gave it by looking at the file's contents (not its name), refuses anything it
+doesn't recognise, and — for a `.tar.gz` archive — renames any existing `data/receipts/` aside
+instead of deleting it, so a mistaken restore is recoverable.
 
 ```bash
 docker compose down
-cd data
-rm -f budget.db budget.db-wal budget.db-shm
-cp backups/budget-2026-08-15.db budget.db
-cd ..
+docker compose run --rm --entrypoint node budget-tracker \
+  --experimental-strip-types scripts/restore-backup.ts /data/backups/budget-2026-08-16.tar.gz
 docker compose up -d
 ```
 
-Deleting the `-wal` and `-shm` files is not optional: SQLite runs in WAL mode and would otherwise
-replay the old write-ahead log on top of the database you just restored.
+Restoring a v1.0.0 `.db` backup works the same way and only ever replaces `budget.db` — it
+never touches `data/receipts/`, since a database-only backup says nothing about which receipt
+files should exist. Any warranty whose receipt is missing after a cross-version restore simply
+shows a missing-file state in the UI; the script prints how many receipt rows are affected.
+
+Deleting `-wal`/`-shm` files before writing the restored database is handled for you and is not
+optional: SQLite runs in WAL mode and would otherwise replay the old write-ahead log on top of
+the database you just restored.
 
 ## Keeping backups on a separate NAS
 
@@ -242,10 +256,12 @@ corrupted database, not a slow one. This is not a performance caveat you can acc
 data-loss one. The same applies to a Synology shared folder mounted from another NAS, to an
 iSCSI-mounted-then-reshared volume, and to Docker volumes whose driver is NFS.
 
-**The backups directory is safe to put on a network mount.** `Settings → Backups` writes with
-SQLite's `VACUUM INTO`, which produces a complete, standalone, already-consistent `.db` file and
-then closes it. Nothing keeps it open, nothing locks it, and nothing writes to it again — so the
-usual network-filesystem hazards do not apply.
+**The backups directory is safe to put on a network mount.** `Settings → Backups` writes the
+database half with SQLite's `VACUUM INTO`, which produces a complete, standalone,
+already-consistent snapshot, packages it together with a copy of every receipt file into a
+`.tar.gz`, and only then closes and renames it into place. Nothing keeps the finished archive
+open, nothing locks it, and nothing writes to it again — so the usual network-filesystem hazards
+do not apply.
 
 ### Option A — mount the NAS share at `/data/backups`
 
@@ -279,13 +295,14 @@ alone and copy the finished files on a schedule:
 30 3 * * * youruser rsync -a --delete /srv/budget-tracker/data/backups/ nas:/volume1/backups/budget-tracker/
 ```
 
-`rsync` only ever reads files `VACUUM INTO` has already finished writing, so there is no window
-where it can copy a half-written snapshot. On Synology, **Hyper Backup** pointed at the
+`rsync` only ever reads files the backup job has already finished writing, so there is no window
+where it can copy a half-written archive. On Synology, **Hyper Backup** pointed at the
 `data/backups` folder does the same job with client-side encryption — worth turning on, because
-the backup files themselves are unencrypted SQLite databases.
+the backup files themselves are unencrypted, and since receipts joined the archive they can carry
+names, addresses and partial card numbers as well as transaction data, not just the database.
 
-Whichever option you choose, restore is unchanged: copy the chosen `.db` back over
-`data/budget.db` using the procedure above, `-wal` and `-shm` deletion included.
+Whichever option you choose, restore is unchanged: run `restore-backup` against the chosen
+artifact using the procedure above.
 
 ---
 

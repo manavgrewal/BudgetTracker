@@ -72,8 +72,11 @@ export function BackupsClient({
       </section>
 
       <p className="text-xs text-slate-500 dark:text-slate-400">
-        Backups are unencrypted SQLite copies stored under <code>/data/backups</code>. For offsite copies, point Hyper Backup (or your NAS
-        equivalent) at the <code>/data</code> share and enable its client-side encryption there.
+        Each backup is a <code>.tar.gz</code> archive containing the database and every receipt file, stored unencrypted
+        under <code>/data/backups</code>. Older <code>.db</code> backups from v1.0.0 are still listed and still restore.
+        Offsite copies now carry receipt photographs too — these can show names, addresses and partial card numbers, so
+        for offsite copies, point Hyper Backup (or your NAS equivalent) at the <code>/data</code> share and enable its
+        client-side encryption there.
       </p>
     </div>
   );

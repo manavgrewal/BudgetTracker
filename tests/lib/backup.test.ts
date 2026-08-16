@@ -49,34 +49,32 @@ afterEach(() => {
 });
 
 describe('nightly backup', () => {
-  it('writes budget-YYYY-MM-DD.db under DATA_DIR/backups', () => {
+  it('writes budget-YYYY-MM-DD.tar.gz under DATA_DIR/backups', () => {
     const at = new Date('2026-08-15T06:00:00.000Z'); // 02:00 in Toronto
     const backup = runNightlyBackup(at);
     expect(backupsDir()).toBe(path.join(dataDir, 'backups'));
-    expect(nightlyBackupName(at, 'America/Toronto')).toBe('budget-2026-08-15.db');
-    expect(backup.name).toBe('budget-2026-08-15.db');
+    expect(nightlyBackupName(at, 'America/Toronto')).toBe('budget-2026-08-15.tar.gz');
+    expect(backup.name).toBe('budget-2026-08-15.tar.gz');
     expect(fs.existsSync(backup.path)).toBe(true);
     expect(backup.bytes).toBeGreaterThan(0);
   });
 
-  it('produces a readable SQLite copy containing the data', async () => {
-    const userId = insertTestUser(current!.db, { name: 'Alice', username: 'alice' });
+  it('produces a readable gzip archive containing the data', () => {
+    // The artifact is now a .tar.gz, not a bare SQLite file: better-sqlite3 can no longer
+    // open it directly, so the check is the gzip magic header (0x1f 0x8b).
+    runNightlyBackup(new Date('2026-08-15T06:00:00.000Z'));
     const backup = runNightlyBackup(new Date('2026-08-15T06:00:00.000Z'));
-    const BetterSqlite3 = (await import('better-sqlite3')).default;
-    const copy = new BetterSqlite3(backup.path, { readonly: true });
-    const row = copy.prepare('select name from users where id = ?').get(userId) as { name: string };
-    expect(row.name).toBe('Alice');
-    copy.close();
+    expect(fs.readFileSync(backup.path).subarray(0, 2).toJSON().data).toEqual([0x1f, 0x8b]);
   });
 
-  it('overwrites an existing file for the same day (VACUUM INTO errors otherwise)', () => {
+  it('overwrites an existing file for the same day (a stale target must not fail the backup)', () => {
     const at = new Date('2026-08-15T06:00:00.000Z');
     const first = runNightlyBackup(at);
-    fs.writeFileSync(first.path, 'not a database');
+    fs.writeFileSync(first.path, 'not an archive');
     expect(() => runNightlyBackup(at)).not.toThrow();
     const second = runNightlyBackup(at);
     expect(second.bytes).toBeGreaterThan(100);
-    expect(fs.readFileSync(second.path).subarray(0, 15).toString('utf8')).toBe('SQLite format 3');
+    expect(fs.readFileSync(second.path).subarray(0, 2).toJSON().data).toEqual([0x1f, 0x8b]);
   });
 
   it('creates the backups directory if it is missing', () => {
@@ -89,7 +87,7 @@ describe('nightly backup', () => {
     // Ruling (b): the only inputs to the on-disk name are the server clock and the
     // configured TZ — never a settings value — so the filename is always this shape.
     const name = nightlyBackupName(new Date('2026-08-15T06:00:00.000Z'), 'Pacific/Kiritimati');
-    expect(name).toMatch(/^budget-\d{4}-\d{2}-\d{2}\.db$/);
+    expect(name).toMatch(/^budget-\d{4}-\d{2}-\d{2}\.tar\.gz$/);
     expect(name).not.toContain('..');
     expect(name).not.toContain('/');
   });
@@ -112,38 +110,44 @@ describe('retention', () => {
   });
 
   it('keeps the most recent N and deletes the rest', () => {
-    for (let i = 0; i < 6; i += 1) fakeBackup(`budget-2026-08-${String(10 + i).padStart(2, '0')}.db`, (6 - i) * 60);
+    for (let i = 0; i < 6; i += 1) fakeBackup(`budget-2026-08-${String(10 + i).padStart(2, '0')}.tar.gz`, (6 - i) * 60);
     setBackupRetention(3);
     const deleted = pruneBackups();
-    expect(deleted.sort()).toEqual(['budget-2026-08-10.db', 'budget-2026-08-11.db', 'budget-2026-08-12.db']);
-    expect(listBackups().map((b) => b.name)).toEqual(['budget-2026-08-15.db', 'budget-2026-08-14.db', 'budget-2026-08-13.db']);
+    expect(deleted.sort()).toEqual(['budget-2026-08-10.tar.gz', 'budget-2026-08-11.tar.gz', 'budget-2026-08-12.tar.gz']);
+    expect(listBackups().map((b) => b.name)).toEqual(['budget-2026-08-15.tar.gz', 'budget-2026-08-14.tar.gz', 'budget-2026-08-13.tar.gz']);
   });
 
   it('deletes nothing when the count is under the retention limit', () => {
-    fakeBackup('budget-2026-08-15.db', 10);
+    fakeBackup('budget-2026-08-15.tar.gz', 10);
     expect(pruneBackups(14)).toEqual([]);
   });
 
   it('ignores non-backup files in the directory', () => {
-    fakeBackup('budget-2026-08-15.db', 10);
+    fakeBackup('budget-2026-08-15.tar.gz', 10);
     fs.writeFileSync(path.join(backupsDir(), 'README.txt'), 'hello');
-    expect(listBackups().map((b) => b.name)).toEqual(['budget-2026-08-15.db']);
-    expect(pruneBackups(0)).toEqual(['budget-2026-08-15.db']);
+    expect(listBackups().map((b) => b.name)).toEqual(['budget-2026-08-15.tar.gz']);
+    expect(pruneBackups(0)).toEqual(['budget-2026-08-15.tar.gz']);
     expect(fs.existsSync(path.join(backupsDir(), 'README.txt'))).toBe(true);
   });
 
   it('ignores filenames shaped like a traversal attempt', () => {
-    // Ruling (b): listBackups/pruneBackups only ever touch entries matching the
-    // strict nightly regex, so a rogue entry can never be read or deleted by them.
-    fakeBackup('budget-2026-08-15.db', 10);
-    fs.writeFileSync(path.join(backupsDir(), 'budget-2026-08-15.db.bak'), 'x');
-    fs.writeFileSync(path.join(backupsDir(), '..budget-2026-08-15.db'), 'x');
-    expect(listBackups().map((b) => b.name)).toEqual(['budget-2026-08-15.db']);
+    // Ruling (b): listBackups/pruneBackups only ever touch entries matching one of the
+    // two strict patterns, so a rogue entry can never be read or deleted by them.
+    fakeBackup('budget-2026-08-15.tar.gz', 10);
+    fs.writeFileSync(path.join(backupsDir(), 'budget-2026-08-15.tar.gz.bak'), 'x');
+    fs.writeFileSync(path.join(backupsDir(), '..budget-2026-08-15.tar.gz'), 'x');
+    expect(listBackups().map((b) => b.name)).toEqual(['budget-2026-08-15.tar.gz']);
   });
 
   it('lists nothing when the directory does not exist', () => {
     expect(listBackups()).toEqual([]);
     expect(pruneBackups()).toEqual([]);
+  });
+
+  it('keeps listing a v1.0.0 .db backup alongside the new archives (MUST-12.3)', () => {
+    fakeBackup('budget-2026-08-15.tar.gz', 10);
+    fakeBackup('budget-2026-08-14.db', 20);
+    expect(listBackups().map((b) => b.name)).toEqual(['budget-2026-08-15.tar.gz', 'budget-2026-08-14.db']);
   });
 });
 
@@ -151,7 +155,7 @@ describe('on-demand backup', () => {
   it('writes into DATA_DIR/tmp with a uuid name that cannot collide with the nightly files', () => {
     const result = createOnDemandBackup();
     expect(result.path.startsWith(tempDir())).toBe(true);
-    expect(path.basename(result.path)).toMatch(/^[0-9a-f-]{36}\.db$/);
+    expect(path.basename(result.path)).toMatch(/^[0-9a-f-]{36}\.tar\.gz$/);
     expect(result.path).not.toContain('backups');
     expect(fs.existsSync(result.path)).toBe(true);
     expect(result.bytes).toBeGreaterThan(0);
@@ -175,7 +179,7 @@ describe('maintenance sweep', () => {
     fs.utimesSync(stagedFilePath(stale), longAgo, longAgo);
 
     const result = runMaintenanceSweep(at);
-    expect(result).toEqual({ sessionsPurged: 1, loginAttemptsPurged: 1, stagedFilesPurged: 1 });
+    expect(result).toEqual({ sessionsPurged: 1, loginAttemptsPurged: 1, stagedFilesPurged: 1, receiptOrphansPurged: 0 });
     expect((current!.sqlite.prepare('select count(*) as c from sessions').get() as { c: number }).c).toBe(1);
     expect((current!.sqlite.prepare('select count(*) as c from login_attempts').get() as { c: number }).c).toBe(1);
   });
@@ -188,7 +192,7 @@ describe('runNightlyJob', () => {
     current!.db.run(sql`insert into settings (key, value) values ('probe', ${nowIso()})`);
 
     const result = runNightlyJob(new Date('2026-08-15T06:00:00.000Z'));
-    expect(result.backup.name).toBe('budget-2026-08-15.db');
+    expect(result.backup.name).toBe('budget-2026-08-15.tar.gz');
     expect(fs.existsSync(result.backup.path)).toBe(true);
     expect(result.sweep.sessionsPurged).toBe(1);
     expect(Array.isArray(result.pruned)).toBe(true);

@@ -48,7 +48,19 @@ export function purgeStagedFiles(olderThanMs: number = DEFAULT_TTL_MS, now: Date
   let removed = 0;
   for (const entry of fs.readdirSync(dir)) {
     const file = path.join(dir, entry);
-    const stats = fs.statSync(file);
+    let stats: fs.Stats;
+    try {
+      stats = fs.statSync(file);
+    } catch {
+      continue;
+    }
+    // Ruling P14: this directory is also where buildArchive() (src/lib/backup/archive.ts)
+    // stages a whole backup archive (budget.db + receipts/) under a UUID-suffixed
+    // subdirectory while a backup is being written. fs.rmSync on a directory without
+    // { recursive: true } throws (EISDIR/ENOTEMPTY), which would otherwise crash the
+    // entire nightly maintenance sweep the first time a container restart or crash left a
+    // stale staging directory behind. A directory can't be a staged upload; skip it.
+    if (!stats.isFile()) continue;
     if (now.getTime() - stats.mtimeMs > olderThanMs) {
       fs.rmSync(file, { force: true });
       removed += 1;
