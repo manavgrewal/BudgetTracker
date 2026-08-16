@@ -135,6 +135,61 @@ export function addMonths(month: string, delta: number): string {
   return indexToMonth(monthToIndex(month) + delta);
 }
 
+/**
+ * Warranty expiry arithmetic (spec 2026-08-16 §3.6): CLAMP to the last day of the target
+ * month. Date.prototype.setMonth OVERFLOWS instead (Jan 31 + 1 month -> Mar 2/3), which
+ * would silently move a February expiry into March. Pure string math, so no timezone and
+ * no DST boundary can shift the day.
+ */
+export function addMonthsClamped(isoDate: string, months: number): string {
+  const y = Number(isoDate.slice(0, 4));
+  const m = Number(isoDate.slice(5, 7));
+  const d = Number(isoDate.slice(8, 10));
+  const t = m - 1 + months;
+  const year = y + Math.floor(t / 12);
+  const month = ((t % 12) + 12) % 12 + 1;
+  const day = Math.min(d, daysInMonth(year, month));
+  return `${year}-${pad2(month)}-${pad2(day)}`;
+}
+
+/** Days-from-civil (proleptic Gregorian). Integer-only, no Date object. */
+function daysFromCivil(y: number, m: number, d: number): number {
+  const yy = m <= 2 ? y - 1 : y;
+  const era = Math.floor(yy / 400);
+  const yoe = yy - era * 400;
+  const doy = Math.floor((153 * (m + (m > 2 ? -3 : 9)) + 2) / 5) + d - 1;
+  const doe = yoe * 365 + Math.floor(yoe / 4) - Math.floor(yoe / 100) + doy;
+  return era * 146097 + doe - 719468;
+}
+
+function civilFromDays(days: number): { y: number; m: number; d: number } {
+  const z = days + 719468;
+  const era = Math.floor(z / 146097);
+  const doe = z - era * 146097;
+  const yoe = Math.floor((doe - Math.floor(doe / 1460) + Math.floor(doe / 36524) - Math.floor(doe / 146096)) / 365);
+  const y = yoe + era * 400;
+  const doy = doe - (365 * yoe + Math.floor(yoe / 4) - Math.floor(yoe / 100));
+  const mp = Math.floor((5 * doy + 2) / 153);
+  const d = doy - Math.floor((153 * mp + 2) / 5) + 1;
+  const m = mp + (mp < 10 ? 3 : -9);
+  return { y: y + (m <= 2 ? 1 : 0), m, d };
+}
+
+/** ISO date + N days, pure string math (a DST boundary can never shift the result). */
+export function addDaysIso(isoDate: string, days: number): string {
+  const total = daysFromCivil(Number(isoDate.slice(0, 4)), Number(isoDate.slice(5, 7)), Number(isoDate.slice(8, 10))) + days;
+  const { y, m, d } = civilFromDays(total);
+  return `${y}-${pad2(m)}-${pad2(d)}`;
+}
+
+/** Signed whole days from `fromIso` to `toIso`. */
+export function daysBetweenIso(fromIso: string, toIso: string): number {
+  return (
+    daysFromCivil(Number(toIso.slice(0, 4)), Number(toIso.slice(5, 7)), Number(toIso.slice(8, 10))) -
+    daysFromCivil(Number(fromIso.slice(0, 4)), Number(fromIso.slice(5, 7)), Number(fromIso.slice(8, 10)))
+  );
+}
+
 export function monthsBetween(fromMonth: string, toMonth: string): number {
   return monthToIndex(toMonth) - monthToIndex(fromMonth);
 }

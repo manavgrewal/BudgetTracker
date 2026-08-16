@@ -1,8 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import {
   DATE_FORMATS,
+  addDaysIso,
   addMonths,
+  addMonthsClamped,
   currentMonth,
+  daysBetweenIso,
   isDateFormat,
   isIsoDate,
   isMonthKey,
@@ -129,5 +132,65 @@ describe('resolveEffectiveMonth', () => {
   it('returns null when every candidate is in the future', () => {
     expect(resolveEffectiveMonth(['2026-05', '2026-06'], '2026-04')).toBeNull();
     expect(resolveEffectiveMonth([], '2026-04')).toBeNull();
+  });
+});
+
+describe('addMonthsClamped (spec §3.6)', () => {
+  // The eight worked examples from the spec, verbatim.
+  it.each([
+    ['2026-01-31', 1, '2026-02-28'],
+    ['2024-01-31', 1, '2024-02-29'],
+    ['2024-02-29', 12, '2025-02-28'],
+    ['2026-03-31', 1, '2026-04-30'],
+    ['2026-08-31', 6, '2027-02-28'],
+    ['2026-01-31', 12, '2027-01-31'],
+    ['2026-08-16', 24, '2028-08-16'],
+    ['2026-12-31', 1, '2027-01-31'],
+  ])('%s + %i months = %s', (from, months, expected) => {
+    expect(addMonthsClamped(from, months)).toBe(expected);
+  });
+
+  it('differs from Date.prototype.setMonth, which overflows (the regression this rule prevents)', () => {
+    const overflowed = new Date(Date.UTC(2026, 0, 31));
+    overflowed.setUTCMonth(overflowed.getUTCMonth() + 1);
+    expect(overflowed.toISOString().slice(0, 10)).toBe('2026-03-03');
+    expect(addMonthsClamped('2026-01-31', 1)).toBe('2026-02-28');
+  });
+
+  it('handles negative deltas (used for the 20-year suggestion floor)', () => {
+    expect(addMonthsClamped('2026-08-16', -240)).toBe('2006-08-16');
+    expect(addMonthsClamped('2026-01-15', -1)).toBe('2025-12-15');
+  });
+
+  it('never returns an invalid calendar date across 1–120 months from every day of 2024–2027', () => {
+    for (let year = 2024; year <= 2027; year += 1) {
+      for (let month = 1; month <= 12; month += 1) {
+        for (let day = 1; day <= 31; day += 1) {
+          const iso = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+          if (!isIsoDate(iso)) continue;
+          for (let months = 1; months <= 120; months += 1) {
+            expect(isIsoDate(addMonthsClamped(iso, months)), `${iso} + ${months}`).toBe(true);
+          }
+        }
+      }
+    }
+  });
+});
+
+describe('addDaysIso / daysBetweenIso', () => {
+  it('crosses month, year and leap boundaries without a Date object', () => {
+    expect(addDaysIso('2026-08-16', 60)).toBe('2026-10-15');
+    expect(addDaysIso('2026-12-31', 1)).toBe('2027-01-01');
+    expect(addDaysIso('2024-02-28', 1)).toBe('2024-02-29');
+    expect(addDaysIso('2026-02-28', 1)).toBe('2026-03-01');
+    expect(addDaysIso('2026-01-01', -1)).toBe('2025-12-31');
+    expect(addDaysIso('2026-08-16', 0)).toBe('2026-08-16');
+  });
+
+  it('round-trips against daysBetweenIso', () => {
+    expect(daysBetweenIso('2026-08-16', '2026-10-15')).toBe(60);
+    expect(daysBetweenIso('2026-08-16', '2026-08-16')).toBe(0);
+    expect(daysBetweenIso('2026-08-16', '2026-08-15')).toBe(-1);
+    expect(daysBetweenIso('2024-02-28', '2024-03-01')).toBe(2);
   });
 });
