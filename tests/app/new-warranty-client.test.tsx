@@ -1,0 +1,111 @@
+// @vitest-environment jsdom
+import { describe, it, expect, vi, afterEach } from 'vitest';
+import { render, cleanup, screen, fireEvent } from '@testing-library/react';
+import { NewWarrantyClient } from '@/app/(app)/warranties/new/new-warranty-client';
+
+vi.mock('@/app/(app)/warranties/actions', () => ({
+  createWarrantyAction: vi.fn(async () => ({})),
+}));
+
+afterEach(() => cleanup());
+
+const people = [{ id: 7, name: 'Alice' }, { id: 8, name: 'Bob' }];
+const types = [
+  { id: 1, name: 'Appliance', isSubscription: false },
+  { id: 2, name: 'Netflix plan', isSubscription: true },
+];
+
+function renderForm(over: { prefill?: object; typeId?: number | null } = {}) {
+  return render(
+    <NewWarrantyClient
+      people={people}
+      types={types}
+      currentUserId={7}
+      today="2026-08-16"
+      prefill={over.prefill ?? {}}
+    />,
+  );
+}
+
+describe('NewWarrantyClient', () => {
+  it('renders every field of §10.3 and defaults the owner to the current user', () => {
+    const { container } = renderForm();
+    for (const name of ['name', 'vendor', 'model', 'serial', 'purchaseDate', 'warrantyMonths', 'price', 'notes']) {
+      expect(container.querySelector(`[name="${name}"]`), `missing ${name}`).toBeTruthy();
+    }
+    expect((container.querySelector('[name="ownerUserId"]') as HTMLSelectElement).value).toBe('7');
+    expect(container.querySelector('input[name="isLifetime"][type="checkbox"]')).toBeTruthy();
+    expect((container.querySelector('[name="name"]') as HTMLInputElement).required).toBe(true);
+    expect((container.querySelector('[name="purchaseDate"]') as HTMLInputElement).type).toBe('date');
+  });
+
+  it('caps the purchase date input at today so a future date cannot be picked', () => {
+    const { container } = renderForm();
+    expect((container.querySelector('[name="purchaseDate"]') as HTMLInputElement).max).toBe('2026-08-16');
+  });
+
+  it('shows the live computed expiry beside the months input (MUST-10.4)', () => {
+    const { container } = renderForm();
+    fireEvent.change(container.querySelector('[name="purchaseDate"]')!, { target: { value: '2026-01-31' } });
+    fireEvent.change(container.querySelector('[name="warrantyMonths"]')!, { target: { value: '1' } });
+    expect(screen.getByText('Covered through 2026-02-28')).toBeTruthy();
+  });
+
+  it('disables and clears the months input when Lifetime is ticked (MUST-3.5)', () => {
+    const { container } = renderForm();
+    const months = container.querySelector('[name="warrantyMonths"]') as HTMLInputElement;
+    fireEvent.change(months, { target: { value: '24' } });
+    fireEvent.click(container.querySelector('input[name="isLifetime"]')!);
+    expect(months.disabled).toBe(true);
+    expect(months.value).toBe('');
+  });
+
+  it('keeps the Save button enabled while a receipt is still being read (MUST-10.2)', () => {
+    renderForm();
+    const save = screen.getByRole('button', { name: /save/i }) as HTMLButtonElement;
+    expect(save.disabled).toBe(false);
+  });
+
+  it('applies server-computed prefill from a transaction and posts the id back (MUST-11.3)', () => {
+    const { container } = renderForm({
+      prefill: {
+        purchaseDate: '2026-08-16',
+        vendor: 'HOME DEPOT',
+        priceCents: 129999,
+        transactionId: 55,
+      },
+    });
+    expect((container.querySelector('[name="purchaseDate"]') as HTMLInputElement).value).toBe('2026-08-16');
+    expect((container.querySelector('[name="vendor"]') as HTMLInputElement).value).toBe('HOME DEPOT');
+    expect((container.querySelector('[name="price"]') as HTMLInputElement).value).toBe('1299.99');
+    expect((container.querySelector('[name="transactionId"]') as HTMLInputElement).value).toBe('55');
+  });
+
+  it('carries a hidden staged field so the action always receives valid JSON', () => {
+    const { container } = renderForm();
+    const staged = container.querySelector('input[name="staged"]') as HTMLInputElement;
+    expect(staged.value).toBe('[]');
+  });
+
+  // --- type-deltas.md T9 ---
+
+  it('offers a type dropdown with a "none" option plus every seeded type', () => {
+    const { container } = renderForm();
+    const select = container.querySelector('select[name="typeId"]') as HTMLSelectElement;
+    expect(select).toBeTruthy();
+    const optionLabels = Array.from(select.querySelectorAll('option')).map((o) => o.textContent);
+    expect(optionLabels).toEqual(['— none —', 'Appliance', 'Netflix plan']);
+    // Unset by default: nothing is selected until the member chooses one.
+    expect(select.value).toBe('');
+  });
+
+  it('reads "Covered through" for a non-subscription type and "Cancel by" once a subscription type is chosen', () => {
+    const { container } = renderForm();
+    fireEvent.change(container.querySelector('[name="purchaseDate"]')!, { target: { value: '2026-01-31' } });
+    fireEvent.change(container.querySelector('[name="warrantyMonths"]')!, { target: { value: '1' } });
+    expect(screen.getByText('Covered through 2026-02-28')).toBeTruthy();
+
+    fireEvent.change(container.querySelector('select[name="typeId"]')!, { target: { value: '2' } });
+    expect(screen.getByText('Cancel by 2026-02-28')).toBeTruthy();
+  });
+});

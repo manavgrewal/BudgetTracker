@@ -35,6 +35,20 @@ export function coveredThroughLabel(isSubscription: boolean): string {
 }
 
 /**
+ * T9 delta: the day-count form of the 'expiring' badge -- "Expires in 12 days" /
+ * "Cancel in 12 days" -- shown by StatusBadge on both the list and the detail page.
+ * `days` is expected to already be computed by the caller (daysBetweenIso(today, expiryDate)),
+ * matching src/lib/warranty/expiry.ts's statusLabel() exactly except for the swapped verb
+ * (MUST-19.11: this is the one other place either verb is written, and it is still here in
+ * constants.ts, not hard-coded into a component).
+ */
+export function expiringSoonLabel(isSubscription: boolean, days: number): string {
+  const verb = isSubscription ? 'Cancel' : 'Expires';
+  if (days <= 0) return `${verb} today`;
+  return `${verb} in ${days} ${days === 1 ? 'day' : 'days'}`;
+}
+
+/**
  * Ruling P4: the list page's sort control is rendered by a client component, so the sort
  * names themselves must not transitively import @/db or the native db driver -- src/lib/
  * warranty/search.ts (which does) re-exports these for server-side use instead of
