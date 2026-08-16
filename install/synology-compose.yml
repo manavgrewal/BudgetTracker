@@ -1,0 +1,43 @@
+# Budget Tracker — paste this into Container Manager -> Project -> Create.
+#
+# BEFORE STARTING: replace PASTE-YOUR-GENERATED-KEY-HERE below with a random
+# string of at least 32 bytes. See docs/INSTALL-SYNOLOGY.md step 3 for how to
+# generate one without a terminal.
+services:
+  budget-tracker:
+    # Default: build the image from the uploaded source (see step 5 below).
+    # Option B (loaded a prebuilt image instead, e.g. after an out-of-memory
+    # build): comment out the "build: ." line — "image:" below already names
+    # the tag to run, so nothing else needs to change.
+    build: .
+    image: budget-tracker:latest
+    container_name: budget-tracker
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      SECRET_KEY: "PASTE-YOUR-GENERATED-KEY-HERE"
+      TRUST_PROXY: "0"
+      TZ: "America/Toronto"
+      PORT: "3000"
+      DATA_DIR: /data
+    volumes:
+      - /volume1/docker/budget-tracker/data:/data
+    # Container hardening — identical to the main docker-compose.yml.
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

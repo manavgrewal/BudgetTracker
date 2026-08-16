@@ -12,7 +12,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "fixtures": "node scripts/make-fixtures.mjs"
+    "fixtures": "node scripts/make-fixtures.mjs",
+    "reset-password": "node --experimental-strip-types scripts/reset-admin-password.ts",
+    "install:linux": "bash install/install-linux.sh"
   },
   "dependencies": {
     "argon2": "^0.41.1",

@@ -57,6 +57,9 @@ COPY --from=builder --chown=node:node /app/public ./public
 # Migrations are read from process.cwd()/drizzle on boot; tracing does not include them.
 COPY --from=builder --chown=node:node /app/drizzle ./drizzle
 
+# Rescue tooling (scripts/reset-admin-password.ts), documented in INSTALL.md.
+COPY --from=builder --chown=node:node /app/scripts ./scripts
+
 # Compiled native addons: Next output tracing does not reliably include .node binaries.
 COPY --from=builder --chown=node:node /app/node_modules/better-sqlite3 ./node_modules/better-sqlite3
 COPY --from=builder --chown=node:node /app/node_modules/bindings ./node_modules/bindings
