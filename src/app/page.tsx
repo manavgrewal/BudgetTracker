@@ -1,3 +1,8 @@
+import { redirect } from 'next/navigation';
+import { isSetupRequired } from '@/lib/auth/login';
+
+export const dynamic = 'force-dynamic';
+
 export default function Home() {
-  return <main className="p-8 text-lg">Budget Tracker</main>;
+  redirect(isSetupRequired() ? '/setup' : '/dashboard');
 }

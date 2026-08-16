@@ -13,7 +13,12 @@ import { securityHeaders } from '@/lib/auth/security-headers';
  * an HTML redirect (a fetch() call following a redirect to /login is not useful
  * to an API client). Security headers still apply to /api/* responses.
  */
-const PUBLIC_PREFIXES = ['/login', '/setup', '/_next', '/favicon.ico'];
+// '/' itself must be public too: it is the setup-vs-login dispatcher (src/app/page.tsx),
+// not a protected app page — it has to run unauthenticated to decide where to send a
+// first-time visitor. The prefix-matching rule below only exempts the exact root path
+// here (pathname.startsWith('//') never matches a real path), so this does not also
+// exempt every other route the way adding, say, '/api' as a bare prefix would.
+const PUBLIC_PREFIXES = ['/', '/login', '/setup', '/_next', '/favicon.ico'];
 
 function isApiPath(pathname: string): boolean {
   return pathname === '/api' || pathname.startsWith('/api/');

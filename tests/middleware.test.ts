@@ -34,6 +34,11 @@ describe('middleware', () => {
     }
   });
 
+  it('does not redirect an unauthenticated request for the root path (it dispatches to /setup or /login itself)', () => {
+    const response = middleware(requestFor('/'));
+    expect(response.headers.get('location')).toBeNull();
+  });
+
   it('does not treat a path that merely starts with a public prefix as public', () => {
     // /loginfoo must NOT match the /login prefix — only /login and /login/* do.
     const response = middleware(requestFor('/loginfoo'));
