@@ -22,7 +22,7 @@ const EXPECTED_TABLES = [
   'goal_contributions', 'goals', 'import_profiles', 'imports', 'login_attempts',
   'merchant_rules', 'sessions', 'settings', 'simplefin_account_links',
   'simplefin_connections', 'totp_recovery_codes', 'transaction_imports',
-  'transactions', 'users', 'warranty_items', 'warranty_receipts', 'warranty_search',
+  'transactions', 'users', 'warranty_item_types', 'warranty_items', 'warranty_receipts', 'warranty_search',
 ];
 
 const EXPECTED_INDEXES = [
@@ -55,6 +55,8 @@ const EXPECTED_INDEXES = [
   'warranty_receipts_stored_uq',
   'warranty_receipts_item_idx',
   'warranty_receipts_ocr_idx',
+  'warranty_item_types_name_uq',
+  'warranty_items_type_idx',
 ];
 
 describe('database schema', () => {

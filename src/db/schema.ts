@@ -350,11 +350,21 @@ export const warrantyItems = sqliteTable(
     notes: text('notes'),
     createdAt: text('created_at').notNull(),
     updatedAt: text('updated_at').notNull(),
+    /**
+     * Spec section 19.3, added by drizzle/0003_warranty_item_types.sql. Declared last
+     * because ALTER TABLE ADD COLUMN appends physically -- same convention as
+     * users.mustChangePassword, so the mirror stays readable against
+     * `pragma table_info(warranty_items)`. Nullable: a type is optional, and NULL means
+     * "unclassified" (there is no Uncategorised row). No onDelete clause on purpose --
+     * deleting a type that is in use is blocked in the app layer (MUST-19.5/19.6).
+     */
+    typeId: integer('type_id').references(() => warrantyItemTypes.id),
   },
   (t) => [
     index('warranty_items_expiry_idx').on(t.expiryDate),
     index('warranty_items_owner_idx').on(t.ownerUserId),
     index('warranty_items_transaction_idx').on(t.transactionId),
+    index('warranty_items_type_idx').on(t.typeId),
   ],
 );
 
@@ -383,4 +393,27 @@ export const warrantyReceipts = sqliteTable(
     index('warranty_receipts_item_idx').on(t.warrantyItemId),
     index('warranty_receipts_ocr_idx').on(t.ocrStatus),
   ],
+);
+
+/**
+ * Admin-maintained item types (spec section 19.2). Mirrors drizzle/0003_warranty_item_types.sql.
+ *
+ * NOT represented here -- these exist ONLY in that raw SQL file (MUST-3.4 / MUST-19.3):
+ *   - CHECK (is_subscription IN (0,1)) and CHECK (length(trim(name)) BETWEEN 1 AND 60),
+ *   - the COLLATE NOCASE collation on warranty_item_types_name_uq, which is what makes
+ *     'Laptop' and 'laptop' the same type (ASCII-only folding -- accepted, section 19.2).
+ *
+ * `is_subscription` is the ONLY thing that makes an item a subscription: the period start,
+ * length and end are warranty_items.purchase_date / warranty_months / expiry_date reused
+ * verbatim (MUST-19.8). The flag changes wording, never derivation (MUST-19.12).
+ */
+export const warrantyItemTypes = sqliteTable(
+  'warranty_item_types',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    name: text('name').notNull(),
+    isSubscription: integer('is_subscription', { mode: 'boolean' }).notNull().default(false),
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => [uniqueIndex('warranty_item_types_name_uq').on(t.name)],
 );
