@@ -21,23 +21,53 @@ export const SEARCH_SYNTAX_ERROR = "That search couldn't be understood — try d
 export { WARRANTY_SORTS, isWarrantySort, type WarrantySort };
 
 /**
+ * True for every ASCII control character: code points 0 through 31 (the C0 set — NUL, tab,
+ * newline, escape, unit separator, and so on) plus 127 (DEL). Deliberately built from plain
+ * numeric comparisons against hex integer literals, never a regex escape sequence: escape
+ * syntax written into this exact spot has, more than once, been corrupted in transit into a
+ * literal raw control byte sitting in the source file instead of the intended two-character
+ * escape text — this formulation has no escape syntax anywhere for anything to mis-decode.
+ */
+function isControlCodePoint(codePoint: number): boolean {
+  return codePoint <= 0x1f || codePoint === 0x7f;
+}
+
+/** Replaces every control character in `value` with an ordinary space, code point by code point. */
+function stripControlChars(value: string): string {
+  let out = '';
+  for (const ch of value) {
+    out += isControlCodePoint(ch.codePointAt(0) ?? 0) ? ' ' : ch;
+  }
+  return out;
+}
+
+/**
  * MUST-9.1 — FTS5 injection defence. FTS5 has its own query language: bare AND/OR/NOT/NEAR,
- * ^, :, -, *, ( ) and " are operators, and an unbalanced quote is a syntax error that would
- * otherwise surface as a 500 on a perfectly ordinary search for `26" monitor`.
+ * caret, colon, hyphen, star, parentheses and the double-quote character are all operators,
+ * and an unbalanced quote is a syntax error that would otherwise surface as a 500 on a
+ * perfectly ordinary search for `26" monitor`.
  *
+ *   0. CRITICAL fix: scrub every control character (see isControlCodePoint above) to a
+ *      plain space FIRST. None of them are whitespace to JS regex's `\s`, so left alone one
+ *      survives term-splitting untouched and gets wrapped as its own literal quoted phrase;
+ *      SQLite's FTS5 tokenizer then raises a genuine driver-level syntax error for that
+ *      phrase (verified directly against better-sqlite3) — without this scrub, a request
+ *      like GET /warranties?q=%00 would depend entirely on the safety net below instead of
+ *      never producing a malformed query in the first place.
  *   1. trim, cap the raw input at 200 characters, split on whitespace
  *   2. drop empty terms; nothing left -> null (the caller omits MATCH entirely)
  *   3. wrap each term in double quotes, DOUBLING any internal double quote — a quoted
  *      string in FTS5 is a literal phrase, so every operator inside it loses its meaning
  *   4. append `*` to the LAST term only (type-ahead prefix matching), but only when that
- *      term still contains a letter or a digit: `"` alone escapes to `""""`, an empty
- *      phrase, and `""""*` is not a query worth constructing (spec §9.1's last table row)
+ *      term still contains a letter or a digit: a lone double-quote character escapes to
+ *      four double-quotes back to back — an empty phrase, and not a query worth
+ *      constructing (spec §9.1's last table row)
  *   5. join with a single space (FTS5's implicit AND)
  *   6. cap at 20 terms
  */
 export function escapeFtsQuery(raw: string): string | null {
   if (typeof raw !== 'string') return null;
-  const terms = raw
+  const terms = stripControlChars(raw)
     .trim()
     .slice(0, MAX_SEARCH_CHARS)
     .split(/\s+/)
@@ -141,8 +171,14 @@ function toListItem(row: RawRow): WarrantyListItem {
 export function searchWarrantyItems(filter: WarrantySearchFilter = {}): WarrantySearchResult {
   const today = filter.today ?? todayIso();
   const soon = addDaysIso(today, EXPIRING_SOON_DAYS);
-  const page = Math.max(1, Math.floor(filter.page ?? 1));
-  const sort = filter.sort ?? 'expiry';
+  // IMPORTANT 2 (defensive SQL-boundary guards): `page`/`sort` ultimately trace back to
+  // parsed URL query params upstream of this function. Number.isFinite is checked BEFORE
+  // Math.max/Math.floor so a NaN or +/-Infinity page value can't slip through arithmetic
+  // that would otherwise pass a non-finite LIMIT/OFFSET straight to SQLite; an unrecognised
+  // sort name falls back to the documented default instead of hitting ORDER_BY with a key
+  // it doesn't have.
+  const page = Number.isFinite(filter.page) ? Math.max(1, Math.floor(filter.page as number)) : 1;
+  const sort = filter.sort !== undefined && isWarrantySort(filter.sort) ? filter.sort : 'expiry';
   const match = filter.q ? escapeFtsQuery(filter.q) : null;
 
   // Delta T6: LEFT JOIN, unconditional -- an untyped item (type_id null) must still list,
@@ -198,16 +234,30 @@ export function searchWarrantyItems(filter: WarrantySearchFilter = {}): Warranty
       pageCount: Math.max(1, Math.ceil(total / WARRANTY_PAGE_SIZE)),
     };
   } catch (error) {
-    // MUST-9.3 safety net: if SQLite still raises an FTS5 syntax error, say so in English.
-    const message = error instanceof Error ? error.message : '';
-    if (/fts5|syntax error|malformed MATCH/i.test(message)) {
+    // IMPORTANT 2 (structural safety net, not string-matching): SQLite's FTS5 raises many
+    // different English messages for what is fundamentally the same class of problem —
+    // "unterminated string", "fts5: syntax error near ...", "no such column", "expected
+    // integer", "unknown special query", and so on, and the exact wording is not a
+    // contract this code should depend on keeping in sync with. What IS a stable contract
+    // is the driver's own `.code`: every one of those cases surfaces as
+    // `SQLITE_ERROR` (verified directly against better-sqlite3 for each). Scoped to
+    // `match !== null` — a SQLITE_ERROR that has nothing to do with the MATCH clause (a
+    // genuine bug elsewhere in this function) must still surface as a real error rather
+    // than being swallowed as "that search couldn't be understood".
+    const code = (error as { code?: string }).code;
+    if (match !== null && code === 'SQLITE_ERROR') {
       return { rows: [], total: 0, page, pageCount: 1, error: SEARCH_SYNTAX_ERROR };
     }
     throw error;
   }
 }
 
-/** MUST-10.5: the dashboard widget — status 'expiring', soonest first, top N. */
+/**
+ * MUST-10.5: the dashboard widget — status 'expiring', soonest first, top N. `limit` is the
+ * caller's own cap (e.g. 5 for the widget); it is applied client-side, after
+ * searchWarrantyItems() has already paged at WARRANTY_PAGE_SIZE, so `limit` must stay at or
+ * under WARRANTY_PAGE_SIZE for this function to see enough rows to slice from.
+ */
 export function expiringSoonItems(
   limit: number,
   ownerUserId: number | null = null,

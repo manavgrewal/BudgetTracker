@@ -8,6 +8,7 @@ import { isIsoDate } from '@/lib/dates';
 import { computeExpiryDate } from '@/lib/warranty/expiry';
 import { enqueueOcrJob } from '@/lib/warranty/ocr/queue';
 import {
+  MAX_RECEIPT_BYTES,
   adoptReceiptFile,
   deleteReceiptFile,
   receiptFileExists,
@@ -88,6 +89,26 @@ export interface WarrantyInput {
   /** Delta T6: nullable -- NULL is a legitimate "unclassified" value, not an omission. */
   typeId: number | null;
   notes: string | null;
+}
+
+/**
+ * M5: strip characters that would be unsafe in a future Content-Disposition header or as a
+ * plain display string -- forward slash, backslash, double quote, and every control
+ * character (built from a numeric code-point comparison against plain hex integers, not a
+ * regex escape literal, for the same corruption-avoidance reason documented next to
+ * search.ts's isControlCodePoint) -- before the 255-char display cap. originalFilename is
+ * ALWAYS display-only: storedFilename (a fresh randomUUID) is the only name ever touched by
+ * the filesystem, regardless of what this function produces.
+ */
+function sanitizeOriginalFilename(name: string): string {
+  let out = '';
+  for (const ch of name) {
+    const code = ch.codePointAt(0) ?? 0;
+    const isControl = code <= 0x1f || code === 0x7f;
+    const isUnsafePunctuation = ch === '/' || ch === '\\' || ch === '"';
+    if (!isControl && !isUnsafePunctuation) out += ch;
+  }
+  return out;
 }
 
 /** Blank optional text is stored as NULL, never as an empty string. */
@@ -195,18 +216,27 @@ export function createWarrantyItem(
   // commitStaged), not reconstructed after the fact -- so a mid-transaction throw only
   // unlinks files that were actually renamed onto disk, never ones that were skipped.
   const adopted: string[] = [];
+  // IMPORTANT 3: side effects that must NOT run while the write transaction below is still
+  // open -- see commitStaged's docblock. Flushed only once db.transaction() has returned
+  // successfully; abandoned untouched (never run) if it throws.
+  const deferred: Array<() => void> = [];
   try {
-    return db.transaction((tx) => {
+    const id = db.transaction((tx) => {
       const row = tx
         .insert(warrantyItems)
         .values({ ...input, expiryDate, createdAt: at, updatedAt: at })
         .returning({ id: warrantyItems.id })
         .get();
-      commitStaged(tx, row.id, staged, at, adopted);
+      commitStaged(tx, row.id, staged, at, adopted, deferred);
       return row.id;
     });
+    for (const effect of deferred) effect();
+    return id;
   } catch (error) {
-    // MUST-4.7: if the insert throws, every file this call adopted is unlinked.
+    // MUST-4.7: if the insert throws, every file this call adopted is unlinked. `deferred`
+    // is simply left unflushed here: the transaction rolled back, so the receipt rows this
+    // loop inserted no longer exist, and their sidecars/OCR jobs must stay exactly as they
+    // were before this call ever ran.
     for (const name of adopted) deleteReceiptFile(name);
     throw error;
   }
@@ -293,11 +323,12 @@ export function attachStagedReceipts(
   const db = getDb();
   // Ruling P9: same during-the-loop tracking as createWarrantyItem's adoption pass.
   const adopted: string[] = [];
+  // IMPORTANT 3: same deferred-until-committed pattern as createWarrantyItem.
+  const deferred: Array<() => void> = [];
   try {
-    return db.transaction((tx) => {
-      const committed = commitStaged(tx, itemId, staged, at, adopted);
-      return committed.receiptIds;
-    });
+    const receiptIds = db.transaction((tx) => commitStaged(tx, itemId, staged, at, adopted, deferred).receiptIds);
+    for (const effect of deferred) effect();
+    return receiptIds;
   } catch (error) {
     for (const name of adopted) deleteReceiptFile(name);
     throw error;
@@ -305,17 +336,30 @@ export function attachStagedReceipts(
 }
 
 /**
- * MUST-6.8, per staging id: re-validate the file still exists AND still sniffs to an
- * accepted type, rename it into receipts/ under a fresh stored_filename, insert the row
- * with the sidecar's text/status when present (otherwise 'pending', for the sweep to pick
- * up), then delete the sidecar. The staging id is NEVER trusted as a path — findStagedReceipt
- * applies the UUID guard.
+ * MUST-6.8, per staging id: re-validate the file still exists, is still a sane size, AND
+ * still sniffs to an accepted type, rename it into receipts/ under a fresh stored_filename,
+ * insert the row with the sidecar's text/status when present (otherwise 'pending', for the
+ * sweep to pick up), then queue the sidecar for deletion and (if there was no sidecar) an
+ * OCR job. The staging id is NEVER trusted as a path — findStagedReceipt applies the UUID
+ * guard.
  *
  * Ruling P9: `adopted` is the caller's own tracking array, pushed to IMMEDIATELY after each
  * successful rename (i.e. during the loop, not reconstructed from the return value after
  * the fact) so a throw partway through this loop -- e.g. the INSERT below violating a CHECK
  * constraint -- still lets the caller's catch block unlink exactly the files that made it to
  * disk before the throw, not zero of them and not files that were only ever skipped.
+ *
+ * IMPORTANT 3: `deferred` is likewise the caller's own array, and for the same reason --
+ * deleteSidecar and enqueueOcrJob must NOT run while `tx`'s write transaction is still open.
+ * A later staged ref in this very loop can still throw (a CHECK violation, a forced test
+ * failure, anything), which rolls the whole transaction back INCLUDING this receipt's row --
+ * at that point its sidecar must still exist on disk and no OCR job should ever have been
+ * queued for a receipt that, from the database's point of view, was never created.
+ * enqueueOcrJob is doubly unsafe to call synchronously from inside the transaction beyond
+ * that: it immediately kicks off runReceiptJob in the background, which itself
+ * SELECTs/UPDATEs warranty_receipts -- reentering the database while this same call stack's
+ * write transaction is still open. The caller flushes `deferred` only after db.transaction()
+ * has returned successfully, and abandons it untouched if db.transaction() throws.
  */
 function commitStaged(
   tx: ReturnType<typeof getDb>,
@@ -323,6 +367,7 @@ function commitStaged(
   staged: StagedReceiptRef[],
   at: string,
   adopted: string[],
+  deferred: Array<() => void>,
 ): { receiptIds: number[] } {
   const receiptIds: number[] = [];
 
@@ -331,6 +376,12 @@ function commitStaged(
     // Purged by the 24 h sweep, or lost to a restart. Skip it — the save still succeeds.
     if (found === null) continue;
     const buf = fs.readFileSync(found.path);
+    // M4: re-validate size at commit time too, not just at upload -- a staged file can sit
+    // around for a while before the member saves. Skip just this one receipt rather than
+    // failing the WHOLE item via warranty_receipts' `size_bytes > 0 AND size_bytes <=
+    // 10485760` CHECK, exactly like the re-sniff below skips one receipt rather than failing
+    // the save.
+    if (buf.length === 0 || buf.length > MAX_RECEIPT_BYTES) continue;
     // Re-sniff: the file must STILL be an accepted type at commit time, not just at upload.
     const mime = sniffReceiptType(buf);
     if (mime === null) continue;
@@ -339,12 +390,17 @@ function commitStaged(
     const storedFilename = adoptReceiptFile(found.path, mime);
     adopted.push(storedFilename);
 
+    // M5: strip path separators, quotes and control characters before the display cap --
+    // this name is rendered and will eventually back a Content-Disposition header; it is
+    // NEVER used as a path component regardless (storedFilename is what the filesystem sees).
+    const sanitizedOriginal = sanitizeOriginalFilename(ref.originalFilename);
+
     const inserted = tx
       .insert(warrantyReceipts)
       .values({
         warrantyItemId: itemId,
         // MUST-3.8: display only. Capped at 255 and never a path component.
-        originalFilename: ref.originalFilename.slice(0, 255) || `receipt.${storedFilename.split('.').pop()}`,
+        originalFilename: sanitizedOriginal.slice(0, 255) || `receipt.${storedFilename.split('.').pop()}`,
         storedFilename,
         mime,
         sizeBytes: buf.length,
@@ -358,10 +414,16 @@ function commitStaged(
       .get();
 
     receiptIds.push(inserted.id);
-    deleteSidecar(ref.stagingId);
+    const stagingId = ref.stagingId;
+    deferred.push(() => deleteSidecar(stagingId));
     // No sidecar means OCR had not finished when the member saved: record 'pending' and let
     // the queue (and, after a crash, the scheduler sweep) pick it up (§7.5).
-    if (sidecar === null) enqueueOcrJob({ kind: 'receipt', receiptId: inserted.id });
+    if (sidecar === null) {
+      const receiptId = inserted.id;
+      deferred.push(() => {
+        enqueueOcrJob({ kind: 'receipt', receiptId });
+      });
+    }
   }
 
   return { receiptIds };

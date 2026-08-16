@@ -9,11 +9,13 @@ import { createItemType } from '@/lib/warranty/types';
 import {
   MAX_SEARCH_CHARS,
   MAX_SEARCH_TERMS,
+  SEARCH_SYNTAX_ERROR,
   WARRANTY_PAGE_SIZE,
   escapeFtsQuery,
   expiringSoonItems,
   isWarrantySort,
   searchWarrantyItems,
+  type WarrantySort,
 } from '@/lib/warranty/search';
 
 let fts: BetterSqlite3.Database;
@@ -93,6 +95,29 @@ describe('escapeFtsQuery — safety', () => {
 
   it('finds MÉTRO by typing metro', () => {
     expect(runs(escapeFtsQuery('metro')!)).toEqual([1]);
+  });
+
+  it('scrubs control characters (including an embedded NUL) before building the query (CRITICAL fix)', () => {
+    // Built via String.fromCharCode rather than a literal escape in source: a NUL survives
+    // \s+-splitting untouched (it is not whitespace to JS regex), so left un-scrubbed it
+    // would be quoted as its own literal phrase and SQLite's FTS5 tokenizer would raise a
+    // genuine SQLITE_ERROR ("unterminated string") for a query built from it -- verified
+    // directly against better-sqlite3 before this fix was written.
+    const nul = String.fromCharCode(0);
+    const leading = escapeFtsQuery(`${nul}abc`);
+    const middle = escapeFtsQuery(`ab${nul}cd`);
+    const alone = escapeFtsQuery(nul);
+
+    // A lone control character has nothing left after scrubbing -> null, exactly like
+    // whitespace-only input.
+    expect(alone).toBeNull();
+    // A control character elsewhere in the string becomes a term boundary, same as a space.
+    expect(leading).toBe('"abc"*');
+    expect(middle).toBe('"ab" "cd"*');
+
+    for (const query of [leading, middle]) {
+      expect(() => runs(query!), `SQLite rejected ${JSON.stringify(query)}`).not.toThrow();
+    }
   });
 
   it('returns null for whitespace-only and empty input', () => {
@@ -189,6 +214,36 @@ describe('searchWarrantyItems', () => {
     seed({ name: '26" monitor' });
     const result = searchWarrantyItems({ q: '26" AND monitor', today: TODAY });
     expect(result.error).toBeUndefined();
+  });
+
+  it('never throws — CRITICAL/IMPORTANT 2 regression — for an embedded NUL or other FTS5 error shapes', () => {
+    seed({ name: 'Whatever Item' });
+    const nul = String.fromCharCode(0);
+    // Each of these is a documented distinct FTS5 error shape (unterminated string, syntax
+    // error, no such column, ...); the structural `.code === 'SQLITE_ERROR'` net in
+    // searchWarrantyItems catches all of them, not just the two English phrasings the old
+    // regex matched.
+    for (const q of [nul, `${nul}abc`, 'col:value', 'NEAR(', '"unterminated', '(unbalanced', 'OR NOT AND']) {
+      let result: ReturnType<typeof searchWarrantyItems> | undefined;
+      expect(() => {
+        result = searchWarrantyItems({ q, today: TODAY });
+      }, `threw for q=${JSON.stringify(q)}`).not.toThrow();
+      // Either a clean result, or the documented SEARCH_SYNTAX_ERROR — never a raw SQLite message.
+      if (result?.error !== undefined) expect(result.error).toBe(SEARCH_SYNTAX_ERROR);
+    }
+  });
+
+  it('falls back to a safe default sort and page for out-of-range values (defensive SQL-boundary guard)', () => {
+    seed({ name: 'Guard Item' });
+    // Simulates an untrusted sort value that slipped past the type system (e.g. an
+    // unvalidated URL query param cast upstream).
+    expect(() => searchWarrantyItems({ sort: 'bogus' as unknown as WarrantySort, today: TODAY })).not.toThrow();
+    expect(searchWarrantyItems({ sort: 'bogus' as unknown as WarrantySort, today: TODAY }).rows[0]?.name).toBe(
+      'Guard Item',
+    );
+    expect(searchWarrantyItems({ page: Number.NaN, today: TODAY }).page).toBe(1);
+    expect(searchWarrantyItems({ page: Number.POSITIVE_INFINITY, today: TODAY }).page).toBe(1);
+    expect(searchWarrantyItems({ page: Number.NEGATIVE_INFINITY, today: TODAY }).page).toBe(1);
   });
 
   it('derives the same status as warrantyStatus() and composes filters', () => {

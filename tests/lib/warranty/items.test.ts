@@ -23,9 +23,10 @@ import {
 } from '@/lib/warranty/items';
 import { receiptFileExists } from '@/lib/warranty/receipts';
 import { findStagedReceipt, readSidecar, writeSidecar, writeStagedReceipt } from '@/lib/warranty/staging';
-import { drainOcrQueue, resetOcrQueueForTests } from '@/lib/warranty/ocr/queue';
+import { drainOcrQueue, ocrQueueDepth, resetOcrQueueForTests } from '@/lib/warranty/ocr/queue';
 import { setOcrEngineForTests } from '@/lib/warranty/ocr/engine';
 import { createItemType, renameItemType } from '@/lib/warranty/types';
+import { MAX_RECEIPT_BYTES } from '@/lib/warranty/receipts';
 
 let current: TestDb | null = null;
 let dataDir: string;
@@ -45,7 +46,16 @@ beforeEach(() => {
   setOcrEngineForTests({ recognize: async () => ({ text: 'ENGINE TEXT' }) });
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // M7: a test that enqueues an OCR job (directly, or indirectly via commitStaged's now-
+  // deferred-but-still-eventually-called enqueueOcrJob) without itself awaiting
+  // drainOcrQueue() would otherwise leave that job's pump running past this test's own
+  // teardown -- it can then resolve against the NEXT test's freshly-opened database (or,
+  // outside this suite's faked engine, the real OCR engine), producing flaky, hard-to-trace
+  // failures far from their actual cause. Draining here, before the db is closed and before
+  // the fake engine is torn down, guarantees every job started by this test finishes with
+  // the same db/engine it was queued against.
+  await drainOcrQueue();
   setOcrEngineForTests(null);
   resetOcrQueueForTests();
   current?.cleanup();
@@ -278,6 +288,102 @@ describe('attachStagedReceipts (MUST-6.8)', () => {
     const second = writeStagedReceipt(JPEG, 'image/jpeg');
     expect(attachStagedReceipts(id, [ref(second)])).toHaveLength(1);
     expect(listWarrantyReceipts(id)).toHaveLength(2);
+  });
+});
+
+describe('commit-time re-validation (M4 / M5)', () => {
+  it('skips a staged file that has grown past MAX_RECEIPT_BYTES since upload, without failing the save', () => {
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    // Simulate a staged file that grew (or was swapped) between upload and save.
+    const oversized = Buffer.concat([JPEG, Buffer.alloc(MAX_RECEIPT_BYTES)]);
+    fs.writeFileSync(findStagedReceipt(stagingId)!.path, oversized);
+    const id = createWarrantyItem(input(), [ref(stagingId)]);
+    // The item itself still saves; only this one receipt is skipped.
+    expect(getWarrantyItem(id)).not.toBeNull();
+    expect(listWarrantyReceipts(id)).toHaveLength(0);
+  });
+
+  it('skips a staged file that has been truncated to zero bytes', () => {
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    fs.writeFileSync(findStagedReceipt(stagingId)!.path, Buffer.alloc(0));
+    const id = createWarrantyItem(input(), [ref(stagingId)]);
+    expect(listWarrantyReceipts(id)).toHaveLength(0);
+  });
+
+  it('sanitises slashes, backslashes, quotes and control characters out of originalFilename', () => {
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const nul = String.fromCharCode(0);
+    const id = createWarrantyItem(input(), [ref(stagingId, `..\\/evil${nul}"name.jpg`)]);
+    const [receipt] = listWarrantyReceipts(id);
+    expect(receipt.originalFilename).toBe('..evilname.jpg');
+  });
+
+  it('falls back to a generated name when sanitising leaves nothing displayable', () => {
+    const stagingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const id = createWarrantyItem(input(), [ref(stagingId, '///\\\\"""')]);
+    const [receipt] = listWarrantyReceipts(id);
+    expect(receipt.originalFilename).toBe(`receipt.${receipt.storedFilename.split('.').pop()}`);
+  });
+});
+
+describe('deferred post-transaction effects (IMPORTANT 3)', () => {
+  it('a mid-transaction throw leaves an earlier sidecar intact and enqueues nothing', () => {
+    const survivorId = writeStagedReceipt(JPEG, 'image/jpeg');
+    writeSidecar(survivorId, { status: 'done', text: 'SIDECAR SHOULD SURVIVE' });
+    // No sidecar for this one: committing successfully would have enqueued an OCR job for it.
+    const pendingId = writeStagedReceipt(JPEG, 'image/jpeg');
+    const failingId = writeStagedReceipt(JPEG, 'image/jpeg');
+
+    // Force the THIRD receipt's INSERT to fail, deterministically, so the whole transaction
+    // rolls back -- simulating "something goes wrong mid-commit" without depending on a real
+    // constraint that commit-time re-validation (M4) might otherwise legitimately route
+    // around (a skip, not a throw).
+    current!.sqlite.exec(`
+      CREATE TEMP TRIGGER force_fail_third_receipt
+      BEFORE INSERT ON warranty_receipts
+      WHEN NEW.original_filename = 'FORCE_FAIL.jpg'
+      BEGIN
+        SELECT RAISE(ABORT, 'forced failure for test');
+      END;
+    `);
+
+    expect(() =>
+      createWarrantyItem(input(), [
+        ref(survivorId, 'survivor.jpg'),
+        ref(pendingId, 'pending.jpg'),
+        ref(failingId, 'FORCE_FAIL.jpg'),
+      ]),
+    ).toThrow();
+
+    // Nothing committed: the whole transaction (item + all three receipt rows) rolled back.
+    const itemCount = current!.db.get<{ c: number }>(sql`select count(*) as c from warranty_items`);
+    expect(itemCount.c).toBe(0);
+
+    // The survivor's sidecar-deletion was queued as a deferred effect while the transaction
+    // was still open; since the transaction never actually committed, that effect must never
+    // have run -- the sidecar is still exactly where it was.
+    expect(readSidecar(survivorId)).not.toBeNull();
+    // Likewise the pending receipt's OCR-enqueue was queued as a deferred effect and
+    // abandoned: nothing should have reached the real queue.
+    expect(ocrQueueDepth()).toBe(0);
+  });
+
+  it('a successful commit still deletes sidecars and enqueues OCR jobs as before', async () => {
+    const withSidecar = writeStagedReceipt(JPEG, 'image/jpeg');
+    writeSidecar(withSidecar, { status: 'done', text: 'SHOULD BE DELETED' });
+    const withoutSidecar = writeStagedReceipt(JPEG, 'image/jpeg');
+
+    const id = createWarrantyItem(input(), [ref(withSidecar), ref(withoutSidecar)]);
+
+    // Deferred effects flush synchronously right after the transaction returns -- no await
+    // needed to observe them.
+    expect(readSidecar(withSidecar)).toBeNull();
+    const receipts = listWarrantyReceipts(id);
+    const pendingReceipt = receipts.find((r) => r.ocrStatus === 'pending')!;
+    expect(pendingReceipt).toBeDefined();
+
+    await drainOcrQueue();
+    expect(getWarrantyReceipt(pendingReceipt.id)?.ocrStatus).toBe('done');
   });
 });
 
