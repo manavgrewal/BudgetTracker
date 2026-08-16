@@ -4,7 +4,8 @@ import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
-import { isSameOrigin } from '@/lib/auth/csrf';
+import BetterSqlite3 from 'better-sqlite3';
+import { CROSS_ORIGIN_ERROR, isSameOrigin } from '@/lib/auth/csrf';
 import { requireUser } from '@/lib/auth/session';
 import { todayIso } from '@/lib/dates';
 import { parseAmountToCents } from '@/lib/money';
@@ -21,6 +22,8 @@ import {
   warrantyInputSchema,
   type StagedReceiptRef,
 } from '@/lib/warranty/items';
+import { MAX_FILES_PER_UPLOAD } from '@/lib/warranty/receipts';
+import { STAGING_ID_RE } from '@/lib/warranty/staging';
 import { findItemType } from '@/lib/warranty/types';
 
 export interface WarrantyActionState {
@@ -28,7 +31,13 @@ export interface WarrantyActionState {
   message?: string;
 }
 
-export const CROSS_ORIGIN_ERROR = 'Cross-origin request rejected';
+/**
+ * CROSS_ORIGIN_ERROR is deliberately NOT re-exported here: Next 15 allows only async
+ * function exports from a 'use server' file — `next build` fails on any other export from a
+ * module carrying this directive, and npm test/typecheck cannot catch that class of error.
+ * The canonical string lives in @/lib/auth/csrf (a plain module) and is imported directly by
+ * both this file and its test.
+ */
 
 /**
  * Warranty items are household-shared (§1.3): every signed-in member may create, edit or
@@ -40,17 +49,36 @@ export const CROSS_ORIGIN_ERROR = 'Cross-origin request rejected';
 
 const idField = z.coerce.number().int().positive();
 
-const stagedSchema = z.array(
-  z.object({
-    stagingId: z.string().regex(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/),
-    originalFilename: z.string().trim().min(1).max(255),
-  }),
-);
+const stagedSchema = z
+  .array(
+    z.object({
+      stagingId: z.string().regex(STAGING_ID_RE),
+      originalFilename: z.string().trim().min(1).max(255),
+    }),
+  )
+  // M4: an unbounded array would otherwise reach the write transaction untouched.
+  .max(MAX_FILES_PER_UPLOAD);
 
+const UPLOAD_INVALID_ERROR = 'That upload is no longer valid — please choose the files again.';
+
+/**
+ * IMPORTANT 2: `JSON.parse` throws a raw SyntaxError ("Unexpected token…") and
+ * `stagedSchema.parse` throws a ZodError whose `.message` is a JSON dump — neither is fit to
+ * show a user. Both collapse to the same written message here; safeParse (not parse) means
+ * a malformed payload never reaches messageOf()/failure()'s generic "is this a real Error"
+ * fallback with the wrong text attached.
+ */
 function readStaged(formData: FormData): StagedReceiptRef[] {
   const raw = String(formData.get('staged') ?? '[]');
-  // A malformed payload fails the whole save rather than committing part of it.
-  return stagedSchema.parse(JSON.parse(raw));
+  let json: unknown;
+  try {
+    json = JSON.parse(raw);
+  } catch {
+    throw new Error(UPLOAD_INVALID_ERROR);
+  }
+  const parsed = stagedSchema.safeParse(json);
+  if (!parsed.success) throw new Error(UPLOAD_INVALID_ERROR);
+  return parsed.data;
 }
 
 function str(formData: FormData, key: string): string {
@@ -129,6 +157,22 @@ function messageOf(error: unknown, fallback: string): string {
   return error instanceof Error && error.message.length > 0 ? error.message : fallback;
 }
 
+/**
+ * IMPORTANT 2c: ownerUserId and transactionId are only shape-checked by zod (positive
+ * integer) — neither is confirmed to exist before the write, so a tampered value (or a
+ * genuine race, e.g. the owner's account being deleted between page load and submit) reaches
+ * the database and fails its FK constraint. Translate that raw SqliteError into the same
+ * kind of written message a precheck would have produced, instead of leaking
+ * "FOREIGN KEY constraint failed" through messageOf()'s generic Error branch. Modelled on
+ * the identical idiom in settings/item-types/actions.ts's failure().
+ */
+function failure(error: unknown, fallback: string): WarrantyActionState {
+  if (error instanceof BetterSqlite3.SqliteError && error.code === 'SQLITE_CONSTRAINT_FOREIGNKEY') {
+    return { error: 'That person or transaction no longer exists.' };
+  }
+  return { error: messageOf(error, fallback) };
+}
+
 function revalidateAll(itemId?: number): void {
   revalidatePath('/warranties');
   revalidatePath('/dashboard');
@@ -151,7 +195,7 @@ export async function createWarrantyAction(
     if (!typeExistsOrNull(parsed.data.typeId)) return { error: ITEM_TYPE_MISSING_ERROR };
     itemId = createWarrantyItem(parsed.data, staged);
   } catch (error) {
-    return { error: messageOf(error, 'Could not save that warranty.') };
+    return failure(error, 'Could not save that warranty.');
   }
 
   revalidateAll(itemId);
@@ -175,7 +219,7 @@ export async function updateWarrantyAction(
     if (!typeExistsOrNull(parsed.data.typeId)) return { error: ITEM_TYPE_MISSING_ERROR };
     if (!updateWarrantyItem(id.data, parsed.data)) return { error: 'That warranty no longer exists.' };
   } catch (error) {
-    return { error: messageOf(error, 'Could not save that warranty.') };
+    return failure(error, 'Could not save that warranty.');
   }
 
   revalidateAll(id.data);
@@ -191,9 +235,17 @@ export async function deleteWarrantyAction(
 
   const id = idField.safeParse(formData.get('itemId'));
   if (!id.success) return { error: 'Invalid request.' };
-  if (!deleteWarrantyItem(id.data)) return { error: 'That warranty no longer exists.' };
+
+  // M5: errors as return values, never thrown to the client — same contract as every other
+  // action, even though deleteWarrantyItem's own failure modes are narrow today.
+  try {
+    if (!deleteWarrantyItem(id.data)) return { error: 'That warranty no longer exists.' };
+  } catch (error) {
+    return failure(error, 'Could not delete that warranty.');
+  }
 
   revalidateAll();
+  // Outside the try: redirect() signals by throwing, and catching it would swallow it.
   redirect('/warranties');
 }
 
@@ -220,7 +272,7 @@ export async function attachReceiptsAction(
       if (row && countReceiptsWithSha(id.data, row.sha256) > 1) duplicate = true;
     }
   } catch (error) {
-    return { error: messageOf(error, 'Could not attach that receipt.') };
+    return failure(error, 'Could not attach that receipt.');
   }
 
   revalidateAll(id.data);
@@ -244,7 +296,12 @@ export async function deleteReceiptAction(
   const receipt = getWarrantyReceipt(id.data);
   if (receipt === null) return { error: 'That receipt no longer exists.' };
 
-  deleteWarrantyReceipt(id.data);
+  // M5: errors as return values, never thrown to the client.
+  try {
+    deleteWarrantyReceipt(id.data);
+  } catch (error) {
+    return failure(error, 'Could not remove that receipt.');
+  }
   revalidateAll(receipt.warrantyItemId);
   return { message: 'Receipt removed.' };
 }
@@ -262,8 +319,12 @@ export async function reRunOcrAction(
   if (receipt === null) return { error: 'That receipt no longer exists.' };
 
   // MUST-7.16: idempotent and safe to click repeatedly — a second click on a claimed row
-  // is a no-op inside enqueueOcrJob().
-  resetReceiptForReOcr(id.data);
+  // is a no-op inside enqueueOcrJob(). M5: errors as return values, never thrown.
+  try {
+    resetReceiptForReOcr(id.data);
+  } catch (error) {
+    return failure(error, 'Could not re-run OCR for that receipt.');
+  }
   revalidateAll(receipt.warrantyItemId);
   return { message: 'Reading that receipt again — the status will update shortly.' };
 }

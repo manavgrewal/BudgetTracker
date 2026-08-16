@@ -2,9 +2,17 @@ import { readEnv, type AppEnv } from '@/lib/env';
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
+/**
+ * Canonical wording for a rejected cross-origin mutation. Lives here (a plain module, not a
+ * 'use server' file) so every server-actions module can import it as a private constant —
+ * Next 15 permits ONLY async function exports from a 'use server' file, so those modules may
+ * never `export` this themselves (see src/app/(app)/warranties/actions.ts).
+ */
+export const CROSS_ORIGIN_ERROR = 'Cross-origin request rejected';
+
 export class CsrfError extends Error {
   readonly status = 403;
-  constructor(message = 'Cross-origin request rejected') {
+  constructor(message = CROSS_ORIGIN_ERROR) {
     super(message);
     this.name = 'CsrfError';
   }

@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../helpers/db';
 import { nowIso } from '@/lib/clock';
@@ -33,8 +34,16 @@ vi.mock('next/navigation', () => ({
   },
 }));
 
+// CRITICAL 1: 'use server' files may export only async functions (Next 15) — the module
+// under test cannot also export CROSS_ORIGIN_ERROR. The canonical string lives in
+// @/lib/auth/csrf, imported directly here.
+import { CROSS_ORIGIN_ERROR } from '@/lib/auth/csrf';
+// IMPORTANT 3: a namespace import, not just named ones, so the exhaustiveness check below
+// (`Object.keys(warrantyActions)`) reflects the module's REAL export list — a future export
+// added to actions.ts without also adding a case to `cases` fails that test immediately,
+// instead of silently dodging the cross-origin-first guarantee.
+import * as warrantyActions from '@/app/(app)/warranties/actions';
 import {
-  CROSS_ORIGIN_ERROR,
   attachReceiptsAction,
   createWarrantyAction,
   deleteReceiptAction,
@@ -43,7 +52,7 @@ import {
   updateWarrantyAction,
 } from '@/app/(app)/warranties/actions';
 import { getWarrantyItem, listWarrantyReceipts } from '@/lib/warranty/items';
-import { receiptFileExists } from '@/lib/warranty/receipts';
+import { MAX_FILES_PER_UPLOAD, receiptFileExists } from '@/lib/warranty/receipts';
 import { writeSidecar, writeStagedReceipt } from '@/lib/warranty/staging';
 import { resetOcrQueueForTests } from '@/lib/warranty/ocr/queue';
 import { setOcrEngineForTests } from '@/lib/warranty/ocr/engine';
@@ -129,6 +138,16 @@ describe('cross-origin rejection comes FIRST (MUST-13.1)', () => {
     expect(result.error).toBe(CROSS_ORIGIN_ERROR);
     expect(current!.db.get<{ c: number }>(sql`select count(*) as c from warranty_items`).c).toBe(before);
   });
+
+  // IMPORTANT 3: a hardcoded 6-entry list above can't catch a future action added to
+  // actions.ts without also being added to `cases` — it would silently ship unguarded. This
+  // compares the fixture map against the module's REAL runtime export list, so a drift in
+  // either direction fails immediately.
+  it('the fixture map above covers exactly the module\'s exported actions', () => {
+    const guarded = cases.map(([name]) => name).sort();
+    const exported = Object.keys(warrantyActions).sort();
+    expect(guarded).toEqual(exported);
+  });
 });
 
 describe('createWarrantyAction', () => {
@@ -186,9 +205,48 @@ describe('createWarrantyAction', () => {
     expect(receipts[0].ocrStatus).toBe('done');
   });
 
-  it('rejects a malformed staged payload rather than saving half of it', async () => {
+  // IMPORTANT 2(a): stagedSchema.safeParse (not .parse) means a shape mismatch never leaks a
+  // raw ZodError.message (a JSON dump of `.issues`) to the user.
+  it('rejects a malformed staged payload with a written message, not a raw ZodError dump', async () => {
     const result = await createWarrantyAction({}, formData(baseFields({ staged: '{"not":"an array"}' })));
+    expect(result.error).toBe('That upload is no longer valid — please choose the files again.');
+    expect(result.error).not.toContain('{');
+    expect(current!.db.get<{ c: number }>(sql`select count(*) as c from warranty_items`).c).toBe(0);
+  });
+
+  // IMPORTANT 2(b): invalid JSON must not leak the parser's raw SyntaxError text.
+  it('rejects invalid JSON in the staged payload without leaking the parser error', async () => {
+    const result = await createWarrantyAction({}, formData(baseFields({ staged: 'not-json' })));
+    expect(result.error).toBe('That upload is no longer valid — please choose the files again.');
+    expect(current!.db.get<{ c: number }>(sql`select count(*) as c from warranty_items`).c).toBe(0);
+  });
+
+  // M4: the staged array is capped at MAX_FILES_PER_UPLOAD — an unbounded array must not
+  // reach the write transaction.
+  it('rejects a staged payload longer than the per-upload cap', async () => {
+    const many = Array.from({ length: MAX_FILES_PER_UPLOAD + 1 }, (_, i) => ({
+      stagingId: randomUUID(),
+      originalFilename: `f${i}.jpg`,
+    }));
+    const result = await createWarrantyAction({}, formData(baseFields({ staged: JSON.stringify(many) })));
     expect(result.error).toBeTruthy();
+    expect(current!.db.get<{ c: number }>(sql`select count(*) as c from warranty_items`).c).toBe(0);
+  });
+
+  // IMPORTANT 2(c): ownerUserId/transactionId are only shape-checked by zod; a value that
+  // does not exist reaches the FK constraint and must not leak "FOREIGN KEY constraint
+  // failed" — it must read the same as a precheck would have written.
+  it('refuses a nonexistent owner without leaking the raw SQLite FK error', async () => {
+    const result = await createWarrantyAction({}, formData(baseFields({ ownerUserId: '999999' })));
+    expect(result.error).toBe('That person or transaction no longer exists.');
+    expect(result.error).not.toMatch(/FOREIGN KEY/i);
+    expect(current!.db.get<{ c: number }>(sql`select count(*) as c from warranty_items`).c).toBe(0);
+  });
+
+  it('refuses a nonexistent transactionId without leaking the raw SQLite FK error', async () => {
+    const result = await createWarrantyAction({}, formData(baseFields({ transactionId: '999999' })));
+    expect(result.error).toBe('That person or transaction no longer exists.');
+    expect(result.error).not.toMatch(/FOREIGN KEY/i);
     expect(current!.db.get<{ c: number }>(sql`select count(*) as c from warranty_items`).c).toBe(0);
   });
 
@@ -301,6 +359,29 @@ describe('deleteWarrantyAction', () => {
     expect(receiptFileExists(stored)).toBe(false);
     expect(current!.db.get<{ c: number }>(sql`select count(*) as c from warranty_receipts`).c).toBe(0);
     expect(current!.db.get<{ c: number }>(sql`select count(*) as c from warranty_search`).c).toBe(0);
+  });
+});
+
+// M8: pins §1.3 — warranty items are household-shared, not ownership-gated. Guards against a
+// future access-control check creeping in on update/delete.
+describe('household sharing (§1.3): ownership is attribution only, not access control', () => {
+  it('lets a member who does not own the item update AND delete it', async () => {
+    const to = await redirectPath(() => createWarrantyAction({}, formData(baseFields())));
+    const id = Number(to.split('/').pop());
+    expect(getWarrantyItem(id)!.ownerUserId).toBe(ownerId);
+
+    const otherId = insertTestUser(current!.db, { name: 'Bob', username: 'bob' });
+    currentUser = { id: otherId, name: 'Bob', username: 'bob', role: 'member' };
+
+    const updateResult = await updateWarrantyAction(
+      {},
+      formData(baseFields({ itemId: String(id), name: 'Renamed by Bob' })),
+    );
+    expect(updateResult.message).toBeTruthy();
+    expect(getWarrantyItem(id)!.name).toBe('Renamed by Bob');
+
+    expect(await redirectPath(() => deleteWarrantyAction({}, formData({ itemId: String(id) })))).toBe('/warranties');
+    expect(getWarrantyItem(id)).toBeNull();
   });
 });
 
