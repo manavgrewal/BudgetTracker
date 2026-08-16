@@ -1,5 +1,6 @@
 'use client';
 
+import Link from 'next/link';
 import { useActionState, useState } from 'react';
 import { FormError } from '@/components/FormError';
 import { SubmitButton } from '@/components/SubmitButton';
@@ -203,6 +204,7 @@ export function TransactionsClient({
               <th className="text-right">Amount</th>
               <th>Category</th>
               <th>Person</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
@@ -260,6 +262,16 @@ export function TransactionsClient({
                     </select>
                     <button type="submit" className="text-xs underline">save</button>
                   </form>
+                </td>
+                <td>
+                  {/* MUST-11.1 / MUST-11.2: a purchase can carry a warranty; a transfer cannot.
+                      MUST-11.3: the URL carries ONLY the id — the add page derives the date,
+                      the abs() price and the vendor from the transaction row server-side. */}
+                  {row.isTransfer ? null : (
+                    <Link href={`/warranties/new?transactionId=${row.id}`} className="text-xs underline">
+                      Create warranty
+                    </Link>
+                  )}
                 </td>
               </tr>
             ))}

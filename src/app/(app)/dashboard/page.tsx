@@ -4,13 +4,15 @@ import { listAccounts } from '@/lib/accounts';
 import { listUsers } from '@/lib/auth/users';
 import { budgetProgress, budgetTotals } from '@/lib/budgets';
 import { reviewQueueCount } from '@/lib/categorize/engine';
-import { currentMonth, monthEnd, monthStart } from '@/lib/dates';
+import { currentMonth, monthEnd, monthStart, todayIso } from '@/lib/dates';
 import { listGoals } from '@/lib/goals';
 import { cashflowTrend, topMerchants } from '@/lib/reports';
+import { expiringSoonItems } from '@/lib/warranty/search';
 import { formatCents } from '@/lib/money';
 import { BudgetProgressBar } from '@/components/BudgetProgressBar';
 import { GoalCard } from '@/components/GoalCard';
 import { CashflowChart } from '@/components/charts/CashflowChart';
+import { ExpiringSoonCard, EXPIRING_WIDGET_LIMIT } from '@/components/warranty/ExpiringSoonCard';
 
 export const dynamic = 'force-dynamic';
 
@@ -36,6 +38,11 @@ export default async function DashboardPage({
   // install has none — so say so here rather than letting the Import page
   // dead-end.
   const hasAccounts = listAccounts().length > 0;
+
+  // MUST-10.6: the widget respects the dashboard's existing person switcher — Household
+  // shows every item, a selected person shows only items they own.
+  const today = todayIso();
+  const expiring = expiringSoonItems(EXPIRING_WIDGET_LIMIT, scopeUserId, today);
 
   return (
     <div className="flex flex-col gap-8">
@@ -70,6 +77,8 @@ export default async function DashboardPage({
           {reviewCount} transactions need review
         </Link>
       ) : null}
+
+      <ExpiringSoonCard items={expiring} today={today} />
 
       <section className="flex flex-col gap-2">
         <h2 className="font-medium">

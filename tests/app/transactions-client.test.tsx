@@ -106,3 +106,44 @@ describe('TransactionsClient — archived-category silent-clear hazard', () => {
     expect(manualCategorySelect.querySelector('option[value="7"]')).not.toBeNull();
   });
 });
+
+describe('Create warranty row action (§11)', () => {
+  it('links a normal row to the add form carrying only the transaction id', () => {
+    const { container } = render(
+      <TransactionsClient page={pageWithRow({ id: 77 })} accounts={[]} categories={[]} people={[]} today="2026-08-16" />,
+    );
+    const link = container.querySelector('a[href="/warranties/new?transactionId=77"]');
+    expect(link).toBeTruthy();
+    expect(link!.textContent).toMatch(/create warranty/i);
+  });
+
+  it('hides the action on a transfer row (MUST-11.2)', () => {
+    const { container } = render(
+      <TransactionsClient
+        page={pageWithRow({ id: 78, isTransfer: true })}
+        accounts={[]}
+        categories={[]}
+        people={[]}
+        today="2026-08-16"
+      />,
+    );
+    expect(container.querySelector('a[href="/warranties/new?transactionId=78"]')).toBeNull();
+  });
+
+  it('carries no field values in the URL — prefill is computed server-side (MUST-11.3)', () => {
+    const { container } = render(
+      <TransactionsClient
+        page={pageWithRow({ id: 79, amountCents: -129999, rawDescription: 'HOME DEPOT' })}
+        accounts={[]}
+        categories={[]}
+        people={[]}
+        today="2026-08-16"
+      />,
+    );
+    const href = container.querySelector('a[href^="/warranties/new"]')!.getAttribute('href')!;
+    expect(href).toBe('/warranties/new?transactionId=79');
+    expect(href).not.toContain('amount');
+    expect(href).not.toContain('vendor');
+    expect(href).not.toContain('date');
+  });
+});
