@@ -1,0 +1,9 @@
+node_modules
+.next
+.git
+.tmp-data
+docs
+coverage
+*.db
+*.db-wal
+*.db-shm
