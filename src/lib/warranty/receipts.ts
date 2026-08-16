@@ -54,6 +54,23 @@ export function newStoredFilename(mime: ReceiptMime): string {
   return `${randomUUID()}.${extForMime(mime)}`;
 }
 
+/**
+ * adoptReceiptFile's other half of the double guard: resolveReceiptPath locks down
+ * the *destination*, this locks down the *source*. Without it, adoptReceiptFile would
+ * renameSync() any path a caller passed it — e.g. ${DATA_DIR}/budget.db — into receipts/
+ * under a fresh, innocuous-looking UUID name, making it downloadable as a "receipt".
+ * Only a file that already lives directly inside the staging directory (${DATA_DIR}/tmp,
+ * where writeReceiptFile and the staged-upload flow both put files) may be adopted.
+ */
+function resolveStagedSourcePath(sourcePath: string): string {
+  const resolvedTmpDir = path.resolve(receiptTempDir());
+  const resolvedSource = path.resolve(sourcePath);
+  if (path.dirname(resolvedSource) !== resolvedTmpDir) {
+    throw new ReceiptStorageError('Refusing to adopt a file outside the staging directory');
+  }
+  return resolvedSource;
+}
+
 export function sha256Bytes(buf: Buffer): string {
   return createHash('sha256').update(buf).digest('hex');
 }
@@ -78,13 +95,29 @@ export function writeReceiptFile(buf: Buffer, mime: ReceiptMime): string {
 /**
  * Renames an already-written file into receipts/. `reuseName` is used only by
  * writeReceiptFile, which has already generated the stored name for the tmp path.
+ *
+ * The source must already live directly inside the staging directory (enforced by
+ * resolveStagedSourcePath) — this is the load-bearing guard against adopting an
+ * arbitrary path on the same volume. The destination goes through the same
+ * STORED_NAME_RE + resolved-path-prefix double guard as every other receipt path
+ * (resolveReceiptPath).
+ *
+ * renameSync() preserves the source file's mtime, so a staged file that has been
+ * sitting around for a while (close to, or past, ORPHAN_MIN_AGE_MS) would otherwise
+ * become instantly eligible for purgeOrphanReceipts() the moment it lands in
+ * receipts/ — a silent receipt loss if the DB insert that makes it "known" hasn't
+ * committed yet by the time a sweep runs. Stamping the mtime to "now" on adoption
+ * makes mtime mean "adopted at", not "originally written at", closing that window.
  */
 export function adoptReceiptFile(sourcePath: string, mime: ReceiptMime, reuseName?: string): string {
+  const resolvedSource = resolveStagedSourcePath(sourcePath);
   const dir = receiptsDir();
   fs.mkdirSync(dir, { recursive: true });
   const storedFilename = reuseName ?? newStoredFilename(mime);
   const target = resolveReceiptPath(storedFilename);
-  fs.renameSync(sourcePath, target);
+  fs.renameSync(resolvedSource, target);
+  const now = new Date();
+  fs.utimesSync(target, now, now);
   return storedFilename;
 }
 
@@ -117,6 +150,15 @@ export function deleteReceiptFile(storedFilename: string): void {
  * MUST-4.9: files in receipts/ with no matching stored_filename row AND an mtime older
  * than 24 h are removed. Entries that do not match STORED_NAME_RE are left alone — this
  * sweep deletes only files it could itself have created.
+ *
+ * `known` should be the set of stored_filename values currently in the database,
+ * queried by the caller as close as possible to — and, where the caller controls
+ * ordering, strictly AFTER — this function's directory read. writeReceiptFile's write
+ * order (write the file, then insert its DB row; MUST-4.7) means a just-adopted file
+ * can briefly exist on disk before its row commits. Reading `known` too early widens
+ * that race window. adoptReceiptFile() closes the same window from the other side by
+ * stamping the file's mtime to "now" on adoption, so a file caught mid-insert is still
+ * protected by the age check even if it isn't (yet) in `known`.
  */
 export function purgeOrphanReceipts(
   known: Set<string>,
@@ -136,6 +178,8 @@ export function purgeOrphanReceipts(
     } catch {
       continue;
     }
+    // A directory can't be a receipt; never let one abort the nightly sweep (Ruling P14).
+    if (!stats.isFile()) continue;
     if (now.getTime() - stats.mtimeMs <= olderThanMs) continue;
     fs.rmSync(file, { force: true });
     removed += 1;

@@ -22,6 +22,7 @@ import {
   sha256FileSync,
   writeReceiptFile,
 } from '@/lib/warranty/receipts';
+import { sniffReceiptType } from '@/lib/warranty/sniff';
 
 let dataDir: string;
 let originalDataDir: string | undefined;
@@ -95,6 +96,20 @@ describe('newStoredFilename', () => {
     expect(newStoredFilename('application/pdf').endsWith('.pdf')).toBe(true);
     expect(STORED_NAME_RE.test(newStoredFilename('image/png'))).toBe(true);
   });
+
+  // Cross-module: the stored name always reflects what sniffReceiptType() decided from
+  // the bytes, never a client-claimed filename or extension — a ".jpg"-named upload
+  // whose content is actually a PNG must still be stored as .png.
+  it('stores a .jpg-claimed upload under .png when the bytes sniff as PNG', () => {
+    const pngBytes = Buffer.concat([
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+      Buffer.alloc(8),
+    ]);
+    const mime = sniffReceiptType(pngBytes);
+    expect(mime).toBe('image/png');
+    const name = newStoredFilename(mime!);
+    expect(name.endsWith('.png')).toBe(true);
+  });
 });
 
 describe('sha256', () => {
@@ -140,6 +155,30 @@ describe('writeReceiptFile / adoptReceiptFile', () => {
     expect(receiptFileExists(name)).toBe(false);
     expect(receiptFileSize(name)).toBeNull();
   });
+
+  it('refuses to adopt a source file outside the staging directory, moving nothing', () => {
+    const outside = path.join(dataDir, 'not-staged.pdf');
+    fs.writeFileSync(outside, Buffer.from('%PDF-1.7\n'));
+    expect(() => adoptReceiptFile(outside, 'application/pdf')).toThrowError(ReceiptStorageError);
+    // Nothing moved: the source is untouched and nothing landed in receipts/.
+    expect(fs.existsSync(outside)).toBe(true);
+    expect(fs.existsSync(receiptsDir()) ? fs.readdirSync(receiptsDir()) : []).toEqual([]);
+  });
+
+  it('refreshes mtime on adoption so a backdated staged file is not immediately orphan-swept', () => {
+    fs.mkdirSync(receiptTempDir(), { recursive: true });
+    const staged = path.join(receiptTempDir(), `${crypto.randomUUID()}.jpg`);
+    fs.writeFileSync(staged, Buffer.from('staged bytes'));
+    const twoDaysAgo = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    fs.utimesSync(staged, twoDaysAgo, twoDaysAgo);
+
+    const name = adoptReceiptFile(staged, 'image/jpeg');
+    // Simulates the DB insert not having committed yet: `known` is empty, so only the
+    // mtime refresh on adoption protects this file from an immediate sweep.
+    const removed = purgeOrphanReceipts(new Set());
+    expect(removed).toBe(0);
+    expect(receiptFileExists(name)).toBe(true);
+  });
 });
 
 describe('purgeOrphanReceipts (MUST-4.9)', () => {
@@ -172,5 +211,19 @@ describe('purgeOrphanReceipts (MUST-4.9)', () => {
 
   it('returns 0 when the directory does not exist yet', () => {
     expect(purgeOrphanReceipts(new Set())).toBe(0);
+  });
+
+  it('skips a directory entry that happens to match STORED_NAME_RE rather than crashing the sweep (Ruling P14)', () => {
+    fs.mkdirSync(receiptsDir(), { recursive: true });
+    const weirdDirName = `${crypto.randomUUID()}.jpg`;
+    fs.mkdirSync(path.join(receiptsDir(), weirdDirName));
+    const longAgo = new Date('2020-01-01T00:00:00.000Z');
+    fs.utimesSync(path.join(receiptsDir(), weirdDirName), longAgo, longAgo);
+    let removed = -1;
+    expect(() => {
+      removed = purgeOrphanReceipts(new Set(), undefined, new Date('2026-08-16T12:00:00.000Z'));
+    }).not.toThrow();
+    expect(removed).toBe(0);
+    expect(fs.existsSync(path.join(receiptsDir(), weirdDirName))).toBe(true);
   });
 });
