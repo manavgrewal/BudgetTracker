@@ -12,6 +12,8 @@ export interface UserRecord {
   role: 'admin' | 'member';
   totpEnabled: boolean;
   isActive: boolean;
+  /** Spec v1.5: true until the user completes the forced /change-password step. */
+  mustChangePassword: boolean;
   createdAt: string;
 }
 
@@ -45,6 +47,7 @@ const PUBLIC_COLUMNS = {
   role: users.role,
   totpEnabled: users.totpEnabled,
   isActive: users.isActive,
+  mustChangePassword: users.mustChangePassword,
   createdAt: users.createdAt,
 } as const;
 
@@ -84,11 +87,19 @@ export function usernameTaken(username: string): boolean {
   return findUserByUsername(username) !== null;
 }
 
+/**
+ * `mustChangePassword` is an explicit argument rather than a default, because the two
+ * callers want opposite things: the admin user manager hands out a password the admin
+ * knows (so the new user must replace it — spec v1.5), while any programmatic caller
+ * that already owns the password should not gate the account. It is deliberately NOT
+ * part of createUserSchema: it is never read from a form field.
+ */
 export async function createUser(input: {
   name: string;
   username: string;
   password: string;
   role: 'admin' | 'member';
+  mustChangePassword?: boolean;
 }): Promise<UserRecord> {
   const parsed = createUserSchema.parse(input);
   if (usernameTaken(parsed.username)) {
@@ -105,6 +116,7 @@ export async function createUser(input: {
       totpSecretEncrypted: null,
       totpEnabled: false,
       isActive: true,
+      mustChangePassword: input.mustChangePassword === true,
       createdAt: nowIso(),
     })
     .returning(PUBLIC_COLUMNS)
@@ -139,6 +151,9 @@ export async function createFirstAdmin(input: { name: string; username: string; 
         totpSecretEncrypted: null,
         totpEnabled: false,
         isActive: true,
+        // The setup wizard's admin chose this password themselves — nobody else
+        // knows it, so there is nothing for a forced change to protect against.
+        mustChangePassword: false,
         createdAt: nowIso(),
       })
       .returning(PUBLIC_COLUMNS)
@@ -146,10 +161,25 @@ export async function createFirstAdmin(input: { name: string; username: string; 
   });
 }
 
+/**
+ * Writes the hash only. The must_change_password flag is deliberately untouched here:
+ * an admin reset SETS it, a forced change CLEARS it, and a self-service change from
+ * Settings leaves it alone — three different answers, so each caller states its own.
+ */
 export async function setUserPassword(userId: number, newPassword: string): Promise<void> {
   const password = passwordSchema.parse(newPassword);
   const passwordHash = await hashPassword(password);
   getDb().update(users).set({ passwordHash }).where(eq(users.id, userId)).run();
+}
+
+/** Spec v1.5: raised by admin create / admin reset, lowered by the forced change form. */
+export function setMustChangePassword(userId: number, value: boolean): void {
+  getDb().update(users).set({ mustChangePassword: value }).where(eq(users.id, userId)).run();
+}
+
+export function mustChangePassword(userId: number): boolean {
+  const row = getDb().select({ flag: users.mustChangePassword }).from(users).where(eq(users.id, userId)).get();
+  return row?.flag === true;
 }
 
 /** Deactivate, never delete — attribution history must survive. */

@@ -248,6 +248,19 @@ describe('copyBudgetsFromPreviousMonth', () => {
     expect(resolveBudget('household', null, groceries, '2026-03')).toBe(80000);
   });
 
+  it('copies an ARCHIVED category’s limit too, matching what budgetProgress surfaces', () => {
+    const { db, sqlite } = setup();
+    const kids = categoryIdByName(db, 'Groceries');
+    upsertBudget({ scope: 'household', userId: null, categoryId: kids, month: '2026-02', amountCents: 30000 });
+    sqlite.prepare('update categories set is_archived = 1 where id = ?').run(kids);
+
+    // budgetProgress keeps rendering an archived category that still carries spend, so
+    // dropping its limit here would have silently reclassified budgeted spend as
+    // unbudgeted the month after somebody archived it.
+    expect(copyBudgetsFromPreviousMonth('2026-03', 'household', null)).toBe(1);
+    expect(resolveBudget('household', null, kids, '2026-03')).toBe(30000);
+  });
+
   it('does not copy a cleared budget', () => {
     const { db } = setup();
     const groceries = categoryIdByName(db, 'Groceries');

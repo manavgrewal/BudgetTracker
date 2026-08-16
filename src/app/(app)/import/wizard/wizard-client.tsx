@@ -17,6 +17,12 @@ export function WizardClient({ starterMapping }: { starterMapping: ImportMapping
   const [error, setError] = useState<string | null>(null);
   const [state, save] = useActionState(saveWizardProfileAction, initial);
 
+  // This posts a file and stages it server-side, so a double-submit stages the same
+  // sample twice and orphans the second staging id. The guard is SubmitButton's
+  // useFormStatus rather than a local `busy` flag on purpose: React 19 holds state
+  // updates made inside an async form action until that action settles, so a
+  // setBusy(true) at the top of this function would not render until it is already
+  // too late to matter. useFormStatus reads the form's real pending state.
   async function upload(formData: FormData) {
     setError(null);
     const response = await fetch('/api/import/raw-preview', { method: 'POST', body: formData });
@@ -42,7 +48,7 @@ export function WizardClient({ starterMapping }: { starterMapping: ImportMapping
 
       <form action={upload} className="flex items-end gap-3 text-sm">
         <input type="file" name="file" accept=".csv,text/csv" required />
-        <button type="submit" className="rounded bg-slate-900 px-3 py-2 text-white dark:bg-slate-100 dark:text-slate-900">Show the first rows</button>
+        <SubmitButton>Show the first rows</SubmitButton>
       </form>
 
       {rows ? (

@@ -249,3 +249,55 @@ describe('database schema', () => {
     again.sqlite.close();
   });
 });
+
+// Migration 0001 (spec v1.5). These guard the hand-maintained regime specifically:
+// nothing regenerates this SQL, so "both files ran, in order, exactly once" is only
+// true as long as a test says so.
+describe('migration 0001_add_must_change_password', () => {
+  const appliedTags = (sqlite: TestDb['sqlite']): number =>
+    (sqlite.prepare('select count(*) as c from __drizzle_migrations').get() as { c: number }).c;
+
+  it('a fresh database runs BOTH migrations, in journal order', () => {
+    current = createTestDb();
+    expect(appliedTags(current.sqlite)).toBe(2);
+
+    const columns = current.sqlite.prepare('pragma table_info(users)').all() as {
+      name: string;
+      type: string;
+      notnull: number;
+      dflt_value: string | null;
+    }[];
+    const flag = columns.find((column) => column.name === 'must_change_password');
+    expect(flag).toBeDefined();
+    expect(flag?.type.toLowerCase()).toBe('integer');
+    expect(flag?.notnull).toBe(1);
+    expect(String(flag?.dflt_value)).toBe('0');
+  });
+
+  it('defaults existing and new rows to 0 — nobody is retroactively gated', () => {
+    current = createTestDb();
+    current.sqlite
+      .prepare(
+        "insert into users (name, username, password_hash, role, created_at) values ('A','a','h','admin','2026-01-01T00:00:00.000Z')",
+      )
+      .run();
+    const row = current.sqlite.prepare('select must_change_password as flag from users').get() as { flag: number };
+    expect(row.flag).toBe(0);
+  });
+
+  it('reopening an already-migrated file applies 0001 exactly once', () => {
+    current = createTestDb();
+    const file = current.path;
+    current.sqlite.close();
+
+    const again = openDatabase(file);
+    // Still two recorded migrations, and the ALTER TABLE did not run a second time
+    // (a repeat would throw "duplicate column name: must_change_password").
+    expect(appliedTags(again.sqlite)).toBe(2);
+    const flagColumns = (again.sqlite.prepare('pragma table_info(users)').all() as { name: string }[]).filter(
+      (column) => column.name === 'must_change_password',
+    );
+    expect(flagColumns).toHaveLength(1);
+    again.sqlite.close();
+  });
+});

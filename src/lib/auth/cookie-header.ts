@@ -1,17 +1,12 @@
 import { SESSION_COOKIE_NAME } from './session-constants';
 
-export function buildSessionCookieHeader(token: string, expiresAt: string, secure: boolean): string {
-  const parts = [
-    `${SESSION_COOKIE_NAME}=${token}`,
-    'Path=/',
-    'HttpOnly',
-    'SameSite=Lax',
-    `Expires=${new Date(expiresAt).toUTCString()}`,
-  ];
-  if (secure) parts.push('Secure');
-  return parts.join('; ');
-}
-
+/**
+ * Only the CLEARED variant lives here. Setting the cookie is done through
+ * next/headers' cookie store (setSessionCookie in session.ts); the one place that
+ * needs a raw Set-Cookie string is the logout route handler, which builds its own
+ * Response. A hand-rolled "set" builder existed alongside this and had no callers —
+ * two ways to spell the same cookie is exactly how the two drift apart.
+ */
 export function buildClearedSessionCookieHeader(): string {
   return `${SESSION_COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`;
 }

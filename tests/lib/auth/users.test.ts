@@ -3,11 +3,14 @@ import { createTestDb, type TestDb } from '../../helpers/db';
 import {
   countActiveAdmins,
   countUsers,
+  createFirstAdmin,
   createUser,
   createUserSchema,
   findUserById,
   findUserByUsername,
   listUsers,
+  mustChangePassword,
+  setMustChangePassword,
   setUserActive,
   setUserPassword,
   usernameSchema,
@@ -111,5 +114,58 @@ describe('user lifecycle', () => {
     current = createTestDb();
     expect(findUserByUsername('nobody')).toBeNull();
     expect(findUserById(4242)).toBeNull();
+  });
+});
+
+describe('must_change_password (spec v1.5)', () => {
+  it('defaults to false — createUser only raises the flag when asked to', async () => {
+    current = createTestDb();
+    const bob = await createUser({ name: 'Bob', username: 'bob', password: 'correct horse battery', role: 'member' });
+    expect(bob.mustChangePassword).toBe(false);
+    expect(mustChangePassword(bob.id)).toBe(false);
+  });
+
+  it('raises the flag when the caller asks (the admin user manager does)', async () => {
+    current = createTestDb();
+    const bob = await createUser({
+      name: 'Bob',
+      username: 'bob',
+      password: 'correct horse battery',
+      role: 'member',
+      mustChangePassword: true,
+    });
+    expect(bob.mustChangePassword).toBe(true);
+    expect(findUserById(bob.id)?.mustChangePassword).toBe(true);
+  });
+
+  it('never raises it for the setup wizard admin — they chose their own password', async () => {
+    current = createTestDb();
+    const admin = await createFirstAdmin({ name: 'Alice', username: 'alice', password: 'correct horse battery' });
+    expect(admin.mustChangePassword).toBe(false);
+    expect(mustChangePassword(admin.id)).toBe(false);
+  });
+
+  it('setUserPassword on its own leaves the flag exactly as it was', async () => {
+    current = createTestDb();
+    const bob = await createUser({
+      name: 'Bob',
+      username: 'bob',
+      password: 'correct horse battery',
+      role: 'member',
+      mustChangePassword: true,
+    });
+    await setUserPassword(bob.id, 'a whole new password');
+    // Still set: only the forced-change action clears it, and only the admin
+    // actions set it. A self-service change from Settings must not move it either way.
+    expect(mustChangePassword(bob.id)).toBe(true);
+  });
+
+  it('setMustChangePassword raises and lowers it', async () => {
+    current = createTestDb();
+    const bob = await createUser({ name: 'Bob', username: 'bob', password: 'correct horse battery', role: 'member' });
+    setMustChangePassword(bob.id, true);
+    expect(mustChangePassword(bob.id)).toBe(true);
+    setMustChangePassword(bob.id, false);
+    expect(mustChangePassword(bob.id)).toBe(false);
   });
 });

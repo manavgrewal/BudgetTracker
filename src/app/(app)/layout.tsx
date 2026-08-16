@@ -1,6 +1,9 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { requireUser } from '@/lib/auth/session';
+import { mustChangePassword } from '@/lib/auth/users';
 import { reviewQueueCount } from '@/lib/categorize/engine';
+import { APP_VERSION } from '@/lib/version';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,8 +18,19 @@ const NAV = [
   { href: '/settings', label: 'Settings' },
 ];
 
+/**
+ * Forced password change (spec v1.5) is gated HERE — at the page layer only, on purpose.
+ *
+ * /api/* routes keep working normally under the same session. The flag's threat model is
+ * "an admin knows this password", not "this session is compromised": it is a UX nudge to
+ * replace an admin-issued secret, not a session invalidation. An admin who wanted the
+ * session dead already has Deactivate and Reset password (both of which really do destroy
+ * every session). Gating the APIs too would buy nothing against that threat while breaking
+ * the logout POST and every in-flight fetch for no security gain.
+ */
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const user = await requireUser();
+  if (mustChangePassword(user.id)) redirect('/change-password');
   const reviewCount = reviewQueueCount();
   return (
     <div className="min-h-screen">
@@ -40,6 +54,11 @@ export default async function AppLayout({ children }: { children: React.ReactNod
         </nav>
       </header>
       <main className="mx-auto max-w-6xl px-4 py-6">{children}</main>
+      {/* Which build am I looking at? — the first question of any support conversation.
+          Settings → About has the same number plus the full revision log. */}
+      <footer className="mx-auto max-w-6xl px-4 pb-6 text-xs text-slate-500 dark:text-slate-400">
+        Budget Tracker v{APP_VERSION} · <Link className="underline" href="/settings">what&rsquo;s new</Link>
+      </footer>
     </div>
   );
 }

@@ -8,7 +8,6 @@ import { passwordSchema, verifyPassword } from '@/lib/auth/password';
 import { requireUser } from '@/lib/auth/session';
 import {
   clearTotpEnrollment,
-  countUnusedRecoveryCodes,
   decryptTotpSecret,
   enableTotpForUser,
   encryptTotpSecret,
@@ -130,9 +129,4 @@ export async function disableTotpAction(): Promise<ProfileFormState> {
   await clearPendingTotpSecret();
   revalidatePath('/settings');
   return { message: 'Two-factor authentication is off.' };
-}
-
-export async function remainingRecoveryCodes(): Promise<number> {
-  const user = await requireUser();
-  return countUnusedRecoveryCodes(user.id);
 }

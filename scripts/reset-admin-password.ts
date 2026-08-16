@@ -66,7 +66,22 @@ export async function resetPassword(input: {
   }
 
   const username = input.username.trim().toLowerCase();
-  const db = new Database(input.dbPath);
+
+  // better-sqlite3 CREATES a database when the file is missing. For a rescue tool that
+  // is the worst possible default: a typo in DATA_DIR (or running outside the container)
+  // silently produced an empty database, and the script then reported "No user named
+  // alice. Known users: (none)" — which reads as "the account is gone" rather than
+  // "you are looking at the wrong file". It also littered a stray budget.db on disk.
+  let db: Database.Database;
+  try {
+    db = new Database(input.dbPath, { fileMustExist: true });
+  } catch {
+    throw new Error(
+      `No database at "${input.dbPath}". Set BUDGET_DB_PATH or DATA_DIR to the right location, ` +
+        'or run this inside the container (docker compose exec budget-tracker ...) where /data is mounted.',
+    );
+  }
+
   try {
     db.pragma('foreign_keys = ON');
     db.pragma('busy_timeout = 5000');

@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState } from 'react';
+import { useActionState, useState } from 'react';
 import { BudgetProgressBar } from '@/components/BudgetProgressBar';
 import { FormError } from '@/components/FormError';
 import { addMonths } from '@/lib/dates';
@@ -17,6 +17,7 @@ function Row({
   userId,
   month,
   action,
+  editable,
 }: {
   row: BudgetRow;
   depth: number;
@@ -24,6 +25,7 @@ function Row({
   userId: number | null;
   month: string;
   action: (formData: FormData) => void;
+  editable: boolean;
 }) {
   return (
     <>
@@ -33,10 +35,15 @@ function Row({
           {row.isArchived ? <span className="ml-1 text-xs text-slate-500 dark:text-slate-400">(archived)</span> : null}
         </td>
         <td className="w-40">
-          {row.isArchived ? (
-            // Archived categories can no longer be actively budgeted (spec section 3) —
-            // this row is a read-only record of the spend it still rolled up this month.
-            <span className="text-xs text-slate-500 dark:text-slate-400">read-only</span>
+          {row.isArchived || !editable ? (
+            // Two reasons a limit is not editable here. Archived categories can no longer
+            // be actively budgeted (spec section 3) — the row is a read-only record of the
+            // spend it still rolled up this month. And a non-admin looking at someone
+            // else's personal section may only read it: setLimitAction rejects the write,
+            // so rendering an input that always fails is a promise the server won't keep.
+            <span className="text-xs text-slate-500 dark:text-slate-400">
+              {row.limitCents === null ? 'read-only' : `${formatCents(row.limitCents)} · read-only`}
+            </span>
           ) : (
             <form action={action} className="flex items-center gap-1">
               <input type="hidden" name="scope" value={scope} />
@@ -60,7 +67,16 @@ function Row({
         </td>
       </tr>
       {row.children.map((child) => (
-        <Row key={child.categoryId} row={child} depth={depth + 1} scope={scope} userId={userId} month={month} action={action} />
+        <Row
+          key={child.categoryId}
+          row={child}
+          depth={depth + 1}
+          scope={scope}
+          userId={userId}
+          month={month}
+          action={action}
+          editable={editable}
+        />
       ))}
     </>
   );
@@ -69,18 +85,40 @@ function Row({
 export function BudgetsClient({
   month,
   currentUserId,
+  currentUserIsAdmin = false,
   household,
   householdTotals,
   personal,
 }: {
   month: string;
   currentUserId: number;
+  currentUserIsAdmin?: boolean;
   household: BudgetRow[];
   householdTotals: { budgetedLimitCents: number; budgetedSpentCents: number; totalSpentCents: number };
   personal: { userId: number; name: string; rows: BudgetRow[] }[];
 }) {
-  const [state, action] = useActionState(setLimitAction, initial);
-  const [copyState, copyAction] = useActionState(copyPreviousMonthAction, initial);
+  const [limitState, dispatchLimit] = useActionState(setLimitAction, initial);
+  const [copyState, dispatchCopy] = useActionState(copyPreviousMonthAction, initial);
+
+  // ONE banner, showing only the most recent submission. Two independent action states
+  // rendered side by side meant a success message from a save sat next to a fresh error
+  // from a copy (and the other way round), so the page reported two contradictory
+  // outcomes at once. Remembering which action fired last is enough to keep the banner
+  // honest without merging the two server actions.
+  const [latest, setLatest] = useState<'limit' | 'copy' | null>(null);
+  const action = (formData: FormData) => {
+    setLatest('limit');
+    dispatchLimit(formData);
+  };
+  const copyAction = (formData: FormData) => {
+    setLatest('copy');
+    dispatchCopy(formData);
+  };
+  const banner: BudgetActionState = latest === 'limit' ? limitState : latest === 'copy' ? copyState : initial;
+
+  // Members may edit household budgets and their OWN personal budgets; admins may edit
+  // anyone's (mirrors setLimitAction / copyPreviousMonthAction, spec section 6).
+  const canEditPersonal = (userId: number) => currentUserIsAdmin || userId === currentUserId;
 
   return (
     <div className="flex flex-col gap-8">
@@ -90,10 +128,8 @@ export function BudgetsClient({
         <strong className="text-sm">{month}</strong>
         <a className="text-sm underline" href={`/budgets?month=${addMonths(month, 1)}`}>{addMonths(month, 1)} →</a>
       </div>
-      <FormError message={state.error ?? copyState.error} />
-      {state.message ?? copyState.message ? (
-        <p className="text-sm text-green-700 dark:text-green-400">{state.message ?? copyState.message}</p>
-      ) : null}
+      <FormError message={banner.error} />
+      {banner.message ? <p className="text-sm text-green-700 dark:text-green-400">{banner.message}</p> : null}
 
       <section className="flex flex-col gap-3">
         <div className="flex items-center justify-between">
@@ -132,7 +168,8 @@ export function BudgetsClient({
           </thead>
           <tbody>
             {household.map((row) => (
-              <Row key={row.categoryId} row={row} depth={0} scope="household" userId={null} month={month} action={action} />
+              // Household budgets are editable by every member (spec section 6).
+              <Row key={row.categoryId} row={row} depth={0} scope="household" userId={null} month={month} action={action} editable />
             ))}
           </tbody>
         </table>
@@ -141,13 +178,23 @@ export function BudgetsClient({
       {personal.map((person) => (
         <section key={person.userId} className="flex flex-col gap-3">
           <div className="flex items-center justify-between">
-            <h2 className="font-medium">{person.name}{person.userId === currentUserId ? ' (you)' : ''}</h2>
-            <form action={copyAction}>
-              <input type="hidden" name="scope" value="personal" />
-              <input type="hidden" name="userId" value={person.userId} />
-              <input type="hidden" name="month" value={month} />
-              <button type="submit" className="rounded border px-2 py-1 text-xs dark:border-slate-700">Copy previous month</button>
-            </form>
+            <h2 className="font-medium">
+              {person.name}
+              {person.userId === currentUserId ? ' (you)' : ''}
+              {canEditPersonal(person.userId) ? null : (
+                <span className="ml-2 text-xs font-normal text-slate-500 dark:text-slate-400">read-only</span>
+              )}
+            </h2>
+            {/* Same ownership rule as the limit inputs: no copy button where the copy
+                would be refused server-side by copyPreviousMonthAction. */}
+            {canEditPersonal(person.userId) ? (
+              <form action={copyAction}>
+                <input type="hidden" name="scope" value="personal" />
+                <input type="hidden" name="userId" value={person.userId} />
+                <input type="hidden" name="month" value={month} />
+                <button type="submit" className="rounded border px-2 py-1 text-xs dark:border-slate-700">Copy previous month</button>
+              </form>
+            ) : null}
           </div>
           <table className="w-full text-left text-sm">
             <thead>
@@ -161,7 +208,16 @@ export function BudgetsClient({
             </thead>
             <tbody>
               {person.rows.map((row) => (
-                <Row key={row.categoryId} row={row} depth={0} scope="personal" userId={person.userId} month={month} action={action} />
+                <Row
+                  key={row.categoryId}
+                  row={row}
+                  depth={0}
+                  scope="personal"
+                  userId={person.userId}
+                  month={month}
+                  action={action}
+                  editable={canEditPersonal(person.userId)}
+                />
               ))}
             </tbody>
           </table>

@@ -31,6 +31,12 @@ describe('Dockerfile', () => {
     expect(dockerfile).toMatch(/COPY .*\/app\/drizzle \.\/drizzle/);
   });
 
+  it('copies CHANGELOG.md, which Settings → About reads from the working directory', () => {
+    // Without this the About panel silently degrades to "no changelog available" in the
+    // container only — the exact class of bug that never shows up in dev.
+    expect(dockerfile).toMatch(/COPY .*\/app\/CHANGELOG\.md \.\/CHANGELOG\.md/);
+  });
+
   it('runs as a non-root user and declares the data volume', () => {
     expect(dockerfile).toMatch(/^USER node$/m);
     expect(dockerfile).toContain('VOLUME ["/data"]');

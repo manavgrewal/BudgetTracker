@@ -21,6 +21,12 @@ export const users = sqliteTable(
     totpEnabled: integer('totp_enabled', { mode: 'boolean' }).notNull().default(false),
     isActive: integer('is_active', { mode: 'boolean' }).notNull().default(true),
     createdAt: text('created_at').notNull(),
+    /**
+     * Mirrors drizzle/0001_add_must_change_password.sql. Declared last because
+     * ALTER TABLE ADD COLUMN appends physically — keep this in the same order as
+     * the DDL so the mirror stays readable against `pragma table_info(users)`.
+     */
+    mustChangePassword: integer('must_change_password', { mode: 'boolean' }).notNull().default(false),
   },
   (t) => [uniqueIndex('users_username_uq').on(t.username)],
 );

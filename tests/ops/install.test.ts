@@ -154,6 +154,14 @@ describe('update.sh — manual-only, semver-safe, self-rolling-back', () => {
     expect(result.stdout).toMatch(/lockfile|Dependencies/i);
   });
 
+  it('reads the real version out of package.json, the same field the app reports', () => {
+    // app_version() greps package.json with sed. If that field ever moves or the parse
+    // drifts, this catches it — the alternative is an update log that says "unknown".
+    const version = (JSON.parse(read('package.json')) as { version: string }).version;
+    expect(result.stdout).toContain(`Before — app version ${version}`);
+    expect(result.stdout).toContain(`App version: ${version} -> ${version}`);
+  });
+
   it('states plainly that it is manual only', () => {
     expect(result.stdout).toMatch(/manual only/i);
     expect(result.stdout).toMatch(/no scheduler/i);
@@ -497,6 +505,21 @@ describe('INSTALL.md', () => {
   it('documents the rescue script invocation', () => {
     expect(install).toContain('reset-admin-password.ts');
     expect(install).toContain('docker compose exec');
+  });
+
+  it('explains that backups may live on a NAS mount but the database may not', () => {
+    expect(install).toContain('Keeping backups on a separate NAS');
+    // The rule has to be stated as a rule, not implied by an example.
+    expect(install).toMatch(/must stay on local disk/i);
+    expect(install).toMatch(/NFS/);
+    expect(install).toMatch(/SMB/);
+    expect(install).toContain('VACUUM INTO');
+    // Both offered patterns: the compose second-volume mapping and the rsync job.
+    expect(install).toContain('/mnt/nas/budget-backups:/data/backups');
+    expect(install).toContain('./data:/data');
+    expect(install).toMatch(/rsync/);
+    // ...and the FAQ answers the same question where people will actually look.
+    expect(install).toMatch(/### Can I keep the data on my other NAS/);
   });
 
   it('gives no-SSH Synology users a way to run the rescue script (m5)', () => {

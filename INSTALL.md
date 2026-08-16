@@ -135,8 +135,9 @@ something valid on your system, paste in your SECRET_KEY, and start it.
 3. The wizard then offers an optional **"add your bank accounts"** step. Skip it if you like —
    **Settings → Bank accounts** does the same thing later — but every CSV import has to land in
    an account, so this is the one thing worth doing straight away.
-4. **Settings → Users** — add the rest of the household with temporary passwords. They change
-   them at first sign-in.
+4. **Settings → Users** — add the rest of the household with temporary passwords. The app forces
+   each of them to pick their own password at first sign-in; until they do, the only pages they
+   can reach are that screen and sign-out. An admin **Reset password** re-arms the same prompt.
 5. **Import** — upload a bank CSV, check the preview, commit.
 6. **Recommended:** put HTTPS in front of it (reverse proxy or Tailscale) and set `TRUST_PROXY=1`
    in `.env`. See the README's transport-security section for why this matters on shared Wi-Fi.
@@ -228,6 +229,63 @@ docker compose up -d
 
 Deleting the `-wal` and `-shm` files is not optional: SQLite runs in WAL mode and would otherwise
 replay the old write-ahead log on top of the database you just restored.
+
+## Keeping backups on a separate NAS
+
+A backup that lives on the same disk as the database is not a backup. You can send the nightly
+copies to another machine — but only the copies.
+
+**The database itself must stay on local disk.** Do not put `data/budget.db` on an NFS or SMB
+mount. SQLite in WAL mode relies on shared memory (`-shm`) and on POSIX advisory locks behaving
+correctly; network filesystems implement both inconsistently, and the documented result is a
+corrupted database, not a slow one. This is not a performance caveat you can accept — it is a
+data-loss one. The same applies to a Synology shared folder mounted from another NAS, to an
+iSCSI-mounted-then-reshared volume, and to Docker volumes whose driver is NFS.
+
+**The backups directory is safe to put on a network mount.** `Settings → Backups` writes with
+SQLite's `VACUUM INTO`, which produces a complete, standalone, already-consistent `.db` file and
+then closes it. Nothing keeps it open, nothing locks it, and nothing writes to it again — so the
+usual network-filesystem hazards do not apply.
+
+### Option A — mount the NAS share at `/data/backups`
+
+Mount the remote share on the host first (`/etc/fstab`, or DSM → Control Panel → Shared Folder),
+then add a second volume line so `/data` stays local while `/data/backups` does not:
+
+```yaml
+services:
+  budget-tracker:
+    volumes:
+      - ./data:/data                              # database — LOCAL DISK, always
+      - /mnt/nas/budget-backups:/data/backups     # backups — network mount is fine
+```
+
+Order matters to Docker only in that the more specific path wins; `./data:/data` still holds
+`budget.db`. Two things to check after the first night:
+
+- the mount must be writable by UID 1000 (the container runs as `node`). For SMB, mount with
+  `uid=1000,gid=1000`; for NFS, make sure the export is not `root_squash`-ing you into nobody.
+- if the NAS is unreachable at backup time the backup fails and is logged, and the app keeps
+  running normally. That is the intended failure mode — but nothing will tell you, so check
+  `Settings → Backups` occasionally.
+
+### Option B — keep everything local and rsync it out
+
+Safer against a flaky mount, and it keeps a local copy as well. Leave `docker-compose.yml`
+alone and copy the finished files on a schedule:
+
+```bash
+# /etc/cron.d/budget-tracker-offsite  (runs after the app's own nightly backup)
+30 3 * * * youruser rsync -a --delete /srv/budget-tracker/data/backups/ nas:/volume1/backups/budget-tracker/
+```
+
+`rsync` only ever reads files `VACUUM INTO` has already finished writing, so there is no window
+where it can copy a half-written snapshot. On Synology, **Hyper Backup** pointed at the
+`data/backups` folder does the same job with client-side encryption — worth turning on, because
+the backup files themselves are unencrypted SQLite databases.
+
+Whichever option you choose, restore is unchanged: copy the chosen `.db` back over
+`data/budget.db` using the procedure above, `-wal` and `-shm` deletion included.
 
 ---
 
@@ -374,6 +432,15 @@ docker buildx build --platform linux/amd64,linux/arm64 -t budget-tracker:latest 
 The healthcheck runs inside the container against `127.0.0.1:3000`. If you changed the
 container's `PORT`, update the healthcheck to match. Changing only the *host* port with
 `--port` does not affect it.
+
+### Can I keep the data on my other NAS / an NFS or SMB share?
+
+The **backups** yes, the **database** no. `data/budget.db` must stay on local disk — SQLite's
+WAL mode depends on shared memory and POSIX locking that network filesystems get wrong, and the
+failure mode is a corrupted database rather than a slow one. `data/backups` is fine on a network
+mount, because `VACUUM INTO` writes each snapshot as a complete standalone file and then closes
+it. See [Keeping backups on a separate NAS](#keeping-backups-on-a-separate-nas) for a compose
+snippet and an rsync alternative.
 
 ### The build runs out of memory
 

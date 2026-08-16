@@ -5,6 +5,7 @@ import path from 'node:path';
 import { createTestDb, type TestDb } from '../helpers/db';
 import { GET } from '@/app/api/health/route';
 import { setDbForTests } from '@/db/client';
+import { APP_VERSION } from '@/lib/version';
 
 let current: TestDb | null = null;
 afterEach(() => {
@@ -17,10 +18,19 @@ describe('GET /api/health', () => {
     current = createTestDb();
     const response = await GET();
     expect(response.status).toBe(200);
-    const body = (await response.json()) as { status: string; db: string; dataDir: string; time: string };
+    const body = (await response.json()) as {
+      status: string;
+      db: string;
+      dataDir: string;
+      version: string;
+      time: string;
+    };
     expect(body.status).toBe('ok');
     expect(body.db).toBe('ok');
     expect(body.dataDir).toBe('ok');
+    // Pinned against package.json, not a literal — a version bump must not need a test edit.
+    expect(body.version).toBe(APP_VERSION);
+    expect(body.version).toMatch(/^\d+\.\d+\.\d+/);
     expect(Number.isNaN(Date.parse(body.time))).toBe(false);
   });
 
@@ -29,7 +39,10 @@ describe('GET /api/health', () => {
     current.sqlite.close();
     const response = await GET();
     expect(response.status).toBe(503);
-    expect((await response.json()).status).toBe('error');
+    const body = await response.json();
+    expect(body.status).toBe('error');
+    // "Which build is the broken one?" is asked precisely when this returns 503.
+    expect(body.version).toBe(APP_VERSION);
     setDbForTests(null);
   });
 

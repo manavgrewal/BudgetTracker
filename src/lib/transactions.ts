@@ -1,9 +1,9 @@
-import { and, asc, desc, eq, gte, inArray, isNull, like, lte, ne, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray, isNull, lte, ne, or, sql, type SQL } from 'drizzle-orm';
 import { z } from 'zod';
 import { getDb } from '@/db/client';
 import { accounts, categories, transactions, users } from '@/db/schema';
 import { getAccount } from '@/lib/accounts';
-import { confirmCategory, runEngine, setTransferFlag } from '@/lib/categorize/engine';
+import { REVIEW_WHERE, confirmCategory, runEngine, setTransferFlag } from '@/lib/categorize/engine';
 import { normalizeMerchant } from '@/lib/categorize/normalize';
 import { nowIso } from '@/lib/clock';
 import { isIsoDate } from '@/lib/dates';
@@ -96,6 +96,19 @@ function baseQuery() {
     .leftJoin(users, eq(users.id, transactions.attributedUserId));
 }
 
+/**
+ * SQL LIKE gives % and _ wildcard meaning, so a user searching for "50%" was matching
+ * "50" followed by anything, and "_" matched any single character. Neither is a security
+ * hole (the needle is still a bound parameter), but both are silently wrong results.
+ * Escaping them — and the escape character itself, first — with an explicit ESCAPE clause
+ * makes the search literal, which is what a search box in a finance app should be.
+ */
+const LIKE_ESCAPE = '\\';
+
+function escapeLikeNeedle(value: string): string {
+  return value.replace(/[\\%_]/g, (match) => `${LIKE_ESCAPE}${match}`);
+}
+
 function buildWhere(filter: TransactionFilter): SQL | undefined {
   const clauses: SQL[] = [];
   if (typeof filter.accountId === 'number') clauses.push(eq(transactions.accountId, filter.accountId));
@@ -110,12 +123,12 @@ function buildWhere(filter: TransactionFilter): SQL | undefined {
   if (filter.to) clauses.push(lte(transactions.date, filter.to));
 
   if (filter.search && filter.search.trim().length > 0) {
-    const needle = `%${filter.search.trim().toUpperCase()}%`;
+    const needle = `%${escapeLikeNeedle(filter.search.trim().toUpperCase())}%`;
     const clause = or(
-      like(sql`upper(${transactions.rawDescription})`, needle),
-      like(sql`upper(${transactions.normalizedMerchant})`, needle),
+      sql`upper(${transactions.rawDescription}) like ${needle} escape ${LIKE_ESCAPE}`,
+      sql`upper(${transactions.normalizedMerchant}) like ${needle} escape ${LIKE_ESCAPE}`,
       // Search what the user can actually see, too (spec v1.4 display names).
-      like(sql`upper(coalesce(${transactions.displayDescription}, ''))`, needle),
+      sql`upper(coalesce(${transactions.displayDescription}, '')) like ${needle} escape ${LIKE_ESCAPE}`,
     );
     if (clause) clauses.push(clause);
   }
@@ -202,10 +215,19 @@ export function createManualTransaction(input: {
     .returning({ id: transactions.id })
     .get();
 
+  // The engine runs on manual entries too, always — a hand-typed "TD VISA PAYMENT" is
+  // just as much a transfer as an imported one, and rename rules should apply to the
+  // display name either way. Previously a manual entry that arrived WITH a category
+  // skipped the engine entirely, so it could never be flagged as a transfer.
+  //
+  // Order matters: runEngine's eligibility filter only touches rows that are
+  // uncategorized or Bayes-guessed, so it has to see this row before confirmCategory
+  // stamps source='manual' on it. confirmCategory then overwrites whatever the engine
+  // guessed with the user's explicit choice, and never touches is_transfer or the
+  // display columns — so the manual category survives and the transfer flag sticks.
+  runEngine([row.id]);
   if (parsed.categoryId !== null) {
     confirmCategory({ transactionId: row.id, categoryId: parsed.categoryId, userId: input.userId });
-  } else {
-    runEngine([row.id]);
   }
   return row.id;
 }
@@ -243,14 +265,14 @@ export function bulkSetTransfer(ids: number[], isTransfer: boolean, userId: numb
   return changed;
 }
 
+/**
+ * The queue definition itself lives in engine.ts (REVIEW_WHERE) and is imported, not
+ * restated: this function, reviewQueueIds and reviewQueueCount must agree on what
+ * "needs review" means, and a copy here had already been maintained twice.
+ */
 export function listReviewQueue(limit = 100, offset = 0): TransactionRow[] {
   return baseQuery()
-    .where(
-      and(
-        eq(transactions.isTransfer, false),
-        or(isNull(transactions.categoryId), eq(transactions.categorizationSource, 'bayes')),
-      ),
-    )
+    .where(REVIEW_WHERE)
     .orderBy(asc(transactions.date), asc(transactions.id))
     .limit(limit)
     .offset(offset)

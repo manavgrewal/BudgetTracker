@@ -90,6 +90,30 @@ describe('listTransactions', () => {
     expect(listTransactions({ search: 'hortons' }).rows.map((r) => r.id)).toEqual([a]);
   });
 
+  it('treats % and _ in the search box as literal characters, not LIKE wildcards', () => {
+    const { add } = setup();
+    const literal = add({ description: 'CASHBACK 50% BONUS' });
+    const decoy = add({ description: 'CASHBACK 5000 BONUS' });
+    const underscore = add({ description: 'FEE_WAIVED' });
+    const underscoreDecoy = add({ description: 'FEEXWAIVED' });
+
+    // "50%" used to mean "50 followed by anything", which swept up the 5000 row.
+    expect(listTransactions({ search: '50%' }).rows.map((r) => r.id)).toEqual([literal]);
+    expect(listTransactions({ search: '50% ' }).rows.map((r) => r.id)).toEqual([literal]);
+    // "_" used to match any single character, so FEEXWAIVED matched too.
+    expect(listTransactions({ search: 'FEE_' }).rows.map((r) => r.id)).toEqual([underscore]);
+    expect(listTransactions({ search: 'FEE' }).rows.map((r) => r.id).sort()).toEqual([underscore, underscoreDecoy].sort());
+    expect(decoy).toBeGreaterThan(0);
+  });
+
+  it('treats a literal backslash in the search box as a backslash', () => {
+    const { add } = setup();
+    const withSlash = add({ description: 'A\\B STORE' });
+    add({ description: 'AB STORE' });
+    // The escape character itself has to be escaped, or "A\" would consume the next char.
+    expect(listTransactions({ search: 'A\\B' }).rows.map((r) => r.id)).toEqual([withSlash]);
+  });
+
   it('filters uncategorized and unattributed as first-class values', () => {
     const { db, alice, add } = setup();
     const coffee = categoryIdByName(db, 'Coffee');
@@ -168,6 +192,50 @@ describe('createManualTransaction', () => {
     const row = sqlite.prepare('select category_id, categorization_source from transactions where id = ?').get(id) as { category_id: number; categorization_source: string };
     expect(row).toEqual({ category_id: coffee, categorization_source: 'manual' });
     expect(listRules('category').map((r) => r.pattern)).toEqual(['TIM HORTONS']);
+  });
+
+  it('runs transfer detection even when a category was chosen, and keeps that category', () => {
+    const { db, sqlite, alice, joint } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    const id = createManualTransaction({
+      accountId: joint,
+      date: '2026-03-02',
+      description: 'TD VISA PAYMENT',
+      amountCents: 50000,
+      categoryId: coffee,
+      attributedUserId: alice,
+      userId: alice,
+    });
+    const row = sqlite
+      .prepare('select is_transfer, category_id, categorization_source from transactions where id = ?')
+      .get(id) as { is_transfer: number; category_id: number; categorization_source: string };
+    // Previously the engine was skipped entirely whenever a category came in, so a
+    // hand-entered card payment could never be flagged as a transfer.
+    expect(row.is_transfer).toBe(1);
+    // ...and the engine must not have overridden the user's explicit choice.
+    expect(row.category_id).toBe(coffee);
+    expect(row.categorization_source).toBe('manual');
+  });
+
+  it('applies rename rules to a manual entry that arrives with a category', () => {
+    const { db, sqlite, alice, joint } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    upsertRenameRule({ pattern: 'TIM HORTONS', matchType: 'exact', renameTo: 'Morning coffee', userId: alice });
+    const id = createManualTransaction({
+      accountId: joint,
+      date: '2026-03-02',
+      description: 'Tim Hortons',
+      amountCents: -485,
+      categoryId: coffee,
+      attributedUserId: alice,
+      userId: alice,
+    });
+    const row = sqlite
+      .prepare('select display_description, display_source, category_id from transactions where id = ?')
+      .get(id) as { display_description: string | null; display_source: string | null; category_id: number };
+    expect(row.display_description).toBe('Morning coffee');
+    expect(row.display_source).toBe('rename');
+    expect(row.category_id).toBe(coffee);
   });
 
   it('validates its input with zod', () => {

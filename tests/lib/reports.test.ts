@@ -296,6 +296,52 @@ describe('csv export', () => {
     expect(csv).toBe('A,B\r\nsafe,"weird, ""quoted""\nvalue"\r\n');
   });
 
+  it('neutralises spreadsheet formula triggers with a leading apostrophe', () => {
+    const csv = toCsv(
+      [
+        { v: '=SUM(1)' },
+        { v: '+1+1' },
+        { v: '-cmd|calc' },
+        { v: '@import' },
+        { v: '\tleading tab' },
+      ],
+      [{ key: 'v', header: 'V' }],
+    );
+    const lines = csv.trim().split('\r\n');
+    expect(lines[1]).toBe(`'=SUM(1)`);
+    expect(lines[2]).toBe(`'+1+1`);
+    expect(lines[3]).toBe(`'-cmd|calc`);
+    expect(lines[4]).toBe(`'@import`);
+    expect(lines[5]).toBe(`'\tleading tab`);
+  });
+
+  it('keeps RFC quoting on top of the guard when the field also needs quoting', () => {
+    const csv = toCsv([{ v: '=SUM(1,2)' }], [{ key: 'v', header: 'V' }]);
+    expect(csv.trim().split('\r\n')[1]).toBe(`"'=SUM(1,2)"`);
+  });
+
+  it('leaves plain negative numbers alone so the Amount column still sums', () => {
+    const csv = toCsv([{ v: '-45.00' }, { v: '+3' }, { v: '-1.5e3' }], [{ key: 'v', header: 'V' }]);
+    const lines = csv.trim().split('\r\n');
+    expect(lines[1]).toBe('-45.00');
+    expect(lines[2]).toBe('+3');
+    expect(lines[3]).toBe('-1.5e3');
+  });
+
+  it('guards a formula smuggled into a transaction note, and still exports a negative amount as a number', () => {
+    const { db, add } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const id = add({ categoryId: groceries, amountCents: -4500, merchant: 'LOBLAWS', date: '2026-03-05' });
+    db.run(sql`update transactions set notes = ${'=SUM(1)'} where id = ${id}`);
+
+    const csv = transactionsCsv({ from: '2026-03-01', to: '2026-03-31' });
+    const row = csv.trim().split('\r\n')[1];
+    expect(row).toContain(`'=SUM(1)`);
+    expect(row).not.toContain(',=SUM(1)');
+    expect(row).toContain('-45.00');
+    expect(row).not.toContain(`'-45.00`);
+  });
+
   it('exports the filtered transactions view with readable columns', () => {
     const { db, alice, add } = setup();
     const groceries = categoryIdByName(db, 'Groceries');

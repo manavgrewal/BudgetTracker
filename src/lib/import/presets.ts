@@ -44,6 +44,11 @@ export const BUILTIN_PRESETS: Record<BuiltinPresetName, BuiltinPreset> = {
       skipRules: null,
     },
   },
+  // The two TD presets shipped with byte-identical mappings originally, which read as a
+  // copy-paste slip. They are no longer identical and the difference is real, not a typo:
+  // the chequing/debit export is ISO-dated (fixture-validated above) while the Visa export
+  // is MM/DD/YYYY. Everything else genuinely does match — same headerless four-column
+  // debit/credit layout — so keep both entries rather than aliasing one to the other.
   'TD Visa': {
     name: 'TD Visa',
     institution: 'TD Canada Trust',

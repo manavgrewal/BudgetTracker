@@ -85,7 +85,11 @@ export function findExistingByHashes(accountId: number, hashes: string[]): Map<s
   if (hashes.length === 0) return result;
 
   const db = getDb();
-  // Chunked to stay well under SQLite's default 999 bound-parameter limit.
+  // Chunked to stay well under SQLite's bound-parameter ceiling. That ceiling is
+  // SQLITE_MAX_VARIABLE_NUMBER, which is 32766 in the builds better-sqlite3 ships
+  // (it was 999 before SQLite 3.32) — 400 is conservative against either, and is
+  // kept as-is: the point of the chunking is a predictable statement size, not the
+  // exact limit. src/lib/categorize/engine.ts uses the same 400.
   const CHUNK = 400;
   for (let offset = 0; offset < hashes.length; offset += CHUNK) {
     const chunk = hashes.slice(offset, offset + CHUNK);

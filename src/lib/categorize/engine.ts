@@ -101,7 +101,7 @@ export interface EngineResult {
 /** Only rows with category_id IS NULL or source = 'bayes' are ever touched. */
 const ELIGIBLE = or(isNull(transactions.categoryId), eq(transactions.categorizationSource, 'bayes'));
 
-/** Chunked well under SQLite's default 999 bound-parameter limit (see dedup.ts). */
+/** Chunked well under SQLite's bound-parameter ceiling — see the note in dedup.ts. */
 const ID_CHUNK = 400;
 
 function selectRowsByIds(ids: number[]) {
@@ -376,7 +376,7 @@ export function applyCategoryToMatching(input: {
  * Transfers are excluded: spec section 3 removes them from all spend/income
  * reporting, so they never need a category.
  */
-const REVIEW_WHERE = and(
+export const REVIEW_WHERE = and(
   eq(transactions.isTransfer, false),
   or(isNull(transactions.categoryId), eq(transactions.categorizationSource, 'bayes')),
 );

@@ -14,10 +14,12 @@ export function GoalsClient({
   today,
   goals,
   people,
+  showArchived = false,
 }: {
   today: string;
   goals: { goal: GoalWithProgress; contributions: ContributionRecord[] }[];
   people: { id: number; name: string }[];
+  showArchived?: boolean;
 }) {
   const [createState, create] = useActionState(createGoalAction, initial);
   const [contributeState, contribute] = useActionState(addContributionAction, initial);
@@ -29,7 +31,14 @@ export function GoalsClient({
 
   return (
     <div className="flex flex-col gap-8">
-      <h1 className="text-xl font-semibold">Goals</h1>
+      <div className="flex flex-wrap items-center gap-3">
+        <h1 className="text-xl font-semibold">Goals</h1>
+        {/* Archiving was previously one-way in the UI: archiveGoal(id, false) existed
+            but nothing could reach it, so an archived goal was gone for good. */}
+        <a className="text-sm underline" href={showArchived ? '/goals' : '/goals?archived=1'}>
+          {showArchived ? 'Hide archived' : 'Show archived'}
+        </a>
+      </div>
       <FormError message={error} />
       {notice ? <p className="text-sm text-green-700 dark:text-green-400">{notice}</p> : null}
 
@@ -37,6 +46,7 @@ export function GoalsClient({
         {goals.map(({ goal, contributions }) => (
           <div key={goal.id} className="flex flex-col gap-3">
             <GoalCard goal={goal} />
+            {goal.archived ? <p className="text-xs text-slate-500 dark:text-slate-400">Archived</p> : null}
             <form action={contribute} className="flex flex-wrap items-end gap-2 text-xs">
               <input type="hidden" name="goalId" value={goal.id} />
               <input name="amount" placeholder="Amount" required className="w-24 rounded border px-2 py-1 dark:bg-slate-900" />
@@ -66,8 +76,8 @@ export function GoalsClient({
             ) : null}
             <form action={archive}>
               <input type="hidden" name="goalId" value={goal.id} />
-              <input type="hidden" name="archived" value="1" />
-              <button type="submit" className="w-fit text-xs underline">Archive</button>
+              <input type="hidden" name="archived" value={goal.archived ? '0' : '1'} />
+              <button type="submit" className="w-fit text-xs underline">{goal.archived ? 'Restore' : 'Archive'}</button>
             </form>
           </div>
         ))}

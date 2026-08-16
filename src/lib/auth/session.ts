@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
-import { and, eq, lt, sql } from 'drizzle-orm';
+import { and, eq, lt, ne } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { sessions, users } from '@/db/schema';
 import { nowIso } from '@/lib/clock';
@@ -95,6 +95,19 @@ export function destroyAllSessionsForUser(userId: number): number {
   return Number(result.changes ?? 0);
 }
 
+/**
+ * "Sign out everywhere else": every session for this user except the one presenting
+ * `keepToken`. Used by the forced password change (spec v1.5), where signing the user
+ * out of the very browser they are typing in would be a hostile way to end the flow.
+ */
+export function destroyOtherSessionsForUser(userId: number, keepToken: string): number {
+  const result = getDb()
+    .delete(sessions)
+    .where(and(eq(sessions.userId, userId), ne(sessions.tokenHash, hashSessionToken(keepToken))))
+    .run();
+  return Number(result.changes ?? 0);
+}
+
 export function purgeExpiredSessions(at: Date = new Date()): number {
   const result = getDb().delete(sessions).where(lt(sessions.expiresAt, at.toISOString())).run();
   return Number(result.changes ?? 0);
@@ -178,14 +191,4 @@ export async function setSessionCookie(token: string, expiresAt: string, secure:
 export async function clearSessionCookie(): Promise<void> {
   const store = await cookies();
   store.set(SESSION_COOKIE_NAME, '', { httpOnly: true, sameSite: 'lax', path: '/', maxAge: 0 });
-}
-
-/** Kept for callers that need a raw count without loading rows. */
-export function countActiveSessions(userId: number, at: Date = new Date()): number {
-  const row = getDb()
-    .select({ c: sql<number>`count(*)` })
-    .from(sessions)
-    .where(and(eq(sessions.userId, userId), sql`${sessions.expiresAt} > ${at.toISOString()}`))
-    .get();
-  return row?.c ?? 0;
 }

@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { requireUser } from '@/lib/auth/session';
 import { findUserByUsername } from '@/lib/auth/users';
 import { countUnusedRecoveryCodes } from '@/lib/auth/totp';
+import { AboutPanel } from './about-panel';
 import { ProfileForms } from './profile-forms';
 
 export const dynamic = 'force-dynamic';
@@ -65,6 +66,9 @@ export default async function SettingsPage() {
           </ul>
         </section>
       ) : null}
+
+      {/* Last: the version and revision log are reference material, not a task. */}
+      <AboutPanel />
     </div>
   );
 }

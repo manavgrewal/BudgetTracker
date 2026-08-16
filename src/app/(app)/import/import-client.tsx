@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { MappingEditor } from '@/components/MappingEditor';
+import { SubmitButton } from '@/components/SubmitButton';
 import { formatCents } from '@/lib/money';
 import type { ImportMapping } from '@/lib/import/mapping';
 import type { PreviewResult } from '@/lib/import/preview';
@@ -30,15 +31,23 @@ export function ImportClient({
   const [busy, setBusy] = useState(false);
   const [historyRows, setHistoryRows] = useState<ImportHistoryRow[]>(history);
 
+  /**
+   * The Preview button is guarded by SubmitButton's useFormStatus, not by `busy`.
+   *
+   * This is a form ACTION, and React 19 holds state updates made inside an async action
+   * until that action settles — so the `setBusy(true)` that used to open this function
+   * never rendered, and the button it was meant to disable stayed clickable for the whole
+   * upload. useFormStatus reads the form's real pending state instead. `busy` is still the
+   * right mechanism for commit(), rePreview() and undo(), which are plain onClick/onChange
+   * handlers and therefore render their state updates immediately.
+   */
   async function upload(formData: FormData) {
-    setBusy(true);
     setError(null);
     setSummary(null);
     formData.set('accountId', String(accountId));
     formData.set('profileId', String(profileId));
     const response = await fetch('/api/import/preview', { method: 'POST', body: formData });
     const body = await response.json();
-    setBusy(false);
     if (!response.ok) {
       setError(body.error ?? 'Upload failed');
       return;
@@ -51,73 +60,93 @@ export function ImportClient({
     if (!preview) return;
     setMapping(next);
     setBusy(true);
-    const response = await fetch('/api/import/preview', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ stagingId: preview.stagingId, filename: preview.filename, accountId, profileId, mapping: next }),
-    });
-    const body = await response.json();
-    setBusy(false);
-    if (!response.ok) {
-      setError(body.error ?? 'Preview failed');
-      return;
+    try {
+      const response = await fetch('/api/import/preview', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ stagingId: preview.stagingId, filename: preview.filename, accountId, profileId, mapping: next }),
+      });
+      const body = await response.json();
+      if (!response.ok) {
+        setError(body.error ?? 'Preview failed');
+        return;
+      }
+      setPreview(body as PreviewResult);
+    } finally {
+      setBusy(false);
     }
-    setPreview(body as PreviewResult);
   }
 
+  // The Import button is a plain onClick, not a form action, so `busy` really does render
+  // here — but it has to be released in a `finally`: a thrown fetch (a dropped connection
+  // mid-import is the realistic case) would otherwise leave the button disabled forever,
+  // with rows possibly already committed and no way to find out from this screen.
   async function commit() {
     if (!preview || !mapping) return;
     setBusy(true);
-    const response = await fetch('/api/import/commit', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ stagingId: preview.stagingId, filename: preview.filename, accountId, profileId, mapping }),
-    });
-    const body = await response.json();
-    setBusy(false);
-    if (!response.ok) {
-      setError(body.error ?? 'Import failed');
-      return;
+    try {
+      const response = await fetch('/api/import/commit', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ stagingId: preview.stagingId, filename: preview.filename, accountId, profileId, mapping }),
+      });
+      const body = await response.json();
+      if (!response.ok) {
+        setError(body.error ?? 'Import failed');
+        return;
+      }
+      setPreview(null);
+      // The rows are always committed by this point, even when categorization
+      // itself failed (flow.ts catches runEngine and reports engineFailed
+      // instead of throwing) — they're categoryless, so the review queue
+      // picks them up regardless of whether the engine ran.
+      setSummary(
+        body.engineFailed
+          ? `${body.rowsAdded} imported, categorization failed — rows are in the review queue.`
+          : `${body.rowsAdded} added, ${body.rowsDuplicate} duplicates skipped, ${body.rowsError} errors, ${body.needsReview} need review.`,
+      );
+    } finally {
+      setBusy(false);
     }
-    setPreview(null);
-    // The rows are always committed by this point, even when categorization
-    // itself failed (flow.ts catches runEngine and reports engineFailed
-    // instead of throwing) — they're categoryless, so the review queue
-    // picks them up regardless of whether the engine ran.
-    setSummary(
-      body.engineFailed
-        ? `${body.rowsAdded} imported, categorization failed — rows are in the review queue.`
-        : `${body.rowsAdded} added, ${body.rowsDuplicate} duplicates skipped, ${body.rowsError} errors, ${body.needsReview} need review.`,
-    );
   }
 
+  // Undo is a two-request dance around a confirm() dialog, and the second request
+  // deletes rows. Without a busy guard a double-click fires the whole sequence twice:
+  // the second pass finds the import already gone and reports a confusing failure over
+  // a successful undo. `busy` is released in a finally so an early return cannot strand
+  // every other button on the page in a disabled state.
   async function undo(importId: number) {
     setError(null);
-    const dialogResponse = await fetch('/api/import/undo', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ importId }),
-    });
-    const counts = await dialogResponse.json();
-    if (!dialogResponse.ok) {
-      setError(counts.error ?? 'Could not look up this import.');
-      return;
-    }
-    const ok = window.confirm(`Undo this import?\n\nWill delete ${counts.willDelete} transactions.\nWill keep ${counts.willKeep} shared with other imports.`);
-    if (!ok) return;
+    setBusy(true);
+    try {
+      const dialogResponse = await fetch('/api/import/undo', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ importId }),
+      });
+      const counts = await dialogResponse.json();
+      if (!dialogResponse.ok) {
+        setError(counts.error ?? 'Could not look up this import.');
+        return;
+      }
+      const ok = window.confirm(`Undo this import?\n\nWill delete ${counts.willDelete} transactions.\nWill keep ${counts.willKeep} shared with other imports.`);
+      if (!ok) return;
 
-    const undoResponse = await fetch('/api/import/undo', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ importId, confirm: true }),
-    });
-    const result = await undoResponse.json();
-    if (!undoResponse.ok) {
-      setError(result.error ?? 'Undo failed.');
-      return;
+      const undoResponse = await fetch('/api/import/undo', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ importId, confirm: true }),
+      });
+      const result = await undoResponse.json();
+      if (!undoResponse.ok) {
+        setError(result.error ?? 'Undo failed.');
+        return;
+      }
+      setSummary(`Undo complete: ${result.deleted} deleted, ${result.kept} kept.`);
+      setHistoryRows((rows) => rows.filter((row) => row.id !== importId));
+    } finally {
+      setBusy(false);
     }
-    setSummary(`Undo complete: ${result.deleted} deleted, ${result.kept} kept.`);
-    setHistoryRows((rows) => rows.filter((row) => row.id !== importId));
   }
 
   return (
@@ -207,16 +236,18 @@ export function ImportClient({
           </select>
         </label>
         <input type="file" name="file" accept=".csv,text/csv" required className="text-sm" />
-        <button type="submit" disabled={busy} className="rounded bg-slate-900 px-3 py-2 text-white disabled:opacity-60 dark:bg-slate-100 dark:text-slate-900">
-          {busy ? 'Working…' : 'Preview'}
-        </button>
+        <SubmitButton className="px-3 py-2">Preview</SubmitButton>
       </form>
       )}
 
       {preview && mapping ? (
         <section className="flex flex-col gap-3">
           <h2 className="font-medium">
-            Preview — {preview.totalRows} rows, {preview.duplicateCount} duplicates, {preview.errorCount} errors, encoding {preview.encoding}
+            Preview — {preview.totalRows} rows, {preview.duplicateCount} duplicates, {preview.errorCount} errors,
+            {/* Rows dropped by the profile's skipRules never appear in the table below and
+                were counted nowhere on screen, so a mis-typed skip rule that swallowed half
+                the file looked exactly like a short file. */}
+            {preview.skipped > 0 ? ` ${preview.skipped} skipped by profile rules,` : ''} encoding {preview.encoding}
           </h2>
           <MappingEditor mapping={mapping} onChange={(next) => void rePreview(next)} />
           <div className="overflow-x-auto">
@@ -289,7 +320,12 @@ export function ImportClient({
                 <td className="text-right">{row.rowsDuplicate}</td>
                 <td className="text-right">{row.rowsError}</td>
                 <td>
-                  <button type="button" onClick={() => void undo(row.id)} className="rounded border px-2 py-1 text-xs dark:border-slate-700">
+                  <button
+                    type="button"
+                    onClick={() => void undo(row.id)}
+                    disabled={busy}
+                    className="rounded border px-2 py-1 text-xs disabled:opacity-60 dark:border-slate-700"
+                  >
                     Undo
                   </button>
                 </td>

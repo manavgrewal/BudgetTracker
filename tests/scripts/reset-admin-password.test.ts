@@ -1,4 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { createTestDb, type TestDb } from '../helpers/db';
@@ -152,6 +154,25 @@ describe('resetPassword', () => {
     const { dbPath } = await setup();
     await expect(resetPassword({ dbPath, username: 'alice', newPassword: 'short' })).rejects.toThrowError(/at least 10 characters/);
     expect(await verifyPassword(findUserByUsername('alice')!.passwordHash, OLD_PASSWORD)).toBe(true);
+  });
+
+  // Polish item 10. better-sqlite3 creates a missing file by default, so a typo in
+  // DATA_DIR used to produce an empty database and the misleading report
+  // "No user named alice. Known users: (none)" — plus a stray budget.db on disk.
+  it('refuses a database path that does not exist, and says which path it tried', async () => {
+    const missing = path.join(os.tmpdir(), `budget-tracker-missing-${Date.now()}`, 'budget.db');
+    await expect(
+      resetPassword({ dbPath: missing, username: 'alice', newPassword: NEW_PASSWORD }),
+    ).rejects.toThrowError(/No database at/);
+    await expect(
+      resetPassword({ dbPath: missing, username: 'alice', newPassword: NEW_PASSWORD }),
+    ).rejects.toThrowError(/BUDGET_DB_PATH or DATA_DIR/);
+  });
+
+  it('does not create the database file it was pointed at', async () => {
+    const missing = path.join(os.tmpdir(), `budget-tracker-missing-${Date.now()}-b`, 'budget.db');
+    await resetPassword({ dbPath: missing, username: 'alice', newPassword: NEW_PASSWORD }).catch(() => undefined);
+    expect(fs.existsSync(missing)).toBe(false);
   });
 });
 

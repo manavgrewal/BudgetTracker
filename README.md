@@ -108,8 +108,12 @@ build-elsewhere path above is the default.
 Open `http://<nas-address>:3000`. The setup wizard creates the first account as the
 administrator and seeds the category list plus the four built-in bank import profiles.
 Registration is closed after that: the admin creates the other family members under
-**Settings → Users**, hands out a temporary password, and each person changes it (and optionally
-turns on two-factor authentication) at their first sign-in.
+**Settings → Users** and hands out a temporary password. Because the admin knows that password,
+the app **requires the new person to replace it** — their first sign-in lands on a
+"choose your own password" screen, and nothing else in the app opens until they do. Changing it
+signs them out of any other browser and leaves them signed in where they are. The same applies
+after an admin uses **Reset password**. Two-factor authentication stays optional, from
+**Settings → Profile**.
 
 ---
 

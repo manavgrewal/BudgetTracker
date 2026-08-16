@@ -39,7 +39,7 @@ function scopeCondition(scope: BudgetScope, userId: number | null) {
 export function resolveBudget(scope: BudgetScope, userId: number | null, categoryId: number, month: string): number | null {
   assertMonth(month);
   const row = getDb()
-    .select({ amountCents: budgets.amountCents, effectiveMonth: budgets.effectiveMonth })
+    .select({ amountCents: budgets.amountCents })
     .from(budgets)
     .where(and(scopeCondition(scope, userId), eq(budgets.categoryId, categoryId), lte(budgets.effectiveMonth, month)))
     .orderBy(sql`${budgets.effectiveMonth} desc`)
@@ -237,7 +237,12 @@ export function copyBudgetsFromPreviousMonth(month: string, scope: BudgetScope, 
   assertMonth(month);
   const previous = addMonths(month, -1);
   let copied = 0;
-  for (const category of listCategories()) {
+  // Archived-inclusive, to match budgetProgress: an archived category can still surface
+  // as a read-only row carrying real spend, and dropping its limit here would silently
+  // turn "$200 of $300" into unbudgeted spend the month after someone archives it.
+  // Categories with no resolved limit last month are skipped anyway, so this only ever
+  // copies limits that actually existed.
+  for (const category of listCategories({ includeArchived: true })) {
     const amount = resolveBudget(scope, userId, category.id, previous);
     if (amount === null) continue;
     upsertBudget({ scope, userId, categoryId: category.id, month, amountCents: amount });

@@ -57,6 +57,11 @@ COPY --from=builder --chown=node:node /app/public ./public
 # Migrations are read from process.cwd()/drizzle on boot; tracing does not include them.
 COPY --from=builder --chown=node:node /app/drizzle ./drizzle
 
+# Settings -> About renders CHANGELOG.md from process.cwd() at request time (the version
+# number itself is inlined at build time). Same reason as drizzle/: output tracing has no
+# way to know a plain .md file is a runtime input.
+COPY --from=builder --chown=node:node /app/CHANGELOG.md ./CHANGELOG.md
+
 # Rescue tooling (scripts/reset-admin-password.ts), documented in INSTALL.md.
 COPY --from=builder --chown=node:node /app/scripts ./scripts
 

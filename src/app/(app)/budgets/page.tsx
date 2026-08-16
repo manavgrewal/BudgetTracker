@@ -28,6 +28,7 @@ export default async function BudgetsPage({
     <BudgetsClient
       month={month}
       currentUserId={user.id}
+      currentUserIsAdmin={user.role === 'admin'}
       household={household}
       householdTotals={budgetTotals(household)}
       personal={personal}

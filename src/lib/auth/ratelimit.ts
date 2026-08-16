@@ -37,7 +37,7 @@ export function recordLoginAttempt(input: { username: string; ip: string; succes
       username: normalizeUsername(input.username),
       ip: input.ip,
       success: input.success,
-      createdAt: nowIso(input.at ?? new Date()),
+      createdAt: nowIso(input.at),
     })
     .run();
 }

@@ -244,9 +244,34 @@ export interface CsvColumn<T> {
   header: string;
 }
 
+/**
+ * Fields a spreadsheet would execute rather than display. Excel/Sheets/LibreOffice all
+ * treat a leading =, +, - or @ as the start of a formula, and a leading tab as a cell
+ * separator that shifts the payload into the next cell — so a transaction note reading
+ * `=SUM(1)` (or worse, a WEBSERVICE/HYPERLINK call) would run on open. Bank descriptions
+ * are attacker-influenced text in exactly the way this attack needs.
+ */
+const FORMULA_TRIGGER = /^[=+\-@\t]/;
+
+/**
+ * ...except a plain number. Spend is stored negative, so the Amount column is full of
+ * values like "-45.00": those start with a trigger character but are numeric literals,
+ * not formulas, and quoting them as text would break every sum in the exported sheet —
+ * the one thing people export a CSV to do. Anything with an operator in it ("-2+3") fails
+ * this test and is still guarded.
+ */
+const PLAIN_NUMBER = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
+
+/**
+ * RFC 4180 quoting is preserved exactly as before; the injection guard is a separate,
+ * earlier step that prefixes a single quote. The apostrophe is what spreadsheets read as
+ * "this cell is literal text" — it is not shown in the cell, and a plain-text reader sees
+ * one extra leading character, which is the accepted cost of the guard.
+ */
 function csvCell(value: unknown): string {
   if (value === null || value === undefined) return '';
-  const text = String(value);
+  let text = String(value);
+  if (FORMULA_TRIGGER.test(text) && !PLAIN_NUMBER.test(text)) text = `'${text}`;
   return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
