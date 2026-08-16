@@ -42,6 +42,11 @@ export default async function SettingsPage() {
                 Users
               </Link>
             </li>
+            <li>
+              <Link className="underline" href="/settings/managers">
+                Categories, merchant rules and import profiles
+              </Link>
+            </li>
           </ul>
         </section>
       ) : null}
