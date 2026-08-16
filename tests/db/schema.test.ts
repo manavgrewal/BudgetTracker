@@ -14,7 +14,7 @@ const EXPECTED_TABLES = [
   'goal_contributions', 'goals', 'import_profiles', 'imports', 'login_attempts',
   'merchant_rules', 'sessions', 'settings', 'simplefin_account_links',
   'simplefin_connections', 'totp_recovery_codes', 'transaction_imports',
-  'transactions', 'users',
+  'transactions', 'users', 'warranty_items', 'warranty_receipts', 'warranty_search',
 ];
 
 const EXPECTED_INDEXES = [
@@ -41,13 +41,22 @@ const EXPECTED_INDEXES = [
   'login_attempts_ip_idx',
   'totp_recovery_codes_user_idx',
   'simplefin_links_account_idx',
+  'warranty_items_expiry_idx',
+  'warranty_items_owner_idx',
+  'warranty_items_transaction_idx',
+  'warranty_receipts_stored_uq',
+  'warranty_receipts_item_idx',
+  'warranty_receipts_ocr_idx',
 ];
 
 describe('database schema', () => {
   it('creates every table from spec section 3', () => {
     current = createTestDb();
     const rows = current.sqlite
-      .prepare("select name from sqlite_master where type = 'table' and name not like 'sqlite_%' and name not like '__drizzle%' order by name")
+      .prepare(
+        "select name from sqlite_master where type = 'table' and name not like 'sqlite_%' " +
+          "and name not like '__drizzle%' and name not like 'warranty_search\\_%' escape '\\' order by name",
+      )
       .all() as { name: string }[];
     expect(rows.map((r) => r.name)).toEqual(EXPECTED_TABLES);
   });
@@ -259,7 +268,7 @@ describe('migration 0001_add_must_change_password', () => {
 
   it('a fresh database runs BOTH migrations, in journal order', () => {
     current = createTestDb();
-    expect(appliedTags(current.sqlite)).toBe(2);
+    expect(appliedTags(current.sqlite)).toBe(3);
 
     const columns = current.sqlite.prepare('pragma table_info(users)').all() as {
       name: string;
@@ -291,9 +300,9 @@ describe('migration 0001_add_must_change_password', () => {
     current.sqlite.close();
 
     const again = openDatabase(file);
-    // Still two recorded migrations, and the ALTER TABLE did not run a second time
+    // Still three recorded migrations, and the ALTER TABLE did not run a second time
     // (a repeat would throw "duplicate column name: must_change_password").
-    expect(appliedTags(again.sqlite)).toBe(2);
+    expect(appliedTags(again.sqlite)).toBe(3);
     const flagColumns = (again.sqlite.prepare('pragma table_info(users)').all() as { name: string }[]).filter(
       (column) => column.name === 'must_change_password',
     );

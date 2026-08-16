@@ -315,3 +315,72 @@ export const totpRecoveryCodes = sqliteTable(
     uniqueIndex('totp_recovery_codes_hash_uq').on(t.userId, t.codeHash),
   ],
 );
+
+/**
+ * Warranty tracker (spec 2026-08-16 §3). Mirrors drizzle/0002_warranty_tracker.sql.
+ *
+ * NOT represented here — these objects exist ONLY in that raw SQL file (MUST-3.4):
+ *   - every CHECK constraint on both tables,
+ *   - the `warranty_search` FTS5 contentless virtual table
+ *     (contentless_delete=1, tokenize='unicode61 remove_diacritics 2', rowid = warranty_items.id),
+ *   - its six triggers — warranty_search_item_ai / _au / _ad and
+ *     warranty_search_receipt_ai / _au / _ad — which are the index's ONLY writer.
+ * Application code must never INSERT, UPDATE or DELETE `warranty_search` directly (MUST-3.12).
+ */
+export const warrantyItems = sqliteTable(
+  'warranty_items',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    name: text('name').notNull(),
+    vendor: text('vendor'),
+    model: text('model'),
+    serial: text('serial'),
+    purchaseDate: text('purchase_date').notNull(),
+    warrantyMonths: integer('warranty_months'),
+    isLifetime: integer('is_lifetime', { mode: 'boolean' }).notNull().default(false),
+    /** Computed at write time by addMonthsClamped(); never derived on read (MUST-3.6). */
+    expiryDate: text('expiry_date'),
+    /** Positive magnitude, unlike transactions.amount_cents (MUST-3.2 / §17.26). */
+    priceCents: integer('price_cents'),
+    ownerUserId: integer('owner_user_id')
+      .notNull()
+      .references(() => users.id),
+    /** ON DELETE SET NULL: an import undo must not take the receipt evidence with it (MUST-3.7). */
+    transactionId: integer('transaction_id').references(() => transactions.id, { onDelete: 'set null' }),
+    notes: text('notes'),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (t) => [
+    index('warranty_items_expiry_idx').on(t.expiryDate),
+    index('warranty_items_owner_idx').on(t.ownerUserId),
+    index('warranty_items_transaction_idx').on(t.transactionId),
+  ],
+);
+
+export const warrantyReceipts = sqliteTable(
+  'warranty_receipts',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    warrantyItemId: integer('warranty_item_id')
+      .notNull()
+      .references(() => warrantyItems.id, { onDelete: 'cascade' }),
+    /** Display only: never a path component, never rendered as HTML (MUST-3.8). */
+    originalFilename: text('original_filename').notNull(),
+    /** Server-generated `${randomUUID()}.${sniffedExt}` (MUST-4.2). */
+    storedFilename: text('stored_filename').notNull(),
+    mime: text('mime', { enum: ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'] }).notNull(),
+    sizeBytes: integer('size_bytes').notNull(),
+    sha256: text('sha256').notNull(),
+    ocrText: text('ocr_text'),
+    /** Exactly three values — there is deliberately no 'running' state (§7.5). */
+    ocrStatus: text('ocr_status', { enum: ['pending', 'done', 'failed'] }).notNull().default('pending'),
+    ocrError: text('ocr_error'),
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => [
+    uniqueIndex('warranty_receipts_stored_uq').on(t.storedFilename),
+    index('warranty_receipts_item_idx').on(t.warrantyItemId),
+    index('warranty_receipts_ocr_idx').on(t.ocrStatus),
+  ],
+);
