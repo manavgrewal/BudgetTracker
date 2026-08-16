@@ -20,6 +20,10 @@ cloud account, no bank API.
 - **Household and per-person budgets** — set a monthly limit per category at the household level
   or for one person; it carries forward until you change it.
 - **Savings goals** — log money set aside and see a pace projection.
+- **Warranties** — record what you bought and how long it is covered, attach the receipt as a
+  photo or a PDF, and search every word printed on it. Receipts are read by an OCR engine
+  that runs entirely on the server: the language data ships inside the image, so this works
+  on a LAN-only install with no internet connection at all.
 - **SimpleFIN (optional)** — link accounts for automatic balance/transaction sync if you want it;
   CSV import always works without it.
 - **Sharing packs** — export a redacted slice of your data to share with someone (an accountant,
@@ -220,7 +224,10 @@ This app is not designed for exposure to the public internet. Do not port-forwar
 | `TRUST_PROXY` | `0` | When `1`, trust `X-Forwarded-Proto` and `X-Forwarded-For`. Only behind a proxy you control. |
 | `TZ` | `America/Toronto` | Timezone for date handling and the nightly job. |
 | `PORT` | `3000` | Listening port inside the container. |
-| `DATA_DIR` | `/data` | Where `budget.db`, `backups/` and `tmp/` live. |
+| `DATA_DIR` | `/data` | Where `budget.db`, `backups/`, `tmp/` and `receipts/` live. |
+
+`data/receipts/` holds the receipt files. They are part of the nightly backup archive, and an
+image update never touches them.
 
 ---
 

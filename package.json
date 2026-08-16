@@ -1,6 +1,6 @@
 {
   "name": "budget-tracker",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "engines": {
     "node": ">=22"
@@ -14,6 +14,7 @@
     "typecheck": "tsc --noEmit",
     "fixtures": "node scripts/make-fixtures.mjs",
     "fetch-tessdata": "node scripts/fetch-tessdata.mjs",
+    "check-ocr-assets": "node scripts/check-ocr-assets.mjs",
     "reset-password": "node --experimental-strip-types scripts/reset-admin-password.ts",
     "restore-backup": "node --experimental-strip-types scripts/restore-backup.ts",
     "install:linux": "bash install/install-linux.sh"

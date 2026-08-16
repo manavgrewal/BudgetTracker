@@ -221,6 +221,11 @@ the database (a consistent `VACUUM INTO` snapshot) and every receipt file attach
 not just the database. Backups made before the receipts feature shipped are a bare `budget-YYYY-MM-DD.db`
 file; both shapes are still listed and still restore.
 
+**Disk space:** each nightly archive holds the database *plus* every receipt file, so the
+backups folder costs roughly `retention × (database + all receipts)`. Fourteen nightly copies
+of a 300 MB receipt library is about 4 GB. Settings → Backups lists each archive's size and
+lets you lower the retention count.
+
 Restoring is always an offline, container-stopped procedure — there is deliberately no in-app
 restore button, because restoring under a live SQLite connection is how you corrupt a database.
 Use the bundled `restore-backup` script rather than copying files by hand: it works out which
@@ -266,6 +271,11 @@ already-consistent snapshot, packages it together with a copy of every receipt f
 `.tar.gz`, and only then closes and renames it into place. Nothing keeps the finished archive
 open, nothing locks it, and nothing writes to it again — so the usual network-filesystem hazards
 do not apply.
+
+**Backup archives are not encrypted, and they now contain photographs of your receipts** —
+which carry names, addresses and partial card numbers, on top of the whole transaction
+history. If you copy them off the NAS, turn on your backup tool's client-side encryption
+(Synology Hyper Backup offers it) and keep the key somewhere other than the NAS.
 
 ### Option A — mount the NAS share at `/data/backups`
 

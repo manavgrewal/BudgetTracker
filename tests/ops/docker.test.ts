@@ -63,6 +63,71 @@ describe('Dockerfile', () => {
     expect(runtimeStage).not.toContain('g++');
     expect(runtimeStage).not.toContain('build-essential');
   });
+
+  it('copies the OCR and PDF assets that output tracing cannot see (R1)', () => {
+    const runtimeStage = dockerfile.slice(dockerfile.lastIndexOf('FROM node:22-bookworm-slim AS runner'));
+    expect(runtimeStage).toMatch(/COPY .*\/app\/vendor \.\/vendor/);
+    expect(runtimeStage).toContain('node_modules/tesseract.js ');
+    expect(runtimeStage).toContain('node_modules/tesseract.js-core');
+    expect(runtimeStage).toContain('node_modules/pdfjs-dist');
+  });
+
+  it('creates /data/receipts alongside the other data directories', () => {
+    expect(dockerfile).toMatch(/mkdir -p \/data \/data\/backups \/data\/tmp \/data\/receipts/);
+  });
+
+  it('fails the BUILD, not production, when an asset is missing (MUST-7.9 / acceptance A3)', () => {
+    const runtimeStage = dockerfile.slice(dockerfile.lastIndexOf('FROM node:22-bookworm-slim AS runner'));
+    expect(runtimeStage).toContain('RUN node scripts/check-ocr-assets.mjs');
+    // The guard must run AFTER the COPY lines it checks, or it proves nothing.
+    expect(runtimeStage.indexOf('RUN node scripts/check-ocr-assets.mjs')).toBeGreaterThan(
+      runtimeStage.indexOf('node_modules/tesseract.js-core'),
+    );
+  });
+});
+
+describe('.dockerignore', () => {
+  const dockerignore = read('.dockerignore');
+
+  it('does NOT exclude vendor/, which carries the offline OCR language data (MUST-7.9)', () => {
+    const lines = dockerignore.split(/\r?\n/).map((line) => line.trim());
+    expect(lines).not.toContain('vendor');
+    expect(lines).not.toContain('vendor/');
+    expect(lines).not.toContain('/vendor');
+  });
+});
+
+describe('version and changelog', () => {
+  const pkg = JSON.parse(read('package.json')) as { version: string; dependencies: Record<string, string> };
+  const changelog = read('CHANGELOG.md');
+
+  it('declares 1.1.0 as the single source of truth', () => {
+    expect(pkg.version).toBe('1.1.0');
+  });
+
+  it('declares the three new runtime dependencies (§17.27)', () => {
+    for (const name of ['tesseract.js', 'pdfjs-dist', 'tar']) {
+      expect(pkg.dependencies[name], `missing dependency ${name}`).toBeTruthy();
+    }
+  });
+
+  it('has a dated 1.1.0 section and a fresh empty Unreleased above it', () => {
+    expect(changelog).toContain('## [1.1.0] - 2026-08-16');
+    const unreleased = changelog.indexOf('## Unreleased');
+    const released = changelog.indexOf('## [1.1.0]');
+    expect(unreleased).toBeGreaterThan(-1);
+    expect(unreleased).toBeLessThan(released);
+    // §17.23: the previously-unreleased entries are ABSORBED into 1.1.0, so Unreleased is
+    // now empty — it must no longer mention them.
+    expect(changelog.slice(unreleased, released)).not.toContain('Forced password change');
+  });
+
+  it('records the backup format change in 1.1.0', () => {
+    const section = changelog.slice(changelog.indexOf('## [1.1.0]'), changelog.indexOf('## [1.0.0]'));
+    expect(section).toContain('tar.gz');
+    expect(section).toMatch(/older `?\.db`? backups still restore|still restore/i);
+    expect(section).toContain('Warranty');
+  });
 });
 
 describe('docker-compose.yml', () => {
@@ -127,5 +192,11 @@ describe('README.md', () => {
 
   it('mentions the TRUST_PROXY switch', () => {
     expect(readme).toContain('TRUST_PROXY');
+  });
+
+  it('documents the warranty tracker and its offline OCR', () => {
+    expect(readme).toMatch(/warrant/i);
+    expect(readme).toMatch(/OCR/);
+    expect(readme).toMatch(/offline|no internet|LAN-only/i);
   });
 });

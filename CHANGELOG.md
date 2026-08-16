@@ -21,8 +21,34 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.1.0] - 2026-08-16
+
 ### Added
 
+- **Warranty tracker.** Record what you bought, who owns it, what it cost and how long it is
+  covered — months, or a Lifetime tick for the things that never expire. A new Warranties
+  page lists everything with an at-a-glance badge: active, expiring soon, expired, lifetime,
+  or term unknown.
+- **Item types**, admin-maintained under **Settings → Item types** (Laptop, Appliance and
+  Subscription seeded), and **subscription tracking**: a subscription item reuses the same
+  purchase-date/months fields as a period start and length, is labelled "cancel by" instead
+  of "expires" throughout, and is covered by the same dashboard reminder before the period
+  ends. A type still in use by an item cannot be deleted until those items are moved to
+  another type.
+- **Receipts as evidence.** Photograph a receipt with your phone (the Add form opens the rear
+  camera directly) or attach a PDF. Files are stored on the data volume beside the database
+  and are only ever served to a signed-in member.
+- **Every word on the receipt is searchable.** Receipts are read by an OCR engine that runs
+  entirely on the server with no internet connection, and the text is folded into a full-text
+  index. Searching for a store name, a model number or a line item finds the item — and
+  typing `metro` finds `MÉTRO`.
+- **Suggest and confirm.** After a receipt is read, the purchase date, vendor and total are
+  proposed in the form. Nothing is ever saved without you pressing Save, and a field you have
+  already typed into is never overwritten.
+- **Warranties expiring soon** on the dashboard: the next 60 days, top five, scoped by the
+  person switcher, and hidden entirely when there is nothing to show.
+- **Create warranty** from a transaction row, which fills in the date, the price and the
+  vendor from the ledger entry and links the two.
 - Forced password change on first login. A user created by an admin, or whose password an
   admin has reset, must choose their own password before any other page opens. Changing it
   signs them out everywhere else and keeps the browser they are using signed in.
@@ -35,6 +61,15 @@ All notable changes to Budget Tracker are recorded here.
 
 ### Changed
 
+- **Backups are now `.tar.gz` archives** containing the database *and* every receipt file,
+  instead of a bare `.db` copy. Older `.db` backups from v1.0.0 are still listed, still
+  counted against your retention setting, and still restore — restoring one leaves your
+  receipts folder completely untouched. A v1.1 archive cannot be restored by a v1.0.0
+  install; downgrading has never been supported.
+- Restoring is now driven by `npm run restore-backup`, which detects the artifact type by its
+  contents rather than its file name, refuses anything it does not recognise, and moves an
+  existing receipts folder aside rather than deleting it. It is still an offline procedure
+  with the container stopped — there is deliberately no in-app restore button.
 - Copying budgets from the previous month now includes archived categories, matching what
   the budgets page already shows for archived spend.
 - A manually entered transaction runs the categorization engine even when a category was
@@ -58,6 +93,17 @@ All notable changes to Budget Tracker are recorded here.
 
 ### Security
 
+- The receipt file route is session-authenticated with an Origin check, serves the stored
+  content type rather than a sniffed one, and hands PDFs over as downloads instead of
+  opening them inline — a same-origin inline PDF would run the viewer's JavaScript in this
+  app's origin.
+- Search input is escaped into full-text-search syntax as literal phrases, so a query
+  containing a quote or the word `AND` returns results instead of an error.
+- Uploaded files are accepted on their leading bytes only, never on their name or the type
+  the browser claims, and are stored under server-generated names that can never contain a
+  path.
+- Backup archives now contain photographs of receipts. They remain unencrypted, exactly like
+  the database — if you copy them off the NAS, use your backup tool's client-side encryption.
 - An admin "reset MFA" now signs the target user out everywhere, matching what an admin
   password reset already did.
 

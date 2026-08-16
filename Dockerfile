@@ -46,7 +46,7 @@ ENV NODE_ENV=production \
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates tzdata \
     && rm -rf /var/lib/apt/lists/* \
-    && mkdir -p /data /data/backups /data/tmp \
+    && mkdir -p /data /data/backups /data/tmp /data/receipts \
     && chown -R node:node /data
 
 # Next standalone output: server.js plus its traced dependency subset.
@@ -72,6 +72,22 @@ COPY --from=builder --chown=node:node /app/node_modules/file-uri-to-path ./node_
 COPY --from=builder --chown=node:node /app/node_modules/node-gyp-build ./node_modules/node-gyp-build
 COPY --from=builder --chown=node:node /app/node_modules/argon2 ./node_modules/argon2
 COPY --from=builder --chown=node:node /app/node_modules/@phc ./node_modules/@phc
+
+# Offline OCR assets. Next's standalone output tracing cannot know that a .wasm blob, a
+# worker script loaded by string path, and a .traineddata.gz under vendor/ are runtime
+# inputs — the same reason better-sqlite3, drizzle/ and CHANGELOG.md are copied explicitly.
+# If any of these is missing at runtime, tesseract.js falls back to its CDN, which is the
+# exact failure an offline LAN install must never hit (spec §7.2, §7.4).
+COPY --from=builder --chown=node:node /app/vendor ./vendor
+COPY --from=builder --chown=node:node /app/node_modules/tesseract.js ./node_modules/tesseract.js
+COPY --from=builder --chown=node:node /app/node_modules/tesseract.js-core ./node_modules/tesseract.js-core
+COPY --from=builder --chown=node:node /app/node_modules/pdfjs-dist ./node_modules/pdfjs-dist
+
+# node-tar backs the .tar.gz backup archive and the restore script (spec §12.1).
+COPY --from=builder --chown=node:node /app/node_modules/tar ./node_modules/tar
+
+# A tracing miss must break `docker build`, not production (MUST-7.9, acceptance A3).
+RUN node scripts/check-ocr-assets.mjs
 
 USER node
 EXPOSE 3000
