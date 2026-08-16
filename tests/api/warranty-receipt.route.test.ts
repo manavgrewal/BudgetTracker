@@ -7,6 +7,7 @@ import { GET } from '@/app/api/warranties/receipts/[id]/route';
 import { SESSION_COOKIE_NAME, createSession } from '@/lib/auth/session';
 import { createWarrantyItem, listWarrantyReceipts, type WarrantyInput } from '@/lib/warranty/items';
 import { resolveReceiptPath } from '@/lib/warranty/receipts';
+import type { ReceiptMime } from '@/lib/warranty/sniff';
 import { writeSidecar, writeStagedReceipt } from '@/lib/warranty/staging';
 import { resetOcrQueueForTests } from '@/lib/warranty/ocr/queue';
 import { setOcrEngineForTests } from '@/lib/warranty/ocr/engine';
@@ -19,6 +20,13 @@ let ownerId: number;
 
 const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(64)]);
 const PDF = Buffer.concat([Buffer.from('%PDF-1.7\n'), Buffer.alloc(64)]);
+const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(64)]);
+const WEBP = Buffer.concat([
+  Buffer.from('RIFF', 'ascii'),
+  Buffer.alloc(4),
+  Buffer.from('WEBP', 'ascii'),
+  Buffer.alloc(64),
+]);
 
 beforeEach(() => {
   dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-receipt-route-'));
@@ -49,7 +57,7 @@ function baseInput(): WarrantyInput {
   };
 }
 
-function attach(bytes: Buffer, mime: 'image/jpeg' | 'application/pdf', originalFilename: string) {
+function attach(bytes: Buffer, mime: ReceiptMime, originalFilename: string) {
   const stagingId = writeStagedReceipt(bytes, mime);
   writeSidecar(stagingId, { status: 'done', text: 'text' });
   const itemId = createWarrantyItem(baseInput(), [{ stagingId, originalFilename }]);
@@ -76,6 +84,22 @@ describe('GET /api/warranties/receipts/[id]', () => {
     expect(response.headers.get('cache-control')).toBe('private, no-store');
     expect(response.headers.get('content-length')).toBe(String(JPEG.length));
     expect(Buffer.from(await response.arrayBuffer()).equals(JPEG)).toBe(true);
+  });
+
+  it('streams a PNG inline (MINOR 4: the allowlist covers every accepted image mime, not just JPEG)', async () => {
+    const receipt = attach(PNG, 'image/png', 'receipt.png');
+    const response = await fetchReceipt(receipt.id);
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('image/png');
+    expect(response.headers.get('content-disposition')).toBe('inline');
+  });
+
+  it('streams a WebP inline', async () => {
+    const receipt = attach(WEBP, 'image/webp', 'receipt.webp');
+    const response = await fetchReceipt(receipt.id);
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toBe('image/webp');
+    expect(response.headers.get('content-disposition')).toBe('inline');
   });
 
   it('serves a PDF as an attachment with a sanitised filename (MUST-5.3)', async () => {

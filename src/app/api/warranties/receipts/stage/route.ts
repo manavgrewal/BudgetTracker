@@ -8,7 +8,7 @@ import {
   MAX_UPLOAD_BYTES,
   sha256Bytes,
 } from '@/lib/warranty/receipts';
-import { HEIC_MESSAGE, UNSUPPORTED_TYPE_MESSAGE, looksLikeHeic, sniffReceiptType } from '@/lib/warranty/sniff';
+import { HEIC_MESSAGE, UNSUPPORTED_TYPE_MESSAGE, extForMime, looksLikeHeic, sniffReceiptType } from '@/lib/warranty/sniff';
 import { writeStagedReceipt } from '@/lib/warranty/staging';
 
 export const dynamic = 'force-dynamic';
@@ -34,6 +34,20 @@ function tooLarge(): Response {
   );
 }
 
+/**
+ * MINOR 2 (review): the Content-Length pre-check trips at MAX_UPLOAD_BYTES (the whole
+ * request, up to MAX_FILES_PER_UPLOAD receipts), not at the per-file MAX_RECEIPT_BYTES cap
+ * tooLarge() describes — reusing that message on this branch told a member uploading five
+ * legitimately-sized 9 MB receipts that "each receipt must be 10485760 bytes or smaller",
+ * which is false. This message names the actual limit that tripped.
+ */
+function requestTooLarge(): Response {
+  return Response.json(
+    { error: `The whole upload must be ${MAX_UPLOAD_BYTES} bytes (50 MB) or smaller.`, code: 'file_too_large' },
+    { status: 413 },
+  );
+}
+
 export async function POST(request: Request): Promise<Response> {
   // MUST-6.3: the STRICT origin check, first, before anything else. This is a mutating
   // request; the relaxed headerless rule of the download GETs does not apply to it.
@@ -50,7 +64,7 @@ export async function POST(request: Request): Promise<Response> {
   // MUST-6.5(a): refuse on the DECLARED size before formData() buffers the whole body —
   // the same pre-check the import routes already make.
   const contentLength = Number(request.headers.get('content-length') ?? '');
-  if (Number.isFinite(contentLength) && contentLength > MAX_UPLOAD_BYTES) return tooLarge();
+  if (Number.isFinite(contentLength) && contentLength > MAX_UPLOAD_BYTES) return requestTooLarge();
 
   const form = await request.formData();
   const parts = form.getAll('file').filter((value): value is File => value instanceof File);
@@ -81,7 +95,15 @@ export async function POST(request: Request): Promise<Response> {
       );
     }
 
-    const meta = partSchema.safeParse({ originalFilename: part.name.slice(0, 255), sizeBytes: buf.length });
+    // MINOR 3 (review): a blank/whitespace-only part name (a drag-and-drop from some
+    // clients, or a deliberately empty File.name) used to fall through to zod's min(1) and
+    // surface a raw internal message ("Too small: expected string...") as a user-facing
+    // 400. Fall back to a generated name instead, exactly like commitStaged's
+    // `receipt.<ext>` fallback in items.ts — the lower layer already treats a blank
+    // original filename as a non-error, so this layer must not be stricter than it.
+    const rawName = part.name.trim();
+    const originalFilename = rawName.length > 0 ? rawName.slice(0, 255) : `receipt.${extForMime(mime)}`;
+    const meta = partSchema.safeParse({ originalFilename, sizeBytes: buf.length });
     if (!meta.success) {
       return Response.json({ error: meta.error.issues[0]?.message ?? 'Invalid file', code: 'no_file' }, { status: 400 });
     }

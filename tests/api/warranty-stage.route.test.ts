@@ -5,9 +5,9 @@ import path from 'node:path';
 import { createSeededTestDb, insertTestUser, type TestDb } from '../helpers/db';
 import { POST } from '@/app/api/warranties/receipts/stage/route';
 import { SESSION_COOKIE_NAME, createSession } from '@/lib/auth/session';
-import { MAX_FILES_PER_UPLOAD, receiptTempDir } from '@/lib/warranty/receipts';
+import { MAX_FILES_PER_UPLOAD, MAX_RECEIPT_BYTES, receiptTempDir } from '@/lib/warranty/receipts';
 import { UNSUPPORTED_TYPE_MESSAGE } from '@/lib/warranty/sniff';
-import { ocrQueueDepth, resetOcrQueueForTests } from '@/lib/warranty/ocr/queue';
+import { isOcrJobClaimed, resetOcrQueueForTests } from '@/lib/warranty/ocr/queue';
 import { setOcrEngineForTests } from '@/lib/warranty/ocr/engine';
 
 let current: TestDb | null = null;
@@ -69,7 +69,20 @@ describe('POST /api/warranties/receipts/stage', () => {
     expect(body.staged[0].sizeBytes).toBe(JPEG.length);
     expect(body.staged[0].sha256).toMatch(/^[0-9a-f]{64}$/);
     expect(fs.existsSync(path.join(receiptTempDir(), `${body.staged[0].stagingId}.jpg`))).toBe(true);
-    expect(ocrQueueDepth() + 1).toBeGreaterThan(0); // one job accepted (the head is in flight)
+    // IMPORTANT 1 (review): `ocrQueueDepth() + 1 > 0` was a tautology — non-negative + 1 is
+    // always > 0, so it stayed green even with enqueueOcrJob() deleted from the route.
+    // isOcrJobClaimed() actually proves the route wired the staged file into the OCR queue:
+    // the fake engine above never resolves, so the job the route enqueued is still claimed.
+    expect(isOcrJobClaimed({ kind: 'staged', stagingId: body.staged[0].stagingId })).toBe(true);
+  });
+
+  it('accepts a part that is exactly MAX_RECEIPT_BYTES', async () => {
+    const exact = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff]), Buffer.alloc(MAX_RECEIPT_BYTES - 3)]);
+    expect(exact.length).toBe(MAX_RECEIPT_BYTES);
+    const response = await POST(upload([{ name: 'exact.jpg', bytes: exact, type: 'image/jpeg' }]));
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { staged: { sizeBytes: number }[] };
+    expect(body.staged[0].sizeBytes).toBe(MAX_RECEIPT_BYTES);
   });
 
   it('stages several parts in one request', async () => {
@@ -155,5 +168,12 @@ describe('POST /api/warranties/receipts/stage', () => {
   it('400s a zero-byte part and a request with no file part at all', async () => {
     expect((await POST(upload([{ name: 'empty.jpg', bytes: Buffer.alloc(0) }]))).status).toBe(400);
     expect((await POST(upload([]))).status).toBe(400);
+  });
+
+  it('MINOR 3: stages a blank-named part under a generated name instead of leaking a raw zod message', async () => {
+    const response = await POST(upload([{ name: '   ', bytes: JPEG, type: 'image/jpeg' }]));
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { staged: { originalFilename: string; mime: string }[] };
+    expect(body.staged[0].originalFilename).toBe('receipt.jpg');
   });
 });

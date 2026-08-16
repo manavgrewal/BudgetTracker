@@ -4,8 +4,18 @@ import { isSameOriginOrHeaderless } from '@/lib/auth/csrf';
 import { userFromRequest } from '@/lib/auth/session';
 import { getWarrantyReceipt } from '@/lib/warranty/items';
 import { resolveReceiptPath } from '@/lib/warranty/receipts';
+import type { ReceiptMime } from '@/lib/warranty/sniff';
 
 export const dynamic = 'force-dynamic';
+
+/**
+ * MINOR 9 (review): an explicit ALLOWLIST of the mimes that render inline, not
+ * "pdf -> attachment, else inline". sniffReceiptType's accepted set is exactly four
+ * values today, but a future widening of that set (e.g. a new document type) must fail
+ * SAFE — landing in the attachment branch by default — rather than silently becoming
+ * inline just because it wasn't the one type this file happened to special-case.
+ */
+const INLINE_MIMES: ReadonlySet<ReceiptMime> = new Set(['image/jpeg', 'image/png', 'image/webp']);
 
 /**
  * The ONLY way a receipt's bytes reach a browser (§5).
@@ -69,14 +79,15 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
   }
 
   /**
-   * MUST-5.3: images inline, PDFs as an attachment. A same-origin INLINE pdf opens in the
-   * browser's PDF viewer, which executes JavaScript embedded in the document within our
-   * origin; object-src 'none' in the CSP does not cover a top-level navigation to the file.
+   * MUST-5.3: images inline, everything else (PDFs today) as an attachment. A same-origin
+   * INLINE pdf opens in the browser's PDF viewer, which executes JavaScript embedded in the
+   * document within our origin; object-src 'none' in the CSP does not cover a top-level
+   * navigation to the file. Gated on the INLINE_MIMES allowlist above, not on excluding
+   * 'application/pdf' specifically.
    */
-  const disposition =
-    receipt.mime === 'application/pdf'
-      ? `attachment; filename="${safeFilename(receipt.originalFilename)}"`
-      : 'inline';
+  const disposition = INLINE_MIMES.has(receipt.mime)
+    ? 'inline'
+    : `attachment; filename="${safeFilename(receipt.originalFilename)}"`;
 
   // MUST-5.5: streamed, not readFileSync — 10 MB x several concurrent image loads is a
   // needless RSS spike on a NAS.
