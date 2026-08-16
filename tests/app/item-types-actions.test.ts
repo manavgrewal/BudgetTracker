@@ -71,6 +71,40 @@ describe('admin gate', () => {
   });
 });
 
+describe('subscription flag FormData shape (regression: hidden-input shadowing)', () => {
+  // The create form used to render `<input type="hidden" name="isSubscription" value="0">`
+  // as a sibling BEFORE `<input type="checkbox" name="isSubscription" value="1">`.
+  // FormData.get() returns the FIRST value for a repeated key, so a checked box still
+  // produced formData.get('isSubscription') === '0' -- the admin's choice was silently
+  // discarded. The hidden input was deleted; these tests lock in the two real shapes an
+  // HTML form can actually submit for a checkbox, plus (for documentation) the duplicate-
+  // key shape the old broken form used to produce.
+
+  it('is a subscription when the checkbox key is present with value "1" (box checked)', async () => {
+    current = createTestDb();
+    await createItemTypeAction({}, formData({ name: 'Streaming service', isSubscription: '1' }));
+    expect(listItemTypes().find((t) => t.name === 'Streaming service')).toMatchObject({ isSubscription: true });
+  });
+
+  it('is NOT a subscription when the checkbox key is absent entirely (box unchecked)', async () => {
+    current = createTestDb();
+    await createItemTypeAction({}, formData({ name: 'Router' }));
+    expect(listItemTypes().find((t) => t.name === 'Router')).toMatchObject({ isSubscription: false });
+  });
+
+  it('documents current get()-first semantics for the old duplicate-key shape', async () => {
+    current = createTestDb();
+    const fd = new FormData();
+    fd.set('name', 'Legacy shape');
+    fd.append('isSubscription', '0');
+    fd.append('isSubscription', '1');
+    await createItemTypeAction({}, fd);
+    // formData.get('isSubscription') resolves to the FIRST appended value ('0'), exactly
+    // the failure mode the hidden input produced -- documented here, not relied upon.
+    expect(listItemTypes().find((t) => t.name === 'Legacy shape')).toMatchObject({ isSubscription: false });
+  });
+});
+
 describe('happy paths and refusals', () => {
   it('creates, renames, toggles and deletes', async () => {
     current = createTestDb();

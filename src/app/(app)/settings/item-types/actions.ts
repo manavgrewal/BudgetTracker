@@ -3,6 +3,7 @@
 import { headers } from 'next/headers';
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
+import BetterSqlite3 from 'better-sqlite3';
 import { isSameOrigin } from '@/lib/auth/csrf';
 import { requireAdmin } from '@/lib/auth/session';
 import {
@@ -29,6 +30,14 @@ function failure(error: unknown, fallback: string): ItemTypesFormState {
   // ItemTypeError / ItemTypeInUseError messages are written for the admin to read.
   if (error instanceof ItemTypeError) return { error: error.message };
   if (error instanceof z.ZodError) return { error: error.issues[0]?.message ?? fallback };
+  // Defense in depth for races the app-layer prechecks in src/lib/warranty/types.ts cannot
+  // fully close (e.g. two concurrent creates of the same name, or an item inserted between
+  // deleteItemType()'s usage check and its DELETE): translate the raw SQLite constraint into
+  // the same wording the precheck would have produced, instead of a driver-level message.
+  if (error instanceof BetterSqlite3.SqliteError) {
+    if (error.code === 'SQLITE_CONSTRAINT_FOREIGNKEY') return { error: 'Items still use this type.' };
+    if (error.code === 'SQLITE_CONSTRAINT_UNIQUE') return { error: 'A type with that name already exists.' };
+  }
   return { error: fallback };
 }
 
