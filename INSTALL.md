@@ -311,9 +311,8 @@ alone and copy the finished files on a schedule:
 
 `rsync` only ever reads files the backup job has already finished writing, so there is no window
 where it can copy a half-written archive. On Synology, **Hyper Backup** pointed at the
-`data/backups` folder does the same job with client-side encryption — worth turning on, because
-the backup files themselves are unencrypted, and since receipts joined the archive they can carry
-names, addresses and partial card numbers as well as transaction data, not just the database.
+`data/backups` folder does the same job with client-side encryption built in — see the encryption
+note above for why that is worth turning on.
 
 Whichever option you choose, restore is unchanged: run `restore-backup` against the chosen
 artifact using the procedure above.
