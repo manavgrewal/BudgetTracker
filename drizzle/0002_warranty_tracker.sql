@@ -18,6 +18,9 @@
 -- statement hyphen breakpoint): Drizzle's migrator splits the file on that literal marker
 -- and nothing else, which is what makes the CREATE TRIGGER ... BEGIN ...; ...; END; bodies
 -- below safe. A splitter keyed on ";" would shred them.
+-- NEVER write that marker literally anywhere in this file, comments included:
+-- the splitter is comment-blind ("-->" immediately followed by "statement-breakpoint"
+-- in a comment creates a bogus comment-only chunk that better-sqlite3 rejects).
 CREATE TABLE `warranty_items` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`name` text NOT NULL,

@@ -1,6 +1,14 @@
 import { describe, it, expect, afterEach } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
 import { createTestDb, type TestDb } from '../helpers/db';
 import { openDatabase } from '@/db/client';
+
+const JOURNAL_ENTRY_COUNT = (
+  JSON.parse(fs.readFileSync(path.join(process.cwd(), 'drizzle/meta/_journal.json'), 'utf8')) as {
+    entries: unknown[];
+  }
+).entries.length;
 
 let current: TestDb | null = null;
 
@@ -55,7 +63,7 @@ describe('database schema', () => {
     const rows = current.sqlite
       .prepare(
         "select name from sqlite_master where type = 'table' and name not like 'sqlite_%' " +
-          "and name not like '__drizzle%' and name not like 'warranty_search\\_%' escape '\\' order by name",
+          "and name not like '__drizzle%' and name not like 'warranty\\_search\\_%' escape '\\' order by name",
       )
       .all() as { name: string }[];
     expect(rows.map((r) => r.name)).toEqual(EXPECTED_TABLES);
@@ -266,9 +274,9 @@ describe('migration 0001_add_must_change_password', () => {
   const appliedTags = (sqlite: TestDb['sqlite']): number =>
     (sqlite.prepare('select count(*) as c from __drizzle_migrations').get() as { c: number }).c;
 
-  it('a fresh database runs BOTH migrations, in journal order', () => {
+  it('a fresh database runs ALL migrations, in journal order', () => {
     current = createTestDb();
-    expect(appliedTags(current.sqlite)).toBe(3);
+    expect(appliedTags(current.sqlite)).toBe(JOURNAL_ENTRY_COUNT);
 
     const columns = current.sqlite.prepare('pragma table_info(users)').all() as {
       name: string;
@@ -300,9 +308,9 @@ describe('migration 0001_add_must_change_password', () => {
     current.sqlite.close();
 
     const again = openDatabase(file);
-    // Still three recorded migrations, and the ALTER TABLE did not run a second time
-    // (a repeat would throw "duplicate column name: must_change_password").
-    expect(appliedTags(again.sqlite)).toBe(3);
+    // Still every recorded migration from the journal, and the ALTER TABLE did not run a
+    // second time (a repeat would throw "duplicate column name: must_change_password").
+    expect(appliedTags(again.sqlite)).toBe(JOURNAL_ENTRY_COUNT);
     const flagColumns = (again.sqlite.prepare('pragma table_info(users)').all() as { name: string }[]).filter(
       (column) => column.name === 'must_change_password',
     );
