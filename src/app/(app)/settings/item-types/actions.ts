@@ -4,7 +4,7 @@ import { headers } from 'next/headers';
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
 import BetterSqlite3 from 'better-sqlite3';
-import { isSameOrigin } from '@/lib/auth/csrf';
+import { CROSS_ORIGIN_ERROR, isSameOrigin } from '@/lib/auth/csrf';
 import { requireAdmin } from '@/lib/auth/session';
 import {
   ItemTypeError,
@@ -20,7 +20,6 @@ export interface ItemTypesFormState {
   message?: string;
 }
 
-const CROSS_ORIGIN_ERROR = 'Cross-origin request rejected';
 const PATH = '/settings/item-types';
 
 const flagSchema = z.enum(['0', '1']).transform((v) => v === '1');

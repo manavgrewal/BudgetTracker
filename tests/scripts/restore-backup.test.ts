@@ -13,7 +13,7 @@ import {
   detectArtifactKind,
   restoreFromArtifact,
 } from '../../scripts/restore-backup';
-import { STORED_NAME_RE } from '@/lib/warranty/receipts';
+import { STORED_NAME_RE, purgeOrphanReceipts } from '@/lib/warranty/receipts';
 
 /**
  * A minimal, hand-rolled ustar-format tar writer, used only to fabricate archives with
@@ -358,6 +358,84 @@ describe('v1.0.0 DB-only restore (MUST-12.9)', () => {
 
     const target = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-restore-target-'));
     expect(restoreFromArtifact(legacy, { dataDir: target }).missingReceiptRows).toBe(0);
+    fs.rmSync(target, { recursive: true, force: true });
+  });
+
+  // Fix report BLOCKER 1a: a DB-only artifact restores a database with (near-)zero
+  // warranty_receipts rows and leaves receipts/ completely untouched (MUST-12.9). Every file
+  // already in that directory keeps its pre-restore mtime, which is normally well past the
+  // 24 h sweep grace window (MUST-4.9) by the time anyone actually runs a restore. Without
+  // re-arming those mtimes, the very next nightly sweep would treat every one of them as an
+  // orphan.
+  it('re-arms every existing receipt file mtime to "now" so the next sweep cannot treat them as orphans', () => {
+    const legacy = path.join(dataDir, 'bare-for-rearm.db');
+    current!.sqlite.exec(`VACUUM INTO '${legacy.replace(/'/g, "''")}'`);
+
+    const target = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-restore-target-'));
+    fs.mkdirSync(path.join(target, 'receipts'), { recursive: true });
+    const stale = '33333333-4444-5555-6666-777777777777.jpg';
+    const file = path.join(target, 'receipts', stale);
+    fs.writeFileSync(file, JPEG);
+    const wellOverADayAgo = new Date(Date.now() - 72 * 60 * 60 * 1000);
+    fs.utimesSync(file, wellOverADayAgo, wellOverADayAgo);
+
+    const at = new Date('2026-08-16T12:00:00.000Z');
+    const result = restoreFromArtifact(legacy, { dataDir: target, now: at });
+
+    expect(result.kind).toBe('sqlite');
+    expect(result.receiptsTouched).toBe(1);
+    expect(fs.statSync(file).mtimeMs).toBe(at.getTime());
+    fs.rmSync(target, { recursive: true, force: true });
+  });
+
+  it('leaves receiptsTouched at 0 for an archive restore, which repopulates receipts/ itself', () => {
+    const artifact = path.join(dataDir, 'archive-touched.tar.gz');
+    buildArchive(artifact);
+    const target = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-restore-target-'));
+    const result = restoreFromArtifact(artifact, { dataDir: target });
+    expect(result.kind).toBe('archive');
+    expect(result.receiptsTouched).toBe(0);
+    fs.rmSync(target, { recursive: true, force: true });
+  });
+
+  // Fix report BLOCKER 1 (cross-module): the exact failure scenario the final reviewer
+  // described — a bare .db restored over a data dir whose receipts/ already holds files
+  // older than the sweep's 24 h grace window, then the next nightly runMaintenanceSweep
+  // calling purgeOrphanReceipts() with the restored DB's (empty) known set. Both halves of
+  // the fix (the mtime re-arm here, and purgeOrphanReceipts' own empty-known guard in
+  // src/lib/warranty/receipts.ts) must hold for every file to survive.
+  it('a bare-.db restore followed by the next maintenance sweep destroys nothing', () => {
+    const legacy = path.join(dataDir, 'bare-crossmodule.db');
+    current!.sqlite.exec(`VACUUM INTO '${legacy.replace(/'/g, "''")}'`);
+
+    const target = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-restore-target-'));
+    fs.mkdirSync(path.join(target, 'receipts'), { recursive: true });
+    const staleA = '11111111-2222-3333-4444-555555555555.jpg';
+    const staleB = '22222222-3333-4444-5555-666666666666.png';
+    fs.writeFileSync(path.join(target, 'receipts', staleA), JPEG);
+    fs.writeFileSync(path.join(target, 'receipts', staleB), JPEG);
+    const wellOverADayAgo = new Date(Date.now() - 72 * 60 * 60 * 1000);
+    fs.utimesSync(path.join(target, 'receipts', staleA), wellOverADayAgo, wellOverADayAgo);
+    fs.utimesSync(path.join(target, 'receipts', staleB), wellOverADayAgo, wellOverADayAgo);
+
+    const result = restoreFromArtifact(legacy, { dataDir: target });
+    expect(result.kind).toBe('sqlite');
+    expect(result.receiptsTouched).toBe(2);
+
+    // Simulate the next nightly runMaintenanceSweep, which reads the restored DB's stored
+    // filenames (empty here) and sweeps exactly this directory.
+    const savedDataDir = process.env.DATA_DIR;
+    process.env.DATA_DIR = target;
+    try {
+      const removed = purgeOrphanReceipts(new Set());
+      expect(removed).toBe(0);
+    } finally {
+      if (savedDataDir === undefined) delete process.env.DATA_DIR;
+      else process.env.DATA_DIR = savedDataDir;
+    }
+
+    expect(fs.existsSync(path.join(target, 'receipts', staleA))).toBe(true);
+    expect(fs.existsSync(path.join(target, 'receipts', staleB))).toBe(true);
     fs.rmSync(target, { recursive: true, force: true });
   });
 });

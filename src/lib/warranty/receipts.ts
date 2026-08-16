@@ -167,8 +167,36 @@ export function purgeOrphanReceipts(
 ): number {
   const dir = receiptsDir();
   if (!fs.existsSync(dir)) return 0;
+  const entries = fs.readdirSync(dir);
+
+  // Fix report BLOCKER 1b, belt-and-braces: `known` is empty either because there are
+  // genuinely zero warranty_receipts rows, or — the dangerous case — because a v1.0.0
+  // DB-only restore (scripts/restore-backup.ts) just replaced budget.db with a snapshot
+  // that references few or none of the files already sitting in this directory. A
+  // populated receipts/ directory alongside a completely empty known set is never a
+  // legitimate sweep target: it is always either mid-restore or a corrupt read of the
+  // table. Refuse outright rather than guess, so an install-wide read failure or an
+  // in-progress restore cannot be misread as "every receipt is an orphan".
+  if (
+    known.size === 0 &&
+    entries.some((entry) => {
+      if (!STORED_NAME_RE.test(entry)) return false;
+      try {
+        return fs.statSync(path.join(dir, entry)).isFile();
+      } catch {
+        return false;
+      }
+    })
+  ) {
+    console.warn(
+      `[warranty] purgeOrphanReceipts: refusing to sweep ${dir} — zero known receipts but the directory ` +
+        'still contains receipt files (likely mid-restore or a corrupt read); nothing was deleted',
+    );
+    return 0;
+  }
+
   let removed = 0;
-  for (const entry of fs.readdirSync(dir)) {
+  for (const entry of entries) {
     if (!STORED_NAME_RE.test(entry)) continue;
     if (known.has(entry)) continue;
     const file = path.join(dir, entry);

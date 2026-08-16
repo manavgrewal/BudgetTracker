@@ -46,6 +46,12 @@ export interface RestoreResult {
   /** The directory the previous receipts/ was renamed to, or null when there was none. */
   receiptsMovedAside: string | null;
   missingReceiptRows: number;
+  /**
+   * Fix report BLOCKER 1a: how many pre-existing receipt files had their mtime re-armed to
+   * "now" after a v1.0.0 DB-only restore. Always 0 for an archive restore, which restores
+   * receipts/ itself and needs no re-arming.
+   */
+  receiptsTouched: number;
 }
 
 const SQLITE_MAGIC = 'SQLite format 3\0';
@@ -131,6 +137,40 @@ function countMissingReceiptRows(databasePath: string, receiptsPath: string): nu
   }
 }
 
+/**
+ * Fix report BLOCKER 1a: re-arms purgeOrphanReceipts' 24 h grace window (MUST-4.9,
+ * src/lib/warranty/receipts.ts) for every file already sitting in receipts/, by stamping
+ * its mtime to `now`.
+ *
+ * Without this, a v1.0.0 DB-only restore (the `kind === 'sqlite'` branch below) replaces
+ * budget.db with a snapshot that references few or zero receipt files — by design (MUST-12.9)
+ * receipts/ itself is left completely untouched — while every file already in that directory
+ * keeps whatever mtime it had before the restore, which after any real amount of uptime is
+ * well past 24 h old. The very next nightly runMaintenanceSweep() then calls
+ * purgeOrphanReceipts() with that freshly-restored (near-empty) known set, and every one of
+ * those "too old" files reads as an orphan: the sweep would delete every receipt the restore
+ * was supposed to leave alone. Stamping every file's mtime to "now" buys the operator a full
+ * day to reconcile the DB-only restore (e.g. by also restoring receipts/ from an archive
+ * backup, or re-linking transactions) before the sweep looks at these files again.
+ */
+function touchReceiptFiles(receiptsPath: string, now: Date): number {
+  if (!fs.existsSync(receiptsPath)) return 0;
+  let touched = 0;
+  for (const entry of fs.readdirSync(receiptsPath)) {
+    const file = path.join(receiptsPath, entry);
+    let stats: fs.Stats;
+    try {
+      stats = fs.statSync(file);
+    } catch {
+      continue;
+    }
+    if (!stats.isFile()) continue;
+    fs.utimesSync(file, now, now);
+    touched += 1;
+  }
+  return touched;
+}
+
 function replaceDatabase(source: string, dataDir: string): void {
   const target = path.join(dataDir, 'budget.db');
   fs.mkdirSync(dataDir, { recursive: true });
@@ -149,6 +189,7 @@ export function restoreFromArtifact(
   const kind = detectArtifactKind(artifactPath);
   const dataDir = path.resolve(opts.dataDir);
   const receiptsPath = path.join(dataDir, 'receipts');
+  const now = opts.now ?? new Date();
 
   if (kind === 'unknown') {
     throw new RestoreError(
@@ -161,18 +202,21 @@ export function restoreFromArtifact(
     // modify data/receipts/ — treating silence as "delete them" would destroy files the
     // backup was never responsible for.
     replaceDatabase(artifactPath, dataDir);
+    // Fix report BLOCKER 1a: see touchReceiptFiles' docblock.
+    const receiptsTouched = touchReceiptFiles(receiptsPath, now);
     return {
       kind,
       databaseRestored: true,
       receiptsRestored: 0,
       receiptsMovedAside: null,
       missingReceiptRows: countMissingReceiptRows(path.join(dataDir, 'budget.db'), receiptsPath),
+      receiptsTouched,
     };
   }
 
   assertArchiveEntriesAreSafe(artifactPath);
 
-  const stamp = (opts.now ?? new Date()).toISOString().replace(/[:.]/g, '-');
+  const stamp = now.toISOString().replace(/[:.]/g, '-');
   const stage = path.join(dataDir, `.restore-${stamp}`);
   fs.mkdirSync(stage, { recursive: true });
   let movedAside: string | null = null;
@@ -219,6 +263,8 @@ export function restoreFromArtifact(
       receiptsRestored: restored,
       receiptsMovedAside: movedAside,
       missingReceiptRows: countMissingReceiptRows(path.join(dataDir, 'budget.db'), receiptsPath),
+      // An archive restore repopulates receipts/ itself, so there is nothing to re-arm.
+      receiptsTouched: 0,
     };
   } finally {
     fs.rmSync(stage, { recursive: true, force: true });
@@ -290,6 +336,14 @@ async function main(): Promise<void> {
   if (result.receiptsMovedAside) console.log(`  previous receipts kept at: ${result.receiptsMovedAside}`);
   // MUST-12.9: an explicit count, so a cross-version restore is honest about what is missing.
   console.log(`  ${result.missingReceiptRows} receipt rows reference files that are not present on disk.`);
+  // Fix report BLOCKER 1a: only meaningful for a DB-only restore, which is the one case that
+  // leaves a pre-existing receipts/ directory in place with mtimes the nightly sweep would
+  // otherwise treat as stale.
+  if (result.kind === 'sqlite') {
+    console.log(
+      `  ${result.receiptsTouched} existing receipt file(s) had their mtime refreshed so tonight's maintenance sweep will not treat them as orphans.`,
+    );
+  }
 }
 
 // Only run when invoked directly, so the test file can import the functions.

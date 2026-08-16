@@ -7,6 +7,9 @@ import { SETTING_BACKUP_RETENTION, getIntSetting, setIntSetting } from '@/lib/se
 import {
   ARCHIVE_NAME_RE,
   LEGACY_NAME_RE,
+  NIGHTLY_PARTIAL_NAME_RE,
+  ON_DEMAND_PARTIAL_NAME_RE,
+  PARTIAL_MAX_AGE_MS,
   backupsDir,
   buildArchive,
   createOnDemandArchive,
@@ -76,11 +79,42 @@ export function runNightlyBackup(at: Date = new Date()): BackupFile {
   return { name, path: target, bytes: stats.size, modifiedAt: new Date(stats.mtimeMs).toISOString() };
 }
 
-export function pruneBackups(retain: number = getBackupRetention()): string[] {
+/**
+ * Fix report BLOCKER 2: a `.partial` archive left behind by a hard-killed nightly job
+ * (buildArchive()'s `finally` never runs under SIGKILL) is outside ARCHIVE_NAME_RE and
+ * LEGACY_NAME_RE, so listBackups()/pruneBackups()'s retention pass above never sees it — it
+ * would otherwise sit in backupsDir() forever, and the next night's cleanup targets a
+ * different dated name. Mirrors the `-archive` stale-directory rule in
+ * src/lib/import/staging.ts's purgeStagedFiles(): only removed once old enough
+ * (PARTIAL_MAX_AGE_MS) that no buildArchive() call still in flight could be writing it.
+ */
+function pruneStalePartials(now: Date): string[] {
+  const dir = backupsDir();
+  if (!fs.existsSync(dir)) return [];
+  const removed: string[] = [];
+  for (const name of fs.readdirSync(dir)) {
+    if (!NIGHTLY_PARTIAL_NAME_RE.test(name) && !ON_DEMAND_PARTIAL_NAME_RE.test(name)) continue;
+    const file = path.join(dir, name);
+    let stats: fs.Stats;
+    try {
+      stats = fs.statSync(file);
+    } catch {
+      continue;
+    }
+    if (!stats.isFile()) continue;
+    if (now.getTime() - stats.mtimeMs <= PARTIAL_MAX_AGE_MS) continue;
+    fs.rmSync(file, { force: true });
+    removed.push(name);
+  }
+  return removed;
+}
+
+export function pruneBackups(retain: number = getBackupRetention(), now: Date = new Date()): string[] {
   const files = listBackups();
   const doomed = files.slice(Math.max(0, retain));
   for (const file of doomed) fs.rmSync(file.path, { force: true });
-  return doomed.map((file) => file.name);
+  const stalePartials = pruneStalePartials(now);
+  return [...doomed.map((file) => file.name), ...stalePartials];
 }
 
 /** Settings -> "Download backup now". Written to /data/tmp so it cannot collide with the nightly names. */
@@ -112,12 +146,35 @@ export interface NightlyJobResult {
   sweep: SweepResult;
 }
 
+/**
+ * Fix report BLOCKER 3: the backup+prune step is wrapped in its own try/catch so a failure
+ * there (ENOSPC, a full disk, anything buildArchive()/pruneBackups() can throw) can never
+ * prevent runMaintenanceSweep() from running. Before this fix the three steps shared one
+ * implicit try (the caller's), so a backup failure silently and permanently disabled session
+ * expiry, login-attempt pruning, staged-upload cleanup and the orphan-receipt sweep every
+ * night thereafter — nothing about those four purges depends on the backup having succeeded.
+ * The backup error is still rethrown after the sweep has run, so every existing caller
+ * (the scheduler, the "run now" settings action) sees and reports the failure exactly as
+ * before.
+ */
 export function runNightlyJob(at: Date = new Date()): NightlyJobResult {
-  const backup = runNightlyBackup(at);
-  const pruned = pruneBackups();
+  let backup: BackupFile | undefined;
+  let pruned: string[] = [];
+  let backupError: unknown;
+  try {
+    backup = runNightlyBackup(at);
+    pruned = pruneBackups(undefined, at);
+  } catch (error) {
+    backupError = error;
+    console.error('[backup] nightly backup/prune failed; maintenance sweep will still run', error);
+  }
+
   const sweep = runMaintenanceSweep(at);
+
+  if (backupError !== undefined) throw backupError;
+
   console.log(
-    `[backup] wrote ${backup.name} (${backup.bytes} bytes), pruned ${pruned.length}, purged ${sweep.sessionsPurged} sessions / ${sweep.loginAttemptsPurged} login attempts / ${sweep.stagedFilesPurged} staged uploads / ${sweep.receiptOrphansPurged} orphan receipts`,
+    `[backup] wrote ${backup!.name} (${backup!.bytes} bytes), pruned ${pruned.length}, purged ${sweep.sessionsPurged} sessions / ${sweep.loginAttemptsPurged} login attempts / ${sweep.stagedFilesPurged} staged uploads / ${sweep.receiptOrphansPurged} orphan receipts`,
   );
-  return { backup, pruned, sweep };
+  return { backup: backup!, pruned, sweep };
 }

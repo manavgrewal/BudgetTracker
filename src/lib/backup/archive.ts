@@ -22,6 +22,22 @@ export const ON_DEMAND_NAME_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tar\.gz$/;
 const SNAPSHOT_NAME_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.db$/;
 
+/**
+ * Fix report BLOCKER 2: the `.partial` sibling buildArchive() builds before its atomic
+ * rename (this file, above). A hard-killed container (SIGKILL — no `finally` runs) can
+ * leave one of these behind forever: listBackups()/pruneBackups() only ever match
+ * ARCHIVE_NAME_RE/LEGACY_NAME_RE, both anchored with `$`, so a `.partial` file never
+ * matches either and is never seen by ordinary retention pruning. Mirrors the `-archive`
+ * directory rule in src/lib/import/staging.ts's purgeStagedFiles().
+ */
+export const NIGHTLY_PARTIAL_NAME_RE = /^budget-\d{4}-\d{2}-\d{2}\.tar\.gz\.partial$/;
+/** The on-demand shape's `.partial` sibling — never actually written into backupsDir()
+ *  (createOnDemandArchive() builds under tempDir()), but matched defensively all the same. */
+export const ON_DEMAND_PARTIAL_NAME_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tar\.gz\.partial$/;
+/** Only removed once old enough that no in-flight buildArchive() could still be writing it. */
+export const PARTIAL_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
 export function backupsDir(): string {
   return path.join(readEnv().dataDir, 'backups');
 }

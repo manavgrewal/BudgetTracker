@@ -31,6 +31,10 @@ export async function extractPdfText(filePath: string): Promise<string> {
     isEvalSupported: false,
     disableFontFace: true,
     useSystemFonts: false,
+    // Fix report RIDER 4: the literal 0 is pdfjs-dist's VerbosityLevel.ERRORS — importing
+    // the enum just for this one constant isn't worth it. Suppresses the per-PDF standard-
+    // font warnings pdfjs otherwise logs to stdout/stderr in production for every receipt.
+    verbosity: 0,
   }).promise;
 
   try {

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -225,5 +225,42 @@ describe('purgeOrphanReceipts (MUST-4.9)', () => {
     }).not.toThrow();
     expect(removed).toBe(0);
     expect(fs.existsSync(path.join(receiptsDir(), weirdDirName))).toBe(true);
+  });
+
+  // Fix report BLOCKER 1b, belt-and-braces guard: an empty `known` set together with a
+  // receipts/ directory that still has receipt-shaped files in it is never a legitimate
+  // sweep target (it is always either mid-restore -- see scripts/restore-backup.ts -- or a
+  // corrupt read of warranty_receipts), so the whole sweep is refused, REGARDLESS of the
+  // files' age. This is deliberately distinguished from the "adopts a staged file..." test
+  // above, whose files are protected by the 24 h age guard alone; here the files are made
+  // deliberately ancient (2020) specifically to prove the empty-known guard is the thing
+  // doing the protecting, not the age check.
+  it('refuses to sweep when known is empty but receipts/ still holds files, no matter how old they are', () => {
+    const orphanA = writeReceiptFile(Buffer.from('a'), 'image/jpeg');
+    const orphanB = writeReceiptFile(Buffer.from('b'), 'image/png');
+    const longAgo = new Date('2020-01-01T00:00:00.000Z');
+    fs.utimesSync(resolveReceiptPath(orphanA), longAgo, longAgo);
+    fs.utimesSync(resolveReceiptPath(orphanB), longAgo, longAgo);
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const removed = purgeOrphanReceipts(new Set(), undefined, new Date('2026-08-16T12:00:00.000Z'));
+    expect(removed).toBe(0);
+    expect(receiptFileExists(orphanA)).toBe(true);
+    expect(receiptFileExists(orphanB)).toBe(true);
+    expect(warnSpy).toHaveBeenCalled();
+    warnSpy.mockRestore();
+  });
+
+  it('does NOT trigger the empty-known guard when known has entries — normal orphan sweeping still works', () => {
+    const known = writeReceiptFile(Buffer.from('known'), 'image/jpeg');
+    const orphan = writeReceiptFile(Buffer.from('orphan'), 'image/png');
+    const longAgo = new Date('2020-01-01T00:00:00.000Z');
+    fs.utimesSync(resolveReceiptPath(orphan), longAgo, longAgo);
+    fs.utimesSync(resolveReceiptPath(known), longAgo, longAgo);
+
+    const removed = purgeOrphanReceipts(new Set([known]), undefined, new Date('2026-08-16T12:00:00.000Z'));
+    expect(removed).toBe(1);
+    expect(receiptFileExists(known)).toBe(true);
+    expect(receiptFileExists(orphan)).toBe(false);
   });
 });

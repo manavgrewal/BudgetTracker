@@ -400,7 +400,7 @@ The `createWarrantyAction` / `attachReceiptsAction` server actions take `staging
 
 ### 7.3 Language data provenance
 
-**MUST-7.7** `eng.traineddata.gz` is **committed to the repository** at `vendor/tessdata/eng.traineddata.gz` (~15 MB). `scripts/fetch-tessdata.mjs` is a documented one-time regeneration helper (run by a maintainer with internet access; never invoked by a build, a test, or the app). A test asserts the file's sha256 matches a constant recorded in `src/lib/warranty/ocr/assets.ts`, so a corrupt or swapped file is caught in CI rather than at a family member's first upload.
+**MUST-7.7** `eng.traineddata.gz` is **committed to the repository** at `vendor/tessdata/eng.traineddata.gz` (~1.9 MB — the `tessdata_fast` variant; amended at final review, see §17.28). `scripts/fetch-tessdata.mjs` is a documented one-time regeneration helper (run by a maintainer with internet access; never invoked by a build, a test, or the app). A test asserts the file's sha256 matches a constant recorded in `src/lib/warranty/ocr/assets.ts`, so a corrupt or swapped file is caught in CI rather than at a family member's first upload.
 
 Rejected alternative: pulling the data from an npm package such as `@tesseract.js-data/eng`. It keeps a binary out of git, but it makes an offline-critical asset depend on the continued publication of a third-party data package and on npm resolution at build time. Vendoring is deterministic. (§17.21)
 
@@ -567,7 +567,7 @@ Form fields: name (required) · vendor · model · serial · purchase date (requ
 
 ### 10.4 Detail view — `/warranties/[id]`
 
-- All fields, the owner, the computed status badge, and — when `transaction_id` is set — a link to the linked transaction. When the link has been nulled by an import undo, the page says "The linked transaction was removed by an import undo" rather than showing a dead link.
+- All fields, the owner, the computed status badge, and — when `transaction_id` is set — a link to the linked transaction. When the link has been nulled by an import undo, the page says "The linked transaction was removed by an import undo" rather than showing a dead link. **(amended at final review)** This message cannot actually be produced by the build as specified: `ON DELETE SET NULL` (MUST-3.7) makes a nulled `transaction_id` indistinguishable from one that was never linked, so only a dangling id left by an FK-off restore ever triggers it.
 - **Receipt gallery:** images rendered inline via `/api/warranties/receipts/[id]` (click to open full size); PDFs shown as a labelled download link (§5.3); each tile shows the original filename, size, OCR status chip, and — on failure — the error text.
 - Per receipt: **Re-run OCR**, **Remove** (confirm).
 - **Add receipt**: the same staged-upload control, committing through `attachReceiptsAction`.
@@ -775,6 +775,7 @@ Defaults chosen while writing this spec. Each is a single constant or a one-para
 25. **`serial` is stored but not unique and not validated** — OCR mis-reads and blanks must both be storable.
 26. **`price_cents` is a positive magnitude**, unlike `transactions.amount_cents`; §11 converts with `Math.abs`.
 27. **Three new runtime dependencies** (`tesseract.js`, `pdfjs-dist`, `tar`) and no base-image change.
+28. **`tessdata_fast` chosen over `tessdata_best`/standard (~15MB): 8x smaller image, faster cold OCR on Pi/NAS; accuracy trade accepted for receipt-search use. (recorded at final review)**
 
 ---
 

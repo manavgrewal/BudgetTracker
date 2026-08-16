@@ -35,6 +35,7 @@ import {
 } from '@/lib/backup/archive';
 import { listBackups, nightlyBackupName, pruneBackups, runMaintenanceSweep, runNightlyJob } from '@/lib/backup';
 import { receiptsDir, writeReceiptFile } from '@/lib/warranty/receipts';
+import { createSession } from '@/lib/auth/session';
 
 let current: TestDb | null = null;
 let dataDir: string;
@@ -169,6 +170,27 @@ describe('listBackups compatibility (MUST-12.3)', () => {
 
 describe('maintenance sweep (MUST-4.9)', () => {
   it('reports receiptOrphansPurged and leaves referenced files alone', () => {
+    // BLOCKER 1b: `known` must be non-empty here, or the belt-and-braces guard in
+    // purgeOrphanReceipts() refuses the whole sweep outright (an empty known set with a
+    // populated receipts/ directory is always either mid-restore or corrupt, never a
+    // legitimate sweep target — see tests/lib/warranty/receipts.test.ts). A real referenced
+    // receipt row is what makes this test's `orphan` genuinely, unambiguously orphaned.
+    insertTestUser(current!.db, { name: 'Alice', username: 'alice' });
+    const known = writeReceiptFile(JPEG, 'image/jpeg');
+    current!.sqlite
+      .prepare(
+        `insert into warranty_items (id, name, purchase_date, is_lifetime, owner_user_id, created_at, updated_at)
+         values (1, 'Fridge', '2026-08-16', 0, 1, '2026-08-16T00:00:00.000Z', '2026-08-16T00:00:00.000Z')`,
+      )
+      .run();
+    current!.sqlite
+      .prepare(
+        `insert into warranty_receipts (warranty_item_id, original_filename, stored_filename, mime, size_bytes,
+           sha256, ocr_status, created_at)
+         values (1, 'a.jpg', ?, 'image/jpeg', 64, ?, 'done', '2026-08-16T00:00:00.000Z')`,
+      )
+      .run(known, 'a'.repeat(64));
+
     const orphan = writeReceiptFile(JPEG, 'image/jpeg');
     const twoDaysAgo = new Date(Date.now() - 48 * 60 * 60 * 1000);
     fs.utimesSync(path.join(receiptsDir(), orphan), twoDaysAgo, twoDaysAgo);
@@ -176,6 +198,42 @@ describe('maintenance sweep (MUST-4.9)', () => {
     const result = runMaintenanceSweep(new Date());
     expect(result.receiptOrphansPurged).toBe(1);
     expect(fs.existsSync(path.join(receiptsDir(), orphan))).toBe(false);
+    expect(fs.existsSync(path.join(receiptsDir(), known))).toBe(true);
+  });
+});
+
+describe('stale .partial cleanup (BLOCKER 2)', () => {
+  it('removes an aged .partial, keeps a fresh one, and leaves live archives untouched', () => {
+    fs.mkdirSync(backupsDir(), { recursive: true });
+    const live = path.join(backupsDir(), 'budget-2026-08-16.tar.gz');
+    fs.writeFileSync(live, 'archive bytes');
+
+    const agedPartial = path.join(backupsDir(), 'budget-2026-08-14.tar.gz.partial');
+    fs.writeFileSync(agedPartial, 'stale partial left by a SIGKILL');
+    const twoDaysAgo = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    fs.utimesSync(agedPartial, twoDaysAgo, twoDaysAgo);
+
+    const freshPartial = path.join(backupsDir(), 'budget-2026-08-16.tar.gz.partial');
+    fs.writeFileSync(freshPartial, 'a backup in flight right now');
+
+    const removed = pruneBackups(14);
+
+    expect(removed).toContain('budget-2026-08-14.tar.gz.partial');
+    expect(fs.existsSync(agedPartial)).toBe(false);
+    expect(fs.existsSync(freshPartial)).toBe(true);
+    expect(fs.existsSync(live)).toBe(true);
+  });
+
+  it('never touches a live .tar.gz or .db backup, only the .partial shape', () => {
+    fs.mkdirSync(backupsDir(), { recursive: true });
+    const live = path.join(backupsDir(), 'budget-2026-08-01.tar.gz');
+    fs.writeFileSync(live, 'x');
+    const twoDaysAgo = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    fs.utimesSync(live, twoDaysAgo, twoDaysAgo);
+
+    const removed = pruneBackups(14);
+    expect(removed).toEqual([]);
+    expect(fs.existsSync(live)).toBe(true);
   });
 });
 
@@ -185,5 +243,21 @@ describe('runNightlyJob', () => {
     expect(result.backup.name).toBe('budget-2026-08-16.tar.gz');
     expect(result.backup.bytes).toBeGreaterThan(0);
     expect(result.sweep.receiptOrphansPurged).toBe(0);
+  });
+
+  // Fix report BLOCKER 3: before this fix, runNightlyJob ran backup -> prune -> sweep with
+  // no isolation between the steps, so a thrown backup error skipped the sweep entirely —
+  // permanently disabling session expiry, login-attempt pruning, staged-upload cleanup and
+  // the orphan-receipt sweep on every subsequent failed night. This proves the sweep's
+  // observable effect (an expired session actually gets purged) still happens even though
+  // the backup step throws, and that the backup failure is still surfaced to the caller.
+  it('still runs the maintenance sweep, and still surfaces the error, when the backup step throws', () => {
+    const userId = insertTestUser(current!.db, { name: 'Alice', username: 'alice' });
+    createSession(userId, { at: new Date('2026-01-01T00:00:00.000Z') }); // long expired
+
+    tarCreateControl.shouldFail = true;
+    expect(() => runNightlyJob(new Date('2026-08-16T06:00:00.000Z'))).toThrow('disk full');
+
+    expect((current!.sqlite.prepare('select count(*) as c from sessions').get() as { c: number }).c).toBe(0);
   });
 });
