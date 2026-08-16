@@ -117,6 +117,33 @@ describe('suggestPriceCents', () => {
     expect(cents).toBe(4200);
     expect(Number.isInteger(cents)).toBe(true);
   });
+
+  it('does not backtrack quadratically on a 100k digit run', () => {
+    // Regression for a quadratic-backtracking CURRENCY_RE: an unbounded `\d+` alternative
+    // backtracks O(L) at each of L start positions on a long unbroken digit run (garbled
+    // barcode OCR), i.e. O(L^2) on the ~100k-char OCR cap. Vitest's default 5s test timeout
+    // is the guard here — this test hangs under the old pattern and finishes instantly under
+    // the fixed one.
+    const digitRun = '9'.repeat(100_000);
+    const result = suggestFromOcrText(digitRun, TODAY);
+    expect(result.priceCents).toBeUndefined();
+  });
+
+  it('still parses legit large-but-valid amounts after bounding the digit run to 9', () => {
+    expect(suggestPriceCents('TOTAL 1,234.56')).toBe(123456);
+    // 999999.99 is syntactically a valid amount (6-digit whole part, well within the 9-digit
+    // bound) but sits above the $100,000 noise ceiling, so it is correctly rejected there —
+    // not silently mis-parsed by the digit-run bound.
+    expect(suggestPriceCents('TOTAL 999999.99')).toBeUndefined();
+  });
+
+  it('walks backward past an invalid last candidate on the TOTAL line to an earlier valid one', () => {
+    // Deliberate liberality beyond the spec's literal "last number" step: when the last
+    // currency-shaped number on the TOTAL line fails validation (here, over the noise
+    // ceiling), earlier candidates on the same line are tried before falling through to the
+    // anywhere-in-text fallback.
+    expect(suggestPriceCents('TOTAL 45.00 9999999.99')).toBe(4500);
+  });
 });
 
 describe('suggestFromOcrText', () => {

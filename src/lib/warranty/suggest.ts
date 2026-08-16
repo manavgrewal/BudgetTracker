@@ -103,7 +103,12 @@ export function suggestVendor(text: string): string | undefined {
   return undefined;
 }
 
-const CURRENCY_RE = /(?:\$\s*)?(\d{1,3}(?:,\d{3})*|\d+)[.,](\d{2})(?!\d)/g;
+// Digit run bounded to 9 (not `\d+`) to prevent quadratic backtracking on a long unbroken
+// digit run (garbled barcode OCR): an unbounded `\d+` alternative backtracks O(L) at each of
+// L start positions, i.e. O(L^2) on the ~100k-char OCR cap. No valid amount is lost — a
+// 10+-digit whole-dollar amount already exceeds the $100,000 ceiling and is rejected by
+// centsOf() regardless (amended after Task 4 review; spec §8.3 step 3 mirrors this).
+const CURRENCY_RE = /(?:\$\s*)?(\d{1,3}(?:,\d{3})*|\d{1,9})[.,](\d{2})(?!\d)/g;
 const TOTAL_LINE_RE = /\b(total|amount due|grand total|balance due)\b/i;
 const SUBTOTAL_RE = /\bsub[\s-]?total\b/i;
 
@@ -119,7 +124,10 @@ function centsOf(whole: string, fraction: string): number | null {
 export function suggestPriceCents(text: string): number | undefined {
   if (typeof text !== 'string' || text.length === 0) return undefined;
 
-  // 1. TOTAL-line pass: the LAST currency number on the LAST qualifying line.
+  // 1. TOTAL-line pass: the LAST currency number on the LAST qualifying line. Deliberately
+  // more liberal than the spec's literal "last number" step: if the last candidate on the
+  // line fails validation (e.g. it's >= the noise ceiling), we walk backward and try earlier
+  // candidates on the same line rather than falling through to the anywhere-in-text fallback.
   const totalLines = text.split(/\r?\n/).filter((line) => TOTAL_LINE_RE.test(line) && !SUBTOTAL_RE.test(line));
   const lastTotalLine = totalLines[totalLines.length - 1];
   if (lastTotalLine !== undefined) {

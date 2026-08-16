@@ -480,7 +480,7 @@ The first line among the **first five non-empty lines** that: contains ≥ 3 let
 
 1. **TOTAL-line pass.** Lines matching `/\b(total|amount due|grand total|balance due)\b/i` **and not** matching `/\bsub[\s-]?total\b/i`. Take the **last** currency-formatted number on the **last** such line — receipts print subtotal, tax, then total.
 2. **Fallback.** The largest currency-formatted number anywhere in the text.
-3. Currency shape: `/(?:\$\s*)?(\d{1,3}(?:,\d{3})*|\d+)[.,](\d{2})(?!\d)/`.
+3. Currency shape: `/(?:\$\s*)?(\d{1,3}(?:,\d{3})*|\d{1,9})[.,](\d{2})(?!\d)/` (digit run bounded to 9 to prevent quadratic backtracking on garbled digit-run OCR; amounts that long always exceed the ceiling anyway — amended after Task 4 review).
 4. Convert with the existing `parseAmountToCents()` from `src/lib/money.ts` — one money parser in the app, integer cents, no floats.
 5. **Noise ceiling:** ignore any candidate ≥ `10_000_000` cents ($100,000). A mis-read barcode or a phone number can otherwise present as a nine-figure total.
 6. Suggested `price_cents` is always a **positive magnitude** (§3.2).
