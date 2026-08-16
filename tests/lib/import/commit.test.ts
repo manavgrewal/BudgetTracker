@@ -59,7 +59,7 @@ describe('commitImport', () => {
       category_id: null,
     });
     expect(row.dedup_hash).toBe(hashed[0].dedupHash);
-    expect(row.normalized_merchant).toBe('POS PURCHASE TIM HORTONS #4821 TORONTO ON');
+    expect(row.normalized_merchant).toBe('TIM HORTONS');
   });
 
   it('defaults attribution to the account owner and leaves joint accounts unattributed', () => {
