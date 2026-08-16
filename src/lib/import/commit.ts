@@ -226,6 +226,11 @@ function partitionByAssociation(importId: number): { sole: number[]; shared: num
   return { sole, shared };
 }
 
+/** Route-layer guard: an undo of an unknown importId must 404, not silently no-op. */
+export function importExists(importId: number): boolean {
+  return getDb().select({ id: imports.id }).from(imports).where(eq(imports.id, importId)).get() !== undefined;
+}
+
 export interface UndoPreview {
   importId: number;
   willDelete: number;
