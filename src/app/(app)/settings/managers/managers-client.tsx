@@ -8,6 +8,9 @@ import type { CategoryRecord } from '@/lib/categories';
 import type { MerchantRuleRecord } from '@/lib/categorize/rules';
 import type { ProfileRecord } from '@/lib/import/presets';
 import type { ImportMapping } from '@/lib/import/mapping';
+import type { ProfilesExportRow, RulesExportRow } from '@/lib/packs';
+import { RulesPackPanel } from './rules-pack-panel';
+import { ProfilesPackPanel } from './profiles-pack-panel';
 import {
   archiveCategoryAction,
   createCategoryAction,
@@ -24,10 +27,14 @@ export function ManagersClient({
   categories,
   rules,
   profiles,
+  rulesPackRows,
+  profilePackRows,
 }: {
   categories: CategoryRecord[];
   rules: MerchantRuleRecord[];
   profiles: ProfileRecord[];
+  rulesPackRows: RulesExportRow[];
+  profilePackRows: ProfilesExportRow[];
 }) {
   const [createState, createCategory] = useActionState(createCategoryAction, initial);
   const [renameState, renameCategory] = useActionState(renameCategoryAction, initial);
@@ -156,6 +163,7 @@ export function ManagersClient({
             ))}
           </tbody>
         </table>
+        <RulesPackPanel rows={rulesPackRows} />
       </section>
 
       <section className="flex flex-col gap-3">
@@ -187,6 +195,7 @@ export function ManagersClient({
             </li>
           ))}
         </ul>
+        <ProfilesPackPanel rows={profilePackRows} />
       </section>
     </div>
   );
