@@ -1,5 +1,5 @@
 import fs from 'node:fs';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { getDb } from '@/db/client';
 import { users, warrantyItemTypes, warrantyItems, warrantyReceipts } from '@/db/schema';
@@ -474,4 +474,14 @@ export function sha256AlreadyOnItem(itemId: number, sha256: string): boolean {
     .where(and(eq(warrantyReceipts.warrantyItemId, itemId), eq(warrantyReceipts.sha256, sha256)))
     .get();
   return row !== undefined;
+}
+
+/** How many receipts on this item carry the same digest. Two or more is the duplicate case. */
+export function countReceiptsWithSha(itemId: number, sha256: string): number {
+  const row = getDb()
+    .select({ count: sql<number>`count(*)` })
+    .from(warrantyReceipts)
+    .where(and(eq(warrantyReceipts.warrantyItemId, itemId), eq(warrantyReceipts.sha256, sha256)))
+    .get();
+  return row?.count ?? 0;
 }
