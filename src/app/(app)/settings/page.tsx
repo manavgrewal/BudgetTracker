@@ -47,6 +47,11 @@ export default async function SettingsPage() {
                 Categories, merchant rules and import profiles
               </Link>
             </li>
+            <li>
+              <Link className="underline" href="/settings/backups">
+                Backups
+              </Link>
+            </li>
           </ul>
         </section>
       ) : null}
