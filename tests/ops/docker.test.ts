@@ -101,8 +101,10 @@ describe('version and changelog', () => {
   const pkg = JSON.parse(read('package.json')) as { version: string; dependencies: Record<string, string> };
   const changelog = read('CHANGELOG.md');
 
-  it('declares 1.2.3 as the single source of truth', () => {
-    expect(pkg.version).toBe('1.2.3');
+  it('keeps package.json and the newest changelog section on the same version', () => {
+    const newest = changelog.match(/^## \[(\d+\.\d+\.\d+)\]/m);
+    expect(newest, 'CHANGELOG.md has no dated version section').toBeTruthy();
+    expect(pkg.version).toBe(newest![1]);
   });
 
   it('declares the three new runtime dependencies (§17.27)', () => {
