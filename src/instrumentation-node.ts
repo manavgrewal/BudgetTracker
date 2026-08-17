@@ -46,9 +46,10 @@ if (ocr.ok) {
   console.error(`[ocr] MISSING: ${ocr.missing.join(', ')}`);
 }
 
-// MUST-14.2: AFTER getDb() (the outcome has to be written into the restored database) and
-// BEFORE the scheduler starts below (whose immediate boot tick then drains the row). The
-// guard is mandatory: a notification failure must never stop the app from booting.
+// MUST-14.2: AFTER the database is open above (the outcome has to be written into the
+// restored database) and BEFORE the scheduler starts below (whose immediate boot tick then
+// drains the row). The guard is mandatory: a notification failure must never stop the app
+// from booting.
 try {
   raiseRestoreOutcome();
 } catch (error) {

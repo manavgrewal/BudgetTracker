@@ -5,7 +5,6 @@ import { readEnv } from '@/lib/env';
 import { readRestoreState } from '@/lib/backup/restore';
 import { todayIso } from '@/lib/dates';
 import { adminUserIds } from '@/lib/notify/config';
-import { scrubSecrets } from '@/lib/notify/crypto';
 import { backupFailedKey, newSigninKey, restoreOutcomeKey } from '@/lib/notify/events';
 import { enqueue, kickOutbox } from '@/lib/notify/outbox';
 import { renderEvent } from '@/lib/notify/render';
@@ -90,11 +89,13 @@ export function raiseBackupFailed(input: { error: unknown; at: Date }): void {
   try {
     const { tz } = readEnv();
     const dateIso = todayIso(input.at, tz);
-    // MUST-5.5: a backup error can echo a path or a command line; scrub it anyway.
+    // A backup error carries no credential material (it never touches the notify transport
+    // layer), so there is nothing here for scrubSecrets to redact; anything transport-related
+    // that later flows through the outbox is re-scrubbed there (MUST-5.5).
     const { subject, body } = renderEvent({
       event: 'backup_failed',
       dateIso,
-      error: scrubSecrets(messageOf(input.error), []),
+      error: messageOf(input.error),
     });
     let queued = 0;
     for (const userId of adminUserIds()) {

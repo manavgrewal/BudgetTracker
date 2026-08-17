@@ -30,6 +30,21 @@ function runOcrSweep(): void {
   }
 }
 
+/** Exported so a test can drive the nightly failure path without waiting on a real cron tick. */
+export function runNightlyTick(now: Date = new Date()): void {
+  try {
+    runNightlyJob(now);
+  } catch (error) {
+    console.error('[backup] nightly job failed', error);
+    // MUST-14.1: the UNATTENDED path notifies. The "run now" action deliberately does not.
+    // raiseBackupFailed is internally guarded (MUST-6.19) and never throws today, so it is
+    // NOT relying on this catch for protection — it simply runs inside the same catch body
+    // that already handles runNightlyJob's own failure. If that guarantee ever changed, a
+    // throw here would propagate out of the cron callback uncaught.
+    raiseBackupFailed({ error, at: now });
+  }
+}
+
 export function runNotifyTick(now: Date = new Date()): void {
   // MUST-6.3: the single-flight guard is the tick's actual first statement.
   if (ticking) return;
@@ -61,19 +76,7 @@ export function runNotifyTick(now: Date = new Date()): void {
 export function startScheduler(): void {
   if (task) return;
   const { tz } = readEnv();
-  task = cron.schedule(
-    NIGHTLY_CRON,
-    () => {
-      try {
-        runNightlyJob(new Date());
-      } catch (error) {
-        console.error('[backup] nightly job failed', error);
-        // MUST-14.1: the UNATTENDED path notifies. The "run now" action deliberately does not.
-        raiseBackupFailed({ error, at: new Date() });
-      }
-    },
-    { timezone: tz },
-  );
+  task = cron.schedule(NIGHTLY_CRON, () => runNightlyTick(), { timezone: tz });
   ocrTask = cron.schedule(OCR_SWEEP_CRON, runOcrSweep, { timezone: tz });
   notifyTask = cron.schedule(NOTIFY_TICK_CRON, () => runNotifyTick(), { timezone: tz });
   console.log(`[scheduler] nightly job registered for ${NIGHTLY_CRON} (${tz})`);
@@ -97,6 +100,11 @@ export function stopScheduler(): void {
   bootExpiryDone = false;
 }
 
+/**
+ * True if ANY of the three registered tasks is still running — not just the nightly one —
+ * so a regression that forgets to null out `ocrTask`/`notifyTask` in stopScheduler() makes
+ * this report "still running" instead of silently agreeing with a partial teardown.
+ */
 export function isSchedulerRunning(): boolean {
-  return task !== null;
+  return task !== null || ocrTask !== null || notifyTask !== null;
 }

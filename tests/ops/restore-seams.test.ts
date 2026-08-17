@@ -81,7 +81,7 @@ describe('MUST-20.26: the restore runs before any database connection', () => {
     const restore = source.indexOf('applyStagedRestoreOnBoot()');
     // lastIndexOf: the actual call, not an earlier mention of "getDb()" inside a comment
     // explaining WHY the 'restart' branch below must exit before reaching it.
-    const openDb = source.lastIndexOf('getDb()');
+    const openDb = source.lastIndexOf('getDb();');
     expect(restore).toBeGreaterThan(-1);
     expect(openDb).toBeGreaterThan(-1);
     expect(restore).toBeLessThan(openDb);
@@ -96,7 +96,7 @@ describe('MUST-20.26: the restore runs before any database connection', () => {
     const restoreCall = source.indexOf('applyStagedRestoreOnBoot()');
     const restartCheck = source.indexOf(`restoreOutcome === 'restart'`);
     const exitCall = source.indexOf('process.exit(RESTART_EXIT_CODE)');
-    const openDb = source.lastIndexOf('getDb()');
+    const openDb = source.lastIndexOf('getDb();');
     expect(restoreCall).toBeGreaterThan(-1);
     expect(restartCheck).toBeGreaterThan(restoreCall);
     expect(exitCall).toBeGreaterThan(restartCheck);

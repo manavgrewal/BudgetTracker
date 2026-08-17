@@ -265,6 +265,19 @@ describe('MUST-14.4: a successful login raises new_signin', () => {
   it('a FAILED login enqueues nothing', async () => {
     current = createTestDb();
     const userId = await createLoginUser({ username: 'sam', password: 'correct horse battery staple' });
+    // A configured, enabled channel — otherwise the zero-row assertion below would hold
+    // trivially regardless of whether attemptLogin ever calls raiseNewSignin at all.
+    saveSmtp({
+      preset: 'brevo',
+      host: 'h',
+      port: 587,
+      security: 'starttls',
+      username: 'u',
+      password: 'p',
+      fromEmail: 'f@e.com',
+      fromName: 'Budget Tracker',
+      enabled: true,
+    });
     saveEmailTarget({ userId, destination: 'sam@example.com', enabled: true });
     await attemptLogin({ username: 'sam', password: 'wrong', ip: '1.2.3.4' });
     const { n } = current.sqlite.prepare('select count(*) as n from notification_outbox').get() as { n: number };
@@ -297,6 +310,7 @@ describe('MUST-14.4: a throwing raiseNewSignin does not fail the login', () => {
       // makes this "ok" regardless of whether the throw came from the spy or from a real
       // failure inside raise.ts.
       expect(result.status).toBe('ok');
+      expect(raise).toHaveBeenCalled();
     } finally {
       raise.mockRestore();
     }
