@@ -29,7 +29,12 @@ export const NAV: NavItem[] = [
   { href: '/import', label: 'Import', Icon: ImportIcon },
   { href: '/budgets', label: 'Budgets', Icon: BudgetsIcon },
   { href: '/goals', label: 'Goals', Icon: GoalsIcon },
-  { href: '/warranties', label: 'Warranties', Icon: WarrantiesIcon },
+  // v1.2.2 Task 2: renamed from "Warranties" -- the tracker now covers warranties,
+  // subscriptions, contracts and loans. No dedicated short-label mechanism exists on NavItem
+  // (checked AppShell: NavList already renders every label inside a `truncate` span in both
+  // the desktop rail and the phone menu), so this longer label relies on that existing
+  // ellipsis behaviour rather than introducing a new field for one nav item.
+  { href: '/warranties', label: 'Contracts & Coverage', Icon: WarrantiesIcon },
   { href: '/reports', label: 'Reports', Icon: ReportsIcon },
   { href: '/settings', label: 'Settings', Icon: SettingsIcon },
 ];

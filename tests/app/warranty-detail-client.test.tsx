@@ -17,8 +17,9 @@ afterEach(() => cleanup());
 const TODAY = '2026-08-16';
 const people = [{ id: 7, name: 'Alice' }];
 const types = [
-  { id: 1, name: 'Appliance', isSubscription: false },
-  { id: 2, name: 'Netflix plan', isSubscription: true },
+  { id: 1, name: 'Appliance', kind: 'warranty' as const },
+  { id: 2, name: 'Netflix plan', kind: 'subscription' as const },
+  { id: 3, name: 'Car loan', kind: 'loan' as const },
 ];
 
 function item(over: Partial<WarrantyItemRow> = {}): WarrantyItemRow {
@@ -125,17 +126,45 @@ describe('WarrantyDetailClient', () => {
     expect(screen.getByText('Appliance')).toBeTruthy();
   });
 
-  it('labels the date fields "Purchase date"/"Expiry date" for a non-subscription item', () => {
-    renderDetail({ item: item({ typeId: 1, typeName: 'Appliance', isSubscription: false }) });
+  // v1.2.2 Task 2: purchaseDateLabel/expiryDateLabel are DELETED (superseded by
+  // formStartLabel/formEndLabel, kind-keyed). Old subscription wording 'Period start' ->
+  // 'Start date' and label-only 'Cancel by' -> 'Cancel-by date' are deliberate, owner-approved
+  // changes (see tests/lib/warranty/constants.test.ts for the full old->new log).
+  it('labels the date fields "Purchase date"/"Expiry date" for a warranty-kind item', () => {
+    renderDetail({ item: item({ typeId: 1, typeName: 'Appliance', kind: 'warranty' }) });
     expect(screen.getByText('Purchase date')).toBeTruthy();
     expect(screen.getByText('Expiry date')).toBeTruthy();
   });
 
-  it('labels the date fields "Period start"/"Cancel by" for a subscription item', () => {
-    renderDetail({ item: item({ typeId: 2, typeName: 'Netflix plan', isSubscription: true }) });
-    expect(screen.getByText('Period start')).toBeTruthy();
-    expect(screen.getByText('Cancel by')).toBeTruthy();
+  it('labels the date fields "Start date"/"Cancel-by date" for a subscription-kind item', () => {
+    renderDetail({ item: item({ typeId: 2, typeName: 'Netflix plan', kind: 'subscription' }) });
+    expect(screen.getByText('Start date')).toBeTruthy();
+    expect(screen.getByText('Cancel-by date')).toBeTruthy();
     expect(screen.queryByText('Purchase date')).toBeNull();
+  });
+
+  it('labels the date fields "Start date"/"Payoff date" for a loan-kind item', () => {
+    renderDetail({ item: item({ typeId: 3, typeName: 'Car loan', kind: 'loan' }) });
+    expect(screen.getByText('Start date')).toBeTruthy();
+    expect(screen.getByText('Payoff date')).toBeTruthy();
+  });
+
+  // v1.2.2 Task 2: dynamic form labels -- the edit form's fieldset legend and Purchase-date
+  // label follow the SELECTED type's kind live, not just the item's already-saved kind.
+  it("follows the edit form's SELECTED type kind live for the term legend and date label", () => {
+    // Scoped to the <legend> element itself: the read-only summary above the edit form
+    // renders the SAME text via the item's own (unchanged) kind, so a page-wide getByText
+    // would ambiguously match both.
+    const { container } = renderDetail({ item: item({ typeId: 1, typeName: 'Appliance', kind: 'warranty' }) });
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    expect(container.querySelector('form legend')!.textContent).toBe('Warranty (months)');
+
+    const select = container.querySelector('form select[name="typeId"]') as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: '3' } });
+    expect(container.querySelector('form legend')!.textContent).toBe('Term (months)');
+    // formOpenEndedLabel('loan') === 'Ongoing (no end date)' -- the Lifetime checkbox's own
+    // label text follows the selected kind too.
+    expect(screen.getByText('Ongoing (no end date)')).toBeTruthy();
   });
 
   // --- reviewer M14 ---

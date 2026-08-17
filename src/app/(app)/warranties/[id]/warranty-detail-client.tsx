@@ -11,7 +11,7 @@ import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { Money } from '@/components/ui/Money';
 import { Notice } from '@/components/ui/Notice';
 import { Field, inputClass, labelClass, selectClass, textareaClass } from '@/components/ui/form';
-import { expiryDateLabel, purchaseDateLabel, termLabel } from '@/lib/warranty/constants';
+import { formEndLabel, formOpenEndedLabel, formStartLabel, formTermLabel, type ItemKind } from '@/lib/warranty/constants';
 import type { WarrantyStatus } from '@/lib/warranty/expiry';
 import type { WarrantyItemRow, WarrantyReceiptRow } from '@/lib/warranty/items';
 import {
@@ -31,7 +31,7 @@ const OCR_CHIP: Record<WarrantyReceiptRow['ocrStatus'], string> = {
   failed: 'Could not read',
 };
 
-type TypeOption = { id: number; name: string; isSubscription: boolean };
+type TypeOption = { id: number; name: string; kind: ItemKind };
 
 /**
  * IMPORTANT 5: a link-styled submit button with the same busy contract as SubmitButton,
@@ -142,21 +142,23 @@ export function WarrantyDetailClient({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attachState]);
 
-  // Delta T9 (MUST-19.10): every date label on this page switches on the item's own
-  // isSubscription flag through these three helpers -- the only place either wording lives.
-  const purchaseLabel = purchaseDateLabel(item.isSubscription);
-  const termWordLabel = termLabel(item.isSubscription);
-  const expiryLabel = expiryDateLabel(item.isSubscription);
+  // Delta T9 (MUST-19.10), generalized to `kind` in v1.2.2 Task 2: every date label on this
+  // page switches on the item's own kind through these helpers -- the only place either
+  // wording lives. Supersedes purchaseDateLabel/termLabel/expiryDateLabel (controller ruling,
+  // spec §19.12).
+  const purchaseLabel = formStartLabel(item.kind);
+  const termWordLabel = formTermLabel(item.kind);
+  const expiryLabel = formEndLabel(item.kind);
 
   return (
     <div className="flex flex-col gap-6">
       <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
         <div className="flex min-w-0 flex-wrap items-center gap-3">
           <h1 className="text-2xl font-semibold tracking-tight text-ink">{item.name}</h1>
-          <StatusBadge status={status} expiryDate={item.expiryDate} today={today} isSubscription={item.isSubscription} />
+          <StatusBadge status={status} expiryDate={item.expiryDate} today={today} kind={item.kind} />
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Link href="/warranties" className="btn btn--ghost btn--sm">Back to warranties</Link>
+          <Link href="/warranties" className="btn btn--ghost btn--sm">Back to items</Link>
           <button type="button" onClick={() => setEditing((v) => !v)} className="btn btn--secondary btn--sm">
             {editing ? 'Cancel edit' : 'Edit'}
           </button>
@@ -198,7 +200,11 @@ export function WarrantyDetailClient({
             <Detail label="Serial number">{item.serial ?? '—'}</Detail>
             <Detail label={purchaseLabel}>{item.purchaseDate}</Detail>
             <Detail label={termWordLabel}>
-              {item.isLifetime ? 'Lifetime' : item.warrantyMonths === null ? 'Unknown' : `${item.warrantyMonths} months`}
+              {item.isLifetime
+                ? formOpenEndedLabel(item.kind)
+                : item.warrantyMonths === null
+                  ? 'Unknown'
+                  : `${item.warrantyMonths} months`}
             </Detail>
             <Detail label={expiryLabel}>{item.expiryDate ?? '—'}</Detail>
             <Detail label="Price">{item.priceCents === null ? '—' : <Money cents={item.priceCents} plain />}</Detail>
@@ -315,6 +321,14 @@ function EditForm({
 }) {
   const [isLifetime, setIsLifetime] = useState(item.isLifetime);
   const [months, setMonths] = useState(item.warrantyMonths === null ? '' : String(item.warrantyMonths));
+  // v1.2.2 Task 2: the type <select> below used to be uncontrolled (defaultValue only), which
+  // is fine for form submission but cannot drive live label wording. Tracked here purely so
+  // the fieldset legend and the Purchase-date label can follow the SELECTED type's kind while
+  // editing -- not just the item's already-saved kind -- without changing the field's `name`
+  // or how the action reads it (still a plain <select name="typeId">).
+  const [typeId, setTypeId] = useState(item.typeId === null ? '' : String(item.typeId));
+  const selectedType = types.find((t) => String(t.id) === typeId);
+  const selectedKind: ItemKind = selectedType?.kind ?? 'warranty';
 
   return (
     <Card className="max-w-2xl">
@@ -330,7 +344,12 @@ function EditForm({
               <input name="name" required maxLength={200} defaultValue={item.name} className={inputClass} />
             </Field>
             <Field label="Type">
-              <select name="typeId" defaultValue={item.typeId ?? ''} className={selectClass}>
+              <select
+                name="typeId"
+                value={typeId}
+                onChange={(e) => setTypeId(e.target.value)}
+                className={selectClass}
+              >
                 <option value="">— none —</option>
                 {types.map((type) => (
                   <option key={type.id} value={type.id}>{type.name}</option>
@@ -346,7 +365,7 @@ function EditForm({
             <Field label="Serial number">
               <input name="serial" maxLength={200} defaultValue={item.serial ?? ''} className={inputClass} />
             </Field>
-            <Field label="Purchase date">
+            <Field label={formStartLabel(selectedKind)}>
               <input type="date" name="purchaseDate" required max={today} defaultValue={item.purchaseDate} className={inputClass} />
             </Field>
             <Field label="Price">
@@ -360,7 +379,11 @@ function EditForm({
           </div>
 
           <fieldset className="flex flex-col gap-2">
-            <legend className={labelClass}>Warranty length</legend>
+            {/* v1.2.2 Task 2 (reviewer-flagged): this legend used to hard-code "Warranty
+                length" regardless of the selected type's kind, breaking MUST-19.11's
+                one-place rule -- the exact same bug as new-warranty-client.tsx. Routed
+                through formTermLabel(), following the SELECTED type live, same as above. */}
+            <legend className={labelClass}>{formTermLabel(selectedKind)}</legend>
             <div className="flex flex-wrap items-center gap-3">
               <input
                 type="number"
@@ -368,7 +391,7 @@ function EditForm({
                 min={1}
                 value={months}
                 disabled={isLifetime}
-                aria-label="Warranty length in months"
+                aria-label={formTermLabel(selectedKind)}
                 onChange={(e) => setMonths(e.target.value)}
                 className="field-control w-28"
               />
@@ -383,7 +406,7 @@ function EditForm({
                   }}
                   className="accent-accent"
                 />
-                Lifetime
+                {formOpenEndedLabel(selectedKind)}
               </label>
             </div>
           </fieldset>

@@ -26,7 +26,7 @@ export default async function WarrantyDetailPage({ params }: { params: Promise<{
       receipts={listWarrantyReceipts(item.id)}
       status={warrantyStatus(item, today)}
       people={listUsers().filter((u) => u.isActive).map((u) => ({ id: u.id, name: u.name }))}
-      types={listItemTypes().map((t) => ({ id: t.id, name: t.name, isSubscription: t.isSubscription }))}
+      types={listItemTypes().map((t) => ({ id: t.id, name: t.name, kind: t.kind }))}
       today={today}
       linkedTransaction={txn ? { id: txn.id, date: txn.date, description: displayNameOf(txn) } : null}
       /* §10.4: never render a dead link. ON DELETE SET NULL leaves no durable marker that

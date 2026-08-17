@@ -21,6 +21,33 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.2.2] - 2026-08-17
+
+### Added
+
+- **Contract and loan item kinds.** Item types now carry a `kind` — warranty, subscription,
+  contract, or loan — alongside the existing subscription flag (kept, and derived from `kind`
+  on every write). Loans and contracts reuse the exact same start-date/term/end-date fields as
+  warranties and subscriptions; loans are dates and documents only — no balance, no payment
+  schedule, no interest math (deliberate scope cut).
+- **Kind-aware wording** throughout the tracker: the add/edit forms, the list, the detail page
+  and the dashboard widget all show labels and verbs (start date / term / end date / "expires"
+  vs. "cancel by" vs. "ends on" vs. "paid off by") that follow the item's own kind — and, on
+  the add and edit forms, follow the **currently selected type live**, before saving.
+
+### Changed
+
+- **The warranty tracker is renamed "Contracts & Coverage"** in the navigation, the list page
+  title and the add-item header — user feedback that the tracker had grown past warranties
+  alone. Labels only: every route, action and field name is unchanged.
+- Form labels changed to match the new kind matrix: "Warranty length" → "Warranty (months)",
+  a subscription's "Period start" → "Start date", "Period length" → "Duration (months)", and
+  the "Cancel by" label → "Cancel-by date" (detail page) / "Active through" (live badge).
+  Deliberate, owner-approved wording changes — see the design spec §19.12 for the full list.
+- Dashboard widget retitled "Warranties expiring soon" → **"Coming due"**.
+- List page empty state retitled "No warranties yet" → "Nothing tracked yet", naming all four
+  kinds.
+
 ## [1.2.1] - 2026-08-17
 
 ### Added

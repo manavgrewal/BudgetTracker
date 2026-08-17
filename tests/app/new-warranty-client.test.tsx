@@ -11,8 +11,9 @@ afterEach(() => cleanup());
 
 const people = [{ id: 7, name: 'Alice' }, { id: 8, name: 'Bob' }];
 const types = [
-  { id: 1, name: 'Appliance', isSubscription: false },
-  { id: 2, name: 'Netflix plan', isSubscription: true },
+  { id: 1, name: 'Appliance', kind: 'warranty' as const },
+  { id: 2, name: 'Netflix plan', kind: 'subscription' as const },
+  { id: 3, name: 'Car loan', kind: 'loan' as const },
 ];
 
 function renderForm(over: { prefill?: object; typeId?: number | null } = {}) {
@@ -94,18 +95,40 @@ describe('NewWarrantyClient', () => {
     const select = container.querySelector('select[name="typeId"]') as HTMLSelectElement;
     expect(select).toBeTruthy();
     const optionLabels = Array.from(select.querySelectorAll('option')).map((o) => o.textContent);
-    expect(optionLabels).toEqual(['— none —', 'Appliance', 'Netflix plan']);
+    expect(optionLabels).toEqual(['— none —', 'Appliance', 'Netflix plan', 'Car loan']);
     // Unset by default: nothing is selected until the member chooses one.
     expect(select.value).toBe('');
   });
 
-  it('reads "Covered through" for a non-subscription type and "Cancel by" once a subscription type is chosen', () => {
+  // v1.2.2 Task 2: coveredThroughLabel(isSubscription) is DELETED, superseded by
+  // coveredThroughLabelForKind(kind). Old subscription wording 'Cancel by' -> 'Active through'
+  // is a deliberate, owner-approved change (see tests/lib/warranty/constants.test.ts).
+  it('reads "Covered through" with no type selected, and follows the SELECTED type kind live', () => {
     const { container } = renderForm();
     fireEvent.change(container.querySelector('[name="purchaseDate"]')!, { target: { value: '2026-01-31' } });
     fireEvent.change(container.querySelector('[name="warrantyMonths"]')!, { target: { value: '1' } });
     expect(screen.getByText('Covered through 2026-02-28')).toBeTruthy();
 
     fireEvent.change(container.querySelector('select[name="typeId"]')!, { target: { value: '2' } });
-    expect(screen.getByText('Cancel by 2026-02-28')).toBeTruthy();
+    expect(screen.getByText('Active through 2026-02-28')).toBeTruthy();
+    expect(screen.queryByText('Covered through 2026-02-28')).toBeNull();
+
+    fireEvent.change(container.querySelector('select[name="typeId"]')!, { target: { value: '3' } });
+    expect(screen.getByText('Term runs through 2026-02-28')).toBeTruthy();
+  });
+
+  // v1.2.2 Task 2: dynamic form labels -- the Purchase-date field label, the term-length
+  // legend and the Lifetime checkbox's own label all follow the SELECTED type's kind live.
+  it('follows the SELECTED type kind live for the date label, term legend and open-ended label', () => {
+    const { container } = renderForm();
+    expect(screen.getByText('Purchase date')).toBeTruthy();
+    expect(container.querySelector('legend')!.textContent).toBe('Warranty (months)');
+    expect(screen.getByText('Lifetime warranty')).toBeTruthy();
+
+    fireEvent.change(container.querySelector('select[name="typeId"]')!, { target: { value: '3' } });
+    expect(screen.getByText('Start date')).toBeTruthy();
+    expect(screen.queryByText('Purchase date')).toBeNull();
+    expect(container.querySelector('legend')!.textContent).toBe('Term (months)');
+    expect(screen.getByText('Ongoing (no end date)')).toBeTruthy();
   });
 });

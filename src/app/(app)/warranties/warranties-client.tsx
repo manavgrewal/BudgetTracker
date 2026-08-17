@@ -13,7 +13,7 @@ import { Field, inputClass, selectClass } from '@/components/ui/form';
 // Ruling P4: WARRANTY_SORTS/WarrantySort come from constants.ts (pure, client-safe), NOT
 // from search.ts -- search.ts imports @/db/client, and a VALUE import from it (as opposed to
 // a type-only one) drags better-sqlite3 into this client bundle and breaks `next build`.
-import { expiryPhrase, WARRANTY_SORTS, type WarrantySort } from '@/lib/warranty/constants';
+import { expiryPhraseForKind, WARRANTY_SORTS, type ItemKind, type WarrantySort } from '@/lib/warranty/constants';
 import { statusLabel, WARRANTY_STATUSES } from '@/lib/warranty/expiry';
 import type { WarrantySearchResult } from '@/lib/warranty/search';
 
@@ -37,7 +37,7 @@ export function WarrantiesClient({
   result: WarrantySearchResult;
   people: { id: number; name: string }[];
   /** Delta T9: an optional type filter/select, alongside status/owner/sort. */
-  types: { id: number; name: string; isSubscription: boolean }[];
+  types: { id: number; name: string; kind: ItemKind }[];
   today: string;
   query: string;
   status: string;
@@ -65,11 +65,11 @@ export function WarrantiesClient({
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
-        title="Warranties"
+        title="Contracts & Coverage"
         description="Receipts, coverage and cancel-by dates for everything worth keeping the paperwork on."
         actions={
           <Link href="/warranties/new" className="btn btn--primary">
-            Add warranty
+            Add item
           </Link>
         }
       />
@@ -83,7 +83,7 @@ export function WarrantiesClient({
               it does not replace any of them (type-deltas.md T9). */}
           <form method="get" className="flex flex-wrap items-end gap-3">
             <Field label="Search" className="min-w-[14rem] flex-1">
-              <input name="q" defaultValue={query} placeholder="Any word on the receipt" className={inputClass} />
+              <input name="q" defaultValue={query} placeholder="Any word on the receipt or document" className={inputClass} />
             </Field>
             <Field label="Status">
               <select name="status" defaultValue={status} className={selectClass}>
@@ -137,14 +137,15 @@ export function WarrantiesClient({
           ) : (
             <EmptyState
               icon={WarrantiesIcon}
-              title="No warranties yet"
+              title="Nothing tracked yet"
               action={
                 <Link href="/warranties/new" className="btn btn--primary btn--sm">
                   Add the first one
                 </Link>
               }
             >
-              Snap the receipt and this will remember the model, the price and when the cover runs out.
+              Add a warranty, subscription, contract, or loan — snap the receipt and this will remember the
+              model, the price and when the cover runs out.
             </EmptyState>
           )
         ) : (
@@ -177,11 +178,12 @@ export function WarrantiesClient({
                   </td>
                   <td className="text-muted">{row.vendor ?? '—'}</td>
                   <td className="tabnum whitespace-nowrap text-muted">{row.purchaseDate}</td>
-                  {/* Delta T9: expiryPhrase() supplies the "expires"/"cancel by" verb -- no
-                      component hard-codes either word (MUST-19.11). */}
-                  <td className="whitespace-nowrap text-muted">{row.expiryDate === null ? '—' : expiryPhrase(row.isSubscription, row.expiryDate)}</td>
+                  {/* Delta T9, generalized to `kind` in v1.2.2 Task 2: expiryPhraseForKind()
+                      supplies the expires/cancel by/ends on/paid off by verb -- no component
+                      hard-codes any of them (MUST-19.11). */}
+                  <td className="whitespace-nowrap text-muted">{row.expiryDate === null ? '—' : expiryPhraseForKind(row.kind, row.expiryDate)}</td>
                   <td>
-                    <StatusBadge status={row.status} expiryDate={row.expiryDate} today={today} isSubscription={row.isSubscription} />
+                    <StatusBadge status={row.status} expiryDate={row.expiryDate} today={today} kind={row.kind} />
                   </td>
                   <td className="whitespace-nowrap text-muted">{row.ownerName}</td>
                   <td className="text-right">

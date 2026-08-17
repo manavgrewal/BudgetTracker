@@ -26,8 +26,8 @@ function result(rows: WarrantyListItem[], over: Partial<WarrantySearchResult> = 
 
 const people = [{ id: 7, name: 'Alice' }, { id: 8, name: 'Bob' }];
 const types = [
-  { id: 1, name: 'Appliance', isSubscription: false },
-  { id: 2, name: 'Subscription', isSubscription: true },
+  { id: 1, name: 'Appliance', kind: 'warranty' as const },
+  { id: 2, name: 'Subscription', kind: 'subscription' as const },
 ];
 
 function renderList(res: WarrantySearchResult, over: Partial<Parameters<typeof WarrantiesClient>[0]> = {}) {
@@ -88,18 +88,29 @@ describe('WarrantiesClient', () => {
     expect(options).toEqual(['', 'active', 'expiring', 'expired', 'lifetime', 'unknown']);
   });
 
-  it('distinguishes "no warranties yet" from "no matches for that search"', () => {
+  // v1.2.2 Task 2: "No warranties yet" -> "Nothing tracked yet" (section rename to
+  // Contracts & Coverage; the empty state now names all four kinds).
+  it('distinguishes "nothing tracked yet" from "no matches for that search"', () => {
     renderList(result([]));
-    expect(screen.getByText(/No warranties yet/i)).toBeTruthy();
+    expect(screen.getByText(/Nothing tracked yet/i)).toBeTruthy();
+    expect(screen.getByText(/warranty, subscription, contract, or loan/i)).toBeTruthy();
     cleanup();
     renderList(result([]), { query: 'zzzz' });
     expect(screen.getByText(/No matches/i)).toBeTruthy();
   });
 
-  it('links each row to its detail page and offers Add warranty', () => {
+  // v1.2.2 Task 2: page title "Warranties" -> "Contracts & Coverage"; button "Add warranty"
+  // -> "Add item" (section rename, labels only -- the route stays /warranties/new).
+  it('titles the page "Contracts & Coverage" and offers Add item', () => {
+    const { container } = renderList(result([item()]));
+    expect(screen.getByText('Contracts & Coverage')).toBeTruthy();
+    expect(screen.getByText('Add item')).toBeTruthy();
+    expect(container.querySelector('a[href="/warranties/new"]')).toBeTruthy();
+  });
+
+  it('links each row to its detail page', () => {
     const { container } = renderList(result([item({ id: 42 })]));
     expect(container.querySelector('a[href="/warranties/42"]')).toBeTruthy();
-    expect(container.querySelector('a[href="/warranties/new"]')).toBeTruthy();
   });
 
   it('surfaces the malformed-query message instead of a crash', () => {
@@ -136,9 +147,23 @@ describe('WarrantiesClient', () => {
           typeId: 2,
           typeName: 'Subscription',
           isSubscription: true,
+          kind: 'subscription',
         }),
       ]),
     );
     expect(screen.getByText('Cancel in 30 days')).toBeTruthy();
+  });
+
+  // v1.2.2 Task 2: kind now drives the row wording directly (isSubscription is kept on the
+  // data row for backward compat, but the UI reads `kind`) -- contract/loan get their own verb.
+  it('renders contract and loan rows with their own expiry verb', () => {
+    renderList(
+      result([
+        item({ id: 10, expiryDate: '2028-08-16', kind: 'contract' }),
+        item({ id: 11, expiryDate: '2028-08-16', kind: 'loan' }),
+      ]),
+    );
+    expect(screen.getByText(/ends on 2028-08-16/)).toBeTruthy();
+    expect(screen.getByText(/paid off by 2028-08-16/)).toBeTruthy();
   });
 });

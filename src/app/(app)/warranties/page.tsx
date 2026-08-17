@@ -44,7 +44,7 @@ export default async function WarrantiesPage({
     <WarrantiesClient
       result={result}
       people={listUsers().filter((u) => u.isActive).map((u) => ({ id: u.id, name: u.name }))}
-      types={listItemTypes().map((t) => ({ id: t.id, name: t.name, isSubscription: t.isSubscription }))}
+      types={listItemTypes().map((t) => ({ id: t.id, name: t.name, kind: t.kind }))}
       today={today}
       query={query}
       status={status}

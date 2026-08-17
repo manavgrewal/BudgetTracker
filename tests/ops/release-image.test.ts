@@ -122,7 +122,11 @@ describe('install/synology-compose-pull.yml', () => {
     expect(pullCompose).toMatch(/zero-config/i);
     expect(pullCompose).toMatch(/docs\/INSTALL-SYNOLOGY\.md steps? 1-2/);
     expect(pullCompose).toMatch(/Read\/Write/);
-    expect(pullCompose).toMatch(/:latest.*to a specific version tag|change.*:latest.*to.*:1\.2\.0|1\.2\.0/i);
+    // The bare `1\.2\.0` alternative that used to sit at the end of this regex was vacuous:
+    // it matches that version number ANYWHERE in the file, so the assertion passed even if
+    // the actual "how to pin a version" explanation were deleted, as long as an unrelated
+    // "1.2.0" string turned up somewhere else. Dropped -- only the two real phrasings remain.
+    expect(pullCompose).toMatch(/:latest.*to a specific version tag|change.*:latest.*to.*:1\.2\.0/i);
   });
 
   it('ships SECRET_KEY commented out as an optional override, not a required placeholder (no .env here either)', () => {

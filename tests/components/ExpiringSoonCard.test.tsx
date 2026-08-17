@@ -37,6 +37,13 @@ describe('ExpiringSoonCard (MUST-10.5)', () => {
     expect(screen.getByText('Expires in 10 days')).toBeTruthy();
   });
 
+  // v1.2.2 Task 2: dashboard widget title "Warranties expiring soon" -> "Coming due"
+  // (section rename to Contracts & Coverage).
+  it('titles the card "Coming due"', () => {
+    render(<ExpiringSoonCard items={[item()]} today={TODAY} />);
+    expect(screen.getByText('Coming due')).toBeTruthy();
+  });
+
   it('caps at five and links to the filtered list', () => {
     const many = Array.from({ length: 9 }, (_, i) => item({ id: i + 1, name: `Item ${i}` }));
     const { container } = render(<ExpiringSoonCard items={many} today={TODAY} />);
@@ -69,7 +76,7 @@ describe('ExpiringSoonCard type badge and subscription wording (type-deltas.md T
   it('shows the cancel-by DATE for a subscription item, not a day count (MUST-19.10/19.13)', () => {
     render(
       <ExpiringSoonCard
-        items={[item({ typeId: 2, typeName: 'Subscription', isSubscription: true, expiryDate: '2026-08-26' })]}
+        items={[item({ typeId: 2, typeName: 'Subscription', isSubscription: true, kind: 'subscription', expiryDate: '2026-08-26' })]}
         today={TODAY}
       />,
     );
@@ -78,9 +85,25 @@ describe('ExpiringSoonCard type badge and subscription wording (type-deltas.md T
     expect(screen.queryByText('Cancel in 10 days')).toBeNull();
   });
 
-  it('keeps "Expires in N days" wording (a day count) for a non-subscription item even when typed', () => {
-    render(<ExpiringSoonCard items={[item({ typeId: 1, typeName: 'Appliance' })]} today={TODAY} />);
+  it('keeps "Expires in N days" wording (a day count) for a warranty-kind item even when typed', () => {
+    render(<ExpiringSoonCard items={[item({ typeId: 1, typeName: 'Appliance', kind: 'warranty' })]} today={TODAY} />);
     expect(screen.getByText('Expires in 10 days')).toBeTruthy();
     expect(screen.queryByText('Cancel by 2026-08-26')).toBeNull();
+  });
+
+  // v1.2.2 Task 2: contract/loan get the same date-style treatment as subscription --
+  // day-count stays exclusive to the warranty kind.
+  it('shows the end DATE (not a day count) for contract and loan kinds', () => {
+    render(
+      <ExpiringSoonCard
+        items={[
+          item({ id: 20, typeId: 4, typeName: 'Gym contract', kind: 'contract', expiryDate: '2026-08-26' }),
+          item({ id: 21, typeId: 5, typeName: 'Car loan', kind: 'loan', expiryDate: '2026-08-26' }),
+        ]}
+        today={TODAY}
+      />,
+    );
+    expect(screen.getByText('Ends on 2026-08-26')).toBeTruthy();
+    expect(screen.getByText('Paid off by 2026-08-26')).toBeTruthy();
   });
 });

@@ -101,8 +101,8 @@ describe('version and changelog', () => {
   const pkg = JSON.parse(read('package.json')) as { version: string; dependencies: Record<string, string> };
   const changelog = read('CHANGELOG.md');
 
-  it('declares 1.2.1 as the single source of truth', () => {
-    expect(pkg.version).toBe('1.2.1');
+  it('declares 1.2.2 as the single source of truth', () => {
+    expect(pkg.version).toBe('1.2.2');
   });
 
   it('declares the three new runtime dependencies (§17.27)', () => {
@@ -111,19 +111,24 @@ describe('version and changelog', () => {
     }
   });
 
-  it('has a dated 1.2.1 section and a fresh empty Unreleased above it', () => {
+  it('has a dated 1.2.2 section and a fresh empty Unreleased above it', () => {
+    expect(changelog).toContain('## [1.2.2] - 2026-08-17');
     expect(changelog).toContain('## [1.2.1] - 2026-08-17');
     expect(changelog).toContain('## [1.2.0] - 2026-08-17');
     const unreleased = changelog.indexOf('## Unreleased');
+    const released122 = changelog.indexOf('## [1.2.2]');
     const released121 = changelog.indexOf('## [1.2.1]');
     const released120 = changelog.indexOf('## [1.2.0]');
     expect(unreleased).toBeGreaterThan(-1);
-    expect(unreleased).toBeLessThan(released121);
+    expect(unreleased).toBeLessThan(released122);
+    expect(released122).toBeLessThan(released121);
     expect(released121).toBeLessThan(released120);
-    // The previously-unreleased GHCR entry is ABSORBED into 1.2.1 (it was never tagged as a
-    // release — v1.2.0 predates commit 3e86842), so Unreleased is now empty and must no
-    // longer mention it.
-    expect(changelog.slice(unreleased, released121)).not.toContain('Prebuilt multi-arch images');
+    // Unreleased must be empty going into 1.2.2 — nothing this session wrote should still be
+    // sitting above the new dated section.
+    expect(changelog.slice(unreleased, released122)).not.toContain('Contract and loan item kinds');
+    // The previously-unreleased GHCR entry was ABSORBED into 1.2.1 (it was never tagged as a
+    // release — v1.2.0 predates commit 3e86842); still true, checked against the 1.2.1 section.
+    expect(changelog.slice(unreleased, released122)).not.toContain('Prebuilt multi-arch images');
     // §17.23's original absorption invariant, restored alongside the 1.2.1 one above: whatever
     // was absorbed into 1.2.0 at THAT release must not still be sitting in Unreleased either.
     expect(changelog.slice(unreleased, released120)).not.toContain('Forced password change');

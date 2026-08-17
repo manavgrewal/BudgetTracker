@@ -601,8 +601,13 @@ describe('docs/INSTALL-SYNOLOGY.md', () => {
     expect(permissionStep).toMatch(/Permission/);
     expect(permissionStep).toMatch(/Read\/Write/);
     expect(permissionStep).toMatch(/uid 1000/);
-    // It has to come before the project is created and started.
-    expect(synology.indexOf('Read/Write')).toBeLessThan(synology.indexOf('Create the Project'));
+    // It has to come before the project is created and started. Scoped to AFTER
+    // '## Option B' (the numbered walkthrough): the unscoped whole-document indexOf() pair
+    // was a false pass -- 'Read/Write' and 'Create the Project' both also appear earlier, in
+    // Option A's prose overview, in an order that happens to agree by coincidence. That
+    // scoping proved nothing about the numbered steps this test is actually about.
+    const walkthrough = synology.slice(synology.indexOf('## Option B'));
+    expect(walkthrough.indexOf('Read/Write')).toBeLessThan(walkthrough.indexOf('Create the Project'));
   });
 
   it('names BOTH restart-loop causes and points at /api/health to tell them apart (I1)', () => {

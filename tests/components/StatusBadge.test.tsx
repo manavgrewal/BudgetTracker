@@ -38,10 +38,26 @@ describe('StatusBadge (§10.2)', () => {
     expect(blue.innerHTML).toContain('blue');
   });
 
-  it('renders a subscription cancel-by phrasing when isSubscription is true (type-deltas T9)', () => {
+  it('renders a subscription cancel-by phrasing when kind is subscription (type-deltas T9)', () => {
     render(
-      <StatusBadge status="expiring" expiryDate="2026-09-15" today="2026-08-16" isSubscription />,
+      <StatusBadge status="expiring" expiryDate="2026-09-15" today="2026-08-16" kind="subscription" />,
     );
     expect(screen.getByText('Cancel in 30 days')).toBeTruthy();
+  });
+
+  // v1.2.2 Task 2: generalized from the boolean isSubscription prop to `kind` -- contract and
+  // loan get their own verb, exactly like subscription already did.
+  it('renders contract and loan phrasing per kind', () => {
+    render(<StatusBadge status="expiring" expiryDate="2026-09-15" today="2026-08-16" kind="contract" />);
+    expect(screen.getByText('Ends in 30 days')).toBeTruthy();
+    cleanup();
+
+    render(<StatusBadge status="expiring" expiryDate="2026-09-15" today="2026-08-16" kind="loan" />);
+    expect(screen.getByText('Paid off in 30 days')).toBeTruthy();
+  });
+
+  it('defaults to warranty wording when kind is omitted', () => {
+    render(<StatusBadge status="expiring" expiryDate="2026-09-15" today="2026-08-16" />);
+    expect(screen.getByText('Expires in 30 days')).toBeTruthy();
   });
 });

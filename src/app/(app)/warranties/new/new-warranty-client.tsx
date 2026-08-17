@@ -9,7 +9,7 @@ import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Field, inputClass, labelClass, selectClass, textareaClass } from '@/components/ui/form';
 import { isIsoDate } from '@/lib/dates';
-import { coveredThroughLabel } from '@/lib/warranty/constants';
+import { coveredThroughLabelForKind, formOpenEndedLabel, formStartLabel, formTermLabel, type ItemKind } from '@/lib/warranty/constants';
 import { computeExpiryDate } from '@/lib/warranty/expiry';
 import { createWarrantyAction, type WarrantyActionState } from '../actions';
 
@@ -35,7 +35,7 @@ export function NewWarrantyClient({
 }: {
   people: { id: number; name: string }[];
   /** Delta T9: an optional type dropdown -- "— none —" plus listItemTypes(). */
-  types: { id: number; name: string; isSubscription: boolean }[];
+  types: { id: number; name: string; kind: ItemKind }[];
   currentUserId: number;
   today: string;
   prefill: WarrantyPrefill;
@@ -97,11 +97,11 @@ export function NewWarrantyClient({
     !isLifetime && monthsNumber !== null && monthsNumber > 0 && isIsoDate(purchaseDate)
       ? computeExpiryDate({ purchaseDate, warrantyMonths: monthsNumber, isLifetime: false })
       : null;
-  // Delta T9: the selected type's is_subscription flag decides the wording -- "Covered
-  // through" vs "Cancel by" -- via coveredThroughLabel(), the one place this wording lives
-  // (MUST-19.11). No type selected reads as a non-subscription item.
+  // Delta T9, generalized to `kind` in v1.2.2 Task 2: the selected type's kind decides every
+  // date label on this form -- via the KIND_WORDING matrix helpers in constants.ts, the one
+  // place this wording lives (MUST-19.11). No type selected reads as a plain warranty.
   const selectedType = types.find((t) => String(t.id) === typeId);
-  const isSubscription = selectedType?.isSubscription ?? false;
+  const selectedKind: ItemKind = selectedType?.kind ?? 'warranty';
 
   /**
    * The prefill marker. OCR filling a blank field is helpful right up until nobody can
@@ -121,12 +121,12 @@ export function NewWarrantyClient({
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
-        eyebrow="Warranties"
-        title="Add warranty"
+        eyebrow="Contracts & Coverage"
+        title="Add item"
         description="Attach the receipt first and the date, vendor and price fill themselves in."
         actions={
           <Link href="/warranties" className="btn btn--ghost btn--sm">
-            Back to warranties
+            Back to items
           </Link>
         }
       />
@@ -195,7 +195,7 @@ export function NewWarrantyClient({
               </Field>
 
               <Field
-                label="Purchase date"
+                label={formStartLabel(selectedKind)}
                 htmlFor="warranty-purchase-date"
                 hint={suggestedNote(suggested.purchaseDate, () => {
                   setPurchaseDate('');
@@ -242,7 +242,11 @@ export function NewWarrantyClient({
             </div>
 
             <fieldset className="flex flex-col gap-2">
-              <legend className={labelClass}>Warranty length</legend>
+              {/* v1.2.2 Task 2 (reviewer-flagged): this legend used to hard-code "Warranty
+                  length" regardless of the selected type's kind, breaking MUST-19.11's
+                  one-place rule. Routed through formTermLabel() like every other date label
+                  on this form. */}
+              <legend className={labelClass}>{formTermLabel(selectedKind)}</legend>
               <div className="flex flex-wrap items-center gap-3">
                 <input
                   type="number"
@@ -251,7 +255,7 @@ export function NewWarrantyClient({
                   placeholder="months"
                   value={months}
                   disabled={isLifetime}
-                  aria-label="Warranty length in months"
+                  aria-label={formTermLabel(selectedKind)}
                   onChange={(e) => setMonths(e.target.value)}
                   className="field-control w-28"
                 />
@@ -267,13 +271,14 @@ export function NewWarrantyClient({
                     }}
                     className="accent-accent"
                   />
-                  Lifetime
+                  {formOpenEndedLabel(selectedKind)}
                 </label>
-                {/* MUST-10.4: the clamp rule is visible rather than surprising. Delta T9: the
-                    label itself swaps to "Cancel by" for a subscription type. */}
+                {/* MUST-10.4: the clamp rule is visible rather than surprising. Delta T9,
+                    generalized to `kind` in v1.2.2 Task 2: the label switches per the
+                    selected type's kind via coveredThroughLabelForKind(). */}
                 {expiry ? (
                   <span className="badge badge--accent">
-                    {coveredThroughLabel(isSubscription)} {expiry}
+                    {coveredThroughLabelForKind(selectedKind)} {expiry}
                   </span>
                 ) : null}
               </div>

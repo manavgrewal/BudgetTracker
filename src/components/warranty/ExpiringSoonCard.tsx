@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { daysBetweenIso } from '@/lib/dates';
-import { expiringSoonLabel, expiryPhrase } from '@/lib/warranty/constants';
+import { expiringSoonLabelForKind, expiryPhraseForKind } from '@/lib/warranty/constants';
 import type { WarrantyListItem } from '@/lib/warranty/search';
 import { ArrowRightIcon } from '@/components/icons';
 import { Card, CardHeader } from '@/components/ui/Card';
@@ -20,7 +20,7 @@ export function ExpiringSoonCard({ items, today }: { items: WarrantyListItem[]; 
   return (
     <Card>
       <CardHeader
-        title="Warranties expiring soon"
+        title="Coming due"
         action={
           <Link
             href="/warranties?status=expiring"
@@ -53,14 +53,16 @@ export function ExpiringSoonCard({ items, today }: { items: WarrantyListItem[]; 
             <span className="shrink-0 text-sm font-medium text-warning">
               {/* Every row here already carries status 'expiring' (expiringSoonItems()'s own
                   filter), which per warrantyStatus() in expiry.ts is only ever reached with a
-                  non-null expiryDate. MUST-19.10 / MUST-19.13 / type-deltas.md T10: a warranty
-                  row stays a day count ("Expires in N days", via expiringSoonLabel — the same
-                  helper StatusBadge uses); a subscription row is the cancel-by DATE itself
-                  ("Cancel by 2027-03-01", via expiryPhrase()'s "cancel by <date>", capitalized
-                  to match this card's sentence-initial convention) rather than a day count. */}
-              {row.isSubscription
-                ? capitalize(expiryPhrase(true, row.expiryDate as string))
-                : expiringSoonLabel(false, daysBetweenIso(today, row.expiryDate as string))}
+                  non-null expiryDate. MUST-19.10 / MUST-19.13 / type-deltas.md T10, generalized
+                  to `kind` in v1.2.2 Task 2: a warranty row stays a day count ("Expires in N
+                  days", via expiringSoonLabelForKind — the same helper StatusBadge uses); a
+                  subscription/contract/loan row is the end-DATE itself ("Cancel by
+                  2027-03-01" / "Ends on 2027-03-01" / "Paid off by 2027-03-01", via
+                  expiryPhraseForKind(), capitalized to match this card's sentence-initial
+                  convention) rather than a day count. */}
+              {row.kind === 'warranty'
+                ? expiringSoonLabelForKind('warranty', daysBetweenIso(today, row.expiryDate as string))
+                : capitalize(expiryPhraseForKind(row.kind, row.expiryDate as string))}
             </span>
           </li>
         ))}

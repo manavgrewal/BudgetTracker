@@ -36,20 +36,38 @@ export const ITEM_KIND_LABELS: Record<ItemKind, string> = {
  * The user-approved wording matrix (v1.2.2): what the add/edit form's date labels say, what
  * verb the expiry phrase uses, and what the "no end date" state is called, per kind.
  *
- *   warranty:     Purchase date / Warranty (months) / expires    / Lifetime warranty
- *   subscription: Start date    / Duration (months)  / cancel by / Ongoing (no end date)
- *   contract:     Start date    / Term (months)       / ends on   / Open-ended
- *   loan:         Start date    / Term (months)       / paid off by / Ongoing (no end date)
+ *   warranty:     Purchase date / Warranty (months) / expires    / Expiry date  / Covered through    / Lifetime warranty
+ *   subscription: Start date    / Duration (months)  / cancel by / Cancel-by date / Active through    / Ongoing (no end date)
+ *   contract:     Start date    / Term (months)      / ends on   / End date     / In effect through  / Open-ended
+ *   loan:         Start date    / Term (months)      / paid off by / Payoff date / Term runs through / Ongoing (no end date)
+ *
+ * v1.2.2 Task 2 (controller ruling): this matrix SUPERSEDES the four old boolean label
+ * helpers (`purchaseDateLabel`, `termLabel`, `expiryDateLabel`, `coveredThroughLabel`), which
+ * are DELETED, not kept as wrappers -- keeping them alongside this matrix would leave
+ * MUST-19.11's "one place" rule broken twice over. The wording changes below are deliberate
+ * and owner-approved (spec §19.12): 'Warranty length' -> 'Warranty (months)', 'Period start'
+ * -> 'Start date', 'Period length' -> 'Duration (months)', 'Cancel by' (label) -> 'Cancel-by
+ * date' / 'Active through' depending on which of the two old helpers it replaces.
  */
 const KIND_WORDING: Record<
   ItemKind,
-  { start: string; term: string; expiryVerb: string; expiringVerb: string; openEnded: string }
+  {
+    start: string;
+    term: string;
+    expiryVerb: string;
+    expiringVerb: string;
+    end: string;
+    coveredThrough: string;
+    openEnded: string;
+  }
 > = {
   warranty: {
     start: 'Purchase date',
     term: 'Warranty (months)',
     expiryVerb: 'expires',
     expiringVerb: 'Expires',
+    end: 'Expiry date',
+    coveredThrough: 'Covered through',
     openEnded: 'Lifetime warranty',
   },
   subscription: {
@@ -57,6 +75,8 @@ const KIND_WORDING: Record<
     term: 'Duration (months)',
     expiryVerb: 'cancel by',
     expiringVerb: 'Cancel',
+    end: 'Cancel-by date',
+    coveredThrough: 'Active through',
     openEnded: 'Ongoing (no end date)',
   },
   contract: {
@@ -64,6 +84,8 @@ const KIND_WORDING: Record<
     term: 'Term (months)',
     expiryVerb: 'ends on',
     expiringVerb: 'Ends',
+    end: 'End date',
+    coveredThrough: 'In effect through',
     openEnded: 'Open-ended',
   },
   loan: {
@@ -71,6 +93,8 @@ const KIND_WORDING: Record<
     term: 'Term (months)',
     expiryVerb: 'paid off by',
     expiringVerb: 'Paid off',
+    end: 'Payoff date',
+    coveredThrough: 'Term runs through',
     openEnded: 'Ongoing (no end date)',
   },
 };
@@ -85,9 +109,26 @@ export function formTermLabel(kind: ItemKind): string {
   return KIND_WORDING[kind].term;
 }
 
+/**
+ * Detail-page end-date field label, keyed by kind. Supersedes `expiryDateLabel`
+ * (v1.2.2 Task 2 controller ruling -- see the KIND_WORDING docblock above).
+ */
+export function formEndLabel(kind: ItemKind): string {
+  return KIND_WORDING[kind].end;
+}
+
 /** "No end date" wording -- the lifetime checkbox's label / the open-ended state, keyed by kind. */
 export function formOpenEndedLabel(kind: ItemKind): string {
   return KIND_WORDING[kind].openEnded;
+}
+
+/**
+ * MUST-10.4's live computed date beside the term input, keyed by kind. Supersedes
+ * `coveredThroughLabel` (v1.2.2 Task 2 controller ruling -- see the KIND_WORDING docblock
+ * above).
+ */
+export function coveredThroughLabelForKind(kind: ItemKind): string {
+  return KIND_WORDING[kind].coveredThrough;
 }
 
 /** MUST-19.11, generalized: the one place any of the four verbs is written. */
@@ -100,31 +141,20 @@ export function expiryPhraseForKind(kind: ItemKind, expiryDate: string): string 
   return `${expiryNounForKind(kind)} ${expiryDate}`;
 }
 
-/** MUST-19.11: the one place either verb is written. No component hard-codes them. */
-export function expiryNoun(isSubscription: boolean): 'expires' | 'cancel by' {
-  return expiryNounForKind(isSubscription ? 'subscription' : 'warranty') as 'expires' | 'cancel by';
+/**
+ * MUST-19.11: the one place either verb is written. No component hard-codes them.
+ * Return type widened to `string` (not a two-value literal union) -- now that
+ * `expiryNounForKind` has four possible outputs, a literal-union return type here would
+ * require an unchecked cast to compile, which is exactly the kind of silent-mismatch risk
+ * the type system should catch, not paper over (v1.2.2 Task 2 review fix).
+ */
+export function expiryNoun(isSubscription: boolean): string {
+  return expiryNounForKind(isSubscription ? 'subscription' : 'warranty');
 }
 
 /** List rows and the dashboard widget: "expires 2027-03-01" / "cancel by 2027-03-01". */
 export function expiryPhrase(isSubscription: boolean, expiryDate: string): string {
   return expiryPhraseForKind(isSubscription ? 'subscription' : 'warranty', expiryDate);
-}
-
-export function purchaseDateLabel(isSubscription: boolean): string {
-  return isSubscription ? 'Period start' : 'Purchase date';
-}
-
-export function termLabel(isSubscription: boolean): string {
-  return isSubscription ? 'Period length' : 'Warranty length';
-}
-
-export function expiryDateLabel(isSubscription: boolean): string {
-  return isSubscription ? 'Cancel by' : 'Expiry date';
-}
-
-/** MUST-10.4's live computed date beside the months input. */
-export function coveredThroughLabel(isSubscription: boolean): string {
-  return isSubscription ? 'Cancel by' : 'Covered through';
 }
 
 /**

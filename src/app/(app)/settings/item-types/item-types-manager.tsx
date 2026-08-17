@@ -9,7 +9,7 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { Notice } from '@/components/ui/Notice';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { TableWrap } from '@/components/ui/Table';
-import { Field, inputClass } from '@/components/ui/form';
+import { Field, inputClass, selectClass } from '@/components/ui/form';
 import {
   createItemTypeAction,
   deleteItemTypeAction,
@@ -87,7 +87,7 @@ export function ItemTypesManager({ types }: { types: ItemTypeWithUsage[] }) {
                 checkbox had here (see the create-form regression tests): there is exactly one
                 control and exactly one value, chosen, never inferred from absence.
               */}
-              <select name="kind" defaultValue="warranty" className={inputClass}>
+              <select name="kind" defaultValue="warranty" className={selectClass}>
                 {ITEM_KINDS.map((kind) => (
                   <option key={kind} value={kind}>
                     {ITEM_KIND_LABELS[kind]}

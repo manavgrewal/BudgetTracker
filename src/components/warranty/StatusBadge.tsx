@@ -1,5 +1,5 @@
 import { daysBetweenIso } from '@/lib/dates';
-import { expiringSoonLabel } from '@/lib/warranty/constants';
+import { expiringSoonLabelForKind, type ItemKind } from '@/lib/warranty/constants';
 import { statusLabel, type WarrantyStatus } from '@/lib/warranty/expiry';
 
 /**
@@ -19,14 +19,14 @@ const CLASSES: Record<WarrantyStatus, string> = {
 };
 
 /**
- * Type-deltas T9: the day-count wording for 'expiring' swaps "Expires" for "Cancel" when the
- * item's type is a subscription (expiringSoonLabel, constants.ts). Every other status keeps
- * statusLabel()'s wording unchanged -- status derivation itself knows nothing about
- * subscriptions (MUST-19.12); only this label swap does.
+ * Type-deltas T9, generalized to `kind` in v1.2.2 Task 2: the day-count wording for
+ * 'expiring' swaps "Expires" for "Cancel"/"Ends"/"Paid off" per kind (expiringSoonLabelForKind,
+ * constants.ts). Every other status keeps statusLabel()'s wording unchanged -- status
+ * derivation itself knows nothing about kinds (MUST-19.12); only this label swap does.
  */
-function labelFor(status: WarrantyStatus, expiryDate: string | null, today: string, isSubscription: boolean): string {
+function labelFor(status: WarrantyStatus, expiryDate: string | null, today: string, kind: ItemKind): string {
   if (status === 'expiring' && expiryDate !== null) {
-    return expiringSoonLabel(isSubscription, daysBetweenIso(today, expiryDate));
+    return expiringSoonLabelForKind(kind, daysBetweenIso(today, expiryDate));
   }
   return statusLabel(status, expiryDate, today);
 }
@@ -35,14 +35,14 @@ export function StatusBadge({
   status,
   expiryDate,
   today,
-  isSubscription = false,
+  kind = 'warranty',
 }: {
   status: WarrantyStatus;
   expiryDate: string | null;
   today: string;
-  isSubscription?: boolean;
+  kind?: ItemKind;
 }) {
   return (
-    <span className={`badge ${CLASSES[status]}`}>{labelFor(status, expiryDate, today, isSubscription)}</span>
+    <span className={`badge ${CLASSES[status]}`}>{labelFor(status, expiryDate, today, kind)}</span>
   );
 }
