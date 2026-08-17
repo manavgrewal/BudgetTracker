@@ -224,14 +224,18 @@ export function WarrantyDetailClient({
             <Detail label={expiryLabel}>{item.isLifetime ? openEndedDisplayLabel(item.kind) : (item.expiryDate ?? '—')}</Detail>
             <Detail label="Price">{item.priceCents === null ? '—' : <Money cents={item.priceCents} plain />}</Detail>
             {billingAllowedForKind(item.kind) ? (
+              // review fix: cycle and amount are validated as a pair at the schema boundary
+              // (BILLING_PAIR_ERROR) -- render the value only when BOTH are present. Rendering
+              // one alone either lies ("— / month", cycle set but no amount) or silently drops
+              // a value the member entered (amount set but no cycle shown) -- exactly the kind
+              // of blank-reads-as-broken defect task B set out to eliminate for the end date.
               <Detail label="Billing">
-                {item.billingCycle === null && item.billingAmountCents === null ? (
-                  '—'
-                ) : (
+                {item.billingCycle !== null && item.billingAmountCents !== null ? (
                   <>
-                    {item.billingAmountCents === null ? '—' : <Money cents={item.billingAmountCents} plain />}
-                    {item.billingCycle === null ? null : ` ${billingCycleSuffix(item.billingCycle)}`}
+                    <Money cents={item.billingAmountCents} plain /> {billingCycleSuffix(item.billingCycle)}
                   </>
+                ) : (
+                  '—'
                 )}
               </Detail>
             ) : null}

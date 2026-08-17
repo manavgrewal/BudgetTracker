@@ -14,7 +14,6 @@ import { Field, inputClass, selectClass } from '@/components/ui/form';
 // from search.ts -- search.ts imports @/db/client, and a VALUE import from it (as opposed to
 // a type-only one) drags better-sqlite3 into this client bundle and breaks `next build`.
 import {
-  billingAllowedForKind,
   billingCycleSuffix,
   expiryPhraseForKind,
   openEndedDisplayLabel,
@@ -207,11 +206,13 @@ export function WarrantiesClient({
                   <td className="text-right">
                     {row.priceCents === null ? <span className="text-subtle">—</span> : <Money cents={row.priceCents} plain />}
                   </td>
+                  {/* review fix: cycle and amount are a validated pair (BILLING_PAIR_ERROR) --
+                      show the value only when BOTH are set, matching the detail page. Showing
+                      the amount alone used to silently drop a cycle the member actually chose. */}
                   <td className="whitespace-nowrap text-right text-muted">
-                    {billingAllowedForKind(row.kind) && row.billingAmountCents !== null ? (
+                    {row.billingCycle !== null && row.billingAmountCents !== null ? (
                       <>
-                        <Money cents={row.billingAmountCents} plain />
-                        {row.billingCycle === null ? null : ` ${billingCycleSuffix(row.billingCycle)}`}
+                        <Money cents={row.billingAmountCents} plain /> {billingCycleSuffix(row.billingCycle)}
                       </>
                     ) : (
                       <span className="text-subtle">—</span>

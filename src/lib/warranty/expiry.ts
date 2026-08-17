@@ -1,4 +1,5 @@
 import { addDaysIso, addMonthsClamped, daysBetweenIso } from '@/lib/dates';
+import { openEndedDisplayLabel, type ItemKind } from '@/lib/warranty/constants';
 
 /**
  * One constant driving the list badge, the status filter and the dashboard widget alike
@@ -46,10 +47,24 @@ export function warrantyStatus(
   return 'active';
 }
 
-export function statusLabel(status: WarrantyStatus, expiryDate: string | null, today: string): string {
+/**
+ * review fix (v1.3.0): `kind` defaults to 'warranty' -- the same default StatusBadge itself
+ * already carries, and the same value the generic (kind-less) status FILTER <select> in
+ * warranties-client.tsx relies on to keep saying plain "Lifetime" for its neutral,
+ * cross-kind option list. A caller that DOES know the item's kind (StatusBadge, given a real
+ * row) now passes it through, so the 'lifetime' word matches openEndedDisplayLabel() -- the
+ * one place this wording lives (MUST-19.11) -- instead of hardcoding 'Lifetime' regardless of
+ * kind, which used to contradict the Expiry column's own per-kind open-ended label.
+ */
+export function statusLabel(
+  status: WarrantyStatus,
+  expiryDate: string | null,
+  today: string,
+  kind: ItemKind = 'warranty',
+): string {
   switch (status) {
     case 'lifetime':
-      return 'Lifetime';
+      return openEndedDisplayLabel(kind);
     case 'unknown':
       return 'Term unknown';
     case 'expired':

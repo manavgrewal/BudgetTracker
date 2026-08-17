@@ -149,28 +149,61 @@ describe('warrantyInputSchema', () => {
       expect(parsed.success && parsed.data.billingAmountCents).toBeUndefined();
     });
 
-    it('accepts null and both valid billing cycle values', () => {
-      expect(schema().safeParse(input({ billingCycle: null })).success).toBe(true);
-      expect(schema().safeParse(input({ billingCycle: 'monthly' })).success).toBe(true);
-      expect(schema().safeParse(input({ billingCycle: 'annual' })).success).toBe(true);
+    it('accepts null and both valid billing cycle values, paired with an amount', () => {
+      expect(schema().safeParse(input({ billingCycle: null, billingAmountCents: null })).success).toBe(true);
+      expect(schema().safeParse(input({ billingCycle: 'monthly', billingAmountCents: 1599 })).success).toBe(true);
+      expect(schema().safeParse(input({ billingCycle: 'annual', billingAmountCents: 4999 })).success).toBe(true);
     });
 
     it('rejects a billing cycle outside monthly/annual', () => {
-      const parsed = schema().safeParse(input({ billingCycle: 'weekly' as unknown as WarrantyInput['billingCycle'] }));
+      const parsed = schema().safeParse(
+        input({ billingCycle: 'weekly' as unknown as WarrantyInput['billingCycle'], billingAmountCents: 999 }),
+      );
       expect(parsed.success).toBe(false);
       expect(parsed.success === false && parsed.error.issues[0].message).toBe('Billing must be Monthly or Annual.');
     });
 
-    it('accepts a non-negative billing amount and rejects a negative one', () => {
-      expect(schema().safeParse(input({ billingAmountCents: 0 })).success).toBe(true);
-      expect(schema().safeParse(input({ billingAmountCents: 1599 })).success).toBe(true);
-      const parsed = schema().safeParse(input({ billingAmountCents: -1 }));
+    it('accepts a non-negative billing amount (0 is a legal free-tier amount) and rejects a negative one', () => {
+      expect(schema().safeParse(input({ billingCycle: 'monthly', billingAmountCents: 0 })).success).toBe(true);
+      expect(schema().safeParse(input({ billingCycle: 'monthly', billingAmountCents: 1599 })).success).toBe(true);
+      const parsed = schema().safeParse(input({ billingCycle: 'monthly', billingAmountCents: -1 }));
       expect(parsed.success).toBe(false);
-      expect(parsed.success === false && parsed.error.issues[0].message).toBe('The amount must be a positive number.');
+      // review fix: 0 is legal, so the message must not claim the rule is stricter than that.
+      expect(parsed.success === false && parsed.error.issues[0].message).toBe("The amount can't be negative.");
     });
 
     it('rejects a non-integer billing amount', () => {
-      expect(schema().safeParse(input({ billingAmountCents: 15.5 })).success).toBe(false);
+      expect(schema().safeParse(input({ billingCycle: 'monthly', billingAmountCents: 15.5 })).success).toBe(false);
+    });
+
+    // review fix: cycle and amount are a pair -- exactly one set is rejected, both set or
+    // both null/omitted is fine.
+    describe('cycle and amount must be a pair', () => {
+      it('rejects a cycle with no amount', () => {
+        const parsed = schema().safeParse(input({ billingCycle: 'monthly', billingAmountCents: null }));
+        expect(parsed.success).toBe(false);
+        expect(parsed.success === false && parsed.error.issues[0].message).toBe(
+          'Enter both a billing cycle and an amount, or neither.',
+        );
+      });
+
+      it('rejects an amount with no cycle', () => {
+        const parsed = schema().safeParse(input({ billingCycle: null, billingAmountCents: 999 }));
+        expect(parsed.success).toBe(false);
+        expect(parsed.success === false && parsed.error.issues[0].message).toBe(
+          'Enter both a billing cycle and an amount, or neither.',
+        );
+      });
+
+      it('rejects a cycle with an omitted amount, and an omitted cycle with an amount', () => {
+        expect(schema().safeParse(input({ billingCycle: 'monthly' })).success).toBe(false);
+        expect(schema().safeParse(input({ billingAmountCents: 999 })).success).toBe(false);
+      });
+
+      it('accepts both omitted, and both explicitly null', () => {
+        expect(schema().safeParse(input()).success).toBe(true);
+        expect(schema().safeParse(input({ billingCycle: null, billingAmountCents: null })).success).toBe(true);
+      });
     });
   });
 });

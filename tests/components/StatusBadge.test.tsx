@@ -60,4 +60,25 @@ describe('StatusBadge (§10.2)', () => {
     render(<StatusBadge status="expiring" expiryDate="2026-09-15" today="2026-08-16" />);
     expect(screen.getByText('Expires in 30 days')).toBeTruthy();
   });
+
+  // review fix (v1.3.0): the lifetime badge used to say "Lifetime" for every kind, which
+  // contradicted the Expiry column's own per-kind open-ended word right next to it (an
+  // open-ended contract read Expiry "Ongoing" / Status "Lifetime" on the same row). It now
+  // routes through the same openEndedDisplayLabel matrix.
+  it('names the lifetime badge per kind, matching the Expiry column word (MUST-19.11)', () => {
+    render(<StatusBadge status="lifetime" expiryDate={null} today="2026-08-16" kind="warranty" />);
+    expect(screen.getByText('Lifetime')).toBeTruthy();
+    cleanup();
+
+    render(<StatusBadge status="lifetime" expiryDate={null} today="2026-08-16" kind="subscription" />);
+    expect(screen.getByText('Lifetime')).toBeTruthy();
+    cleanup();
+
+    render(<StatusBadge status="lifetime" expiryDate={null} today="2026-08-16" kind="contract" />);
+    expect(screen.getByText('Ongoing')).toBeTruthy();
+    cleanup();
+
+    render(<StatusBadge status="lifetime" expiryDate={null} today="2026-08-16" kind="loan" />);
+    expect(screen.getByText('Open-ended')).toBeTruthy();
+  });
 });

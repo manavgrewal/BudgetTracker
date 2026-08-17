@@ -221,6 +221,26 @@ describe('WarrantyDetailClient', () => {
     expect(dt.nextElementSibling?.textContent).toBe('$15.99 / month');
   });
 
+  // review fix: cycle and amount are validated as a pair at the schema boundary, but the
+  // display layer must not trust that -- pre-existing rows (or a future bug) could still
+  // carry exactly one of the two. Rendering one alone either lies ("— / month") or drops a
+  // value the member entered, so a partial pair renders as a plain "—", same as neither set.
+  it('renders a plain em dash, never "— / month", for a partial billing pair (cycle only)', () => {
+    const { container } = renderDetail({
+      item: item({ typeId: 2, typeName: 'Netflix plan', kind: 'subscription', billingCycle: 'monthly', billingAmountCents: null }),
+    });
+    const dt = Array.from(container.querySelectorAll('dt')).find((el) => el.textContent === 'Billing')!;
+    expect(dt.nextElementSibling?.textContent).toBe('—');
+  });
+
+  it('renders a plain em dash for a partial billing pair (amount only)', () => {
+    const { container } = renderDetail({
+      item: item({ typeId: 2, typeName: 'Netflix plan', kind: 'subscription', billingCycle: null, billingAmountCents: 1599 }),
+    });
+    const dt = Array.from(container.querySelectorAll('dt')).find((el) => el.textContent === 'Billing')!;
+    expect(dt.nextElementSibling?.textContent).toBe('—');
+  });
+
   it('renders no Billing row at all for a warranty-kind item', () => {
     renderDetail({ item: item({ kind: 'warranty' }) });
     expect(screen.queryByText('Billing')).toBeNull();

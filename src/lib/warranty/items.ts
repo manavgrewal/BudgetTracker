@@ -27,6 +27,8 @@ export const MIN_PURCHASE_DATE = '1970-01-01';
 export const LIFETIME_WITH_TERM_ERROR =
   'A lifetime warranty has no length — clear the months or untick Lifetime.';
 export const FUTURE_PURCHASE_DATE_ERROR = 'Purchase date cannot be in the future.';
+/** v1.3.0 review fix: billing cycle and amount must be set together, or not at all. */
+export const BILLING_PAIR_ERROR = 'Enter both a billing cycle and an amount, or neither.';
 
 export interface WarrantyItemRow {
   id: number;
@@ -182,10 +184,12 @@ export function warrantyInputSchema(today: string) {
         .enum(BILLING_CYCLES, { errorMap: () => ({ message: 'Billing must be Monthly or Annual.' }) })
         .nullable()
         .optional(),
+      // review fix: 0 is a legal amount (a free subscription) -- `.nonnegative()` accepts it,
+      // so the message must not claim the rule is stricter than that.
       billingAmountCents: z
         .number()
         .int('The amount must be a whole number of cents')
-        .nonnegative('The amount must be a positive number.')
+        .nonnegative("The amount can't be negative.")
         .nullable()
         .optional(),
     })
@@ -193,6 +197,15 @@ export function warrantyInputSchema(today: string) {
       // MUST-3.5, enforced by zod at the action boundary AND by a CHECK in 0002.
       if (value.isLifetime && value.warrantyMonths !== null) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['warrantyMonths'], message: LIFETIME_WITH_TERM_ERROR });
+      }
+      // review fix: cycle and amount are a pair -- neither surface (detail, list) can render
+      // one alone without either lying ("— / month") or silently dropping the other value the
+      // member actually entered. Both null/omitted (no billing at all) is fine; both set is
+      // fine; exactly one set is rejected.
+      const cycleSet = value.billingCycle !== null && value.billingCycle !== undefined;
+      const amountSet = value.billingAmountCents !== null && value.billingAmountCents !== undefined;
+      if (cycleSet !== amountSet) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['billingCycle'], message: BILLING_PAIR_ERROR });
       }
     });
 }

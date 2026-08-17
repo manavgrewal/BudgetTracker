@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { getDb } from '@/db/client';
 import { warrantyItemTypes, warrantyItems } from '@/db/schema';
 import { nowIso } from '@/lib/clock';
-import { ITEM_KINDS, type ItemKind } from '@/lib/warranty/constants';
+import { ITEM_KINDS, billingAllowedForKind, type ItemKind } from '@/lib/warranty/constants';
 
 export interface ItemType {
   id: number;
@@ -149,17 +149,33 @@ export function renameItemType(id: number, name: string): ItemType {
  * MUST-19.7: takes effect immediately on every item of this type -- that is the point.
  * Supersedes setItemTypeSubscription (v1.2.2): `isSubscription` is derived from `kind` and
  * written in the same statement, so it never drifts out of sync with it.
+ *
+ * v1.3.0 review fix: when the new kind disallows billing (warranty/loan), every item of this
+ * type has its billing_cycle/billing_amount_cents cleared in the SAME transaction as the
+ * kind flip. Without this, an item write's own assertBillingMatchesKind() (items.ts) is the
+ * only place that rule is enforced, and this path -- Settings -> Item types -- bypasses item
+ * writes entirely, leaving stale non-NULL billing columns on items whose (now-current) kind
+ * says they must be NULL (the exact invariant 0005_billing_cycle.sql documents).
  */
 export function setItemTypeKind(id: number, kind: ItemKind): ItemType {
   const typeId = idSchema.parse(id);
   requireType(typeId);
   const cleanKind = itemKindSchema.parse(kind);
-  return getDb()
-    .update(warrantyItemTypes)
-    .set({ kind: cleanKind, isSubscription: cleanKind === 'subscription' })
-    .where(eq(warrantyItemTypes.id, typeId))
-    .returning(COLUMNS)
-    .get();
+  return getDb().transaction((tx) => {
+    const updated = tx
+      .update(warrantyItemTypes)
+      .set({ kind: cleanKind, isSubscription: cleanKind === 'subscription' })
+      .where(eq(warrantyItemTypes.id, typeId))
+      .returning(COLUMNS)
+      .get();
+    if (!billingAllowedForKind(cleanKind)) {
+      tx.update(warrantyItems)
+        .set({ billingCycle: null, billingAmountCents: null })
+        .where(eq(warrantyItems.typeId, typeId))
+        .run();
+    }
+    return updated;
+  });
 }
 
 export function typeUsageCount(id: number): number {

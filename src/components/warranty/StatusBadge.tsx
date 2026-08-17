@@ -23,12 +23,17 @@ const CLASSES: Record<WarrantyStatus, string> = {
  * 'expiring' swaps "Expires" for "Cancel"/"Ends"/"Paid off" per kind (expiringSoonLabelForKind,
  * constants.ts). Every other status keeps statusLabel()'s wording unchanged -- status
  * derivation itself knows nothing about kinds (MUST-19.12); only this label swap does.
+ *
+ * v1.3.0 review fix: `kind` is now also threaded into statusLabel() itself, so the
+ * 'lifetime' status badge says the same per-kind open-ended word ("Lifetime"/"Ongoing"/
+ * "Open-ended") as the Expiry column right next to it, instead of a hardcoded "Lifetime"
+ * regardless of kind.
  */
 function labelFor(status: WarrantyStatus, expiryDate: string | null, today: string, kind: ItemKind): string {
   if (status === 'expiring' && expiryDate !== null) {
     return expiringSoonLabelForKind(kind, daysBetweenIso(today, expiryDate));
   }
-  return statusLabel(status, expiryDate, today);
+  return statusLabel(status, expiryDate, today, kind);
 }
 
 export function StatusBadge({

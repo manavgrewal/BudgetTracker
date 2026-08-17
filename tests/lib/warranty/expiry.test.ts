@@ -67,6 +67,23 @@ describe('statusLabel', () => {
     expect(statusLabel('expiring', '2026-08-17', TODAY)).toBe('Expires in 1 day');
     expect(statusLabel('expiring', '2026-10-15', TODAY)).toBe('Expires in 60 days');
   });
+
+  // review fix (v1.3.0): 'lifetime' used to hardcode "Lifetime" regardless of kind, which
+  // started contradicting the Expiry column's own per-kind open-ended label (constants.ts's
+  // openEndedDisplayLabel) the moment that label shipped -- an open-ended contract read
+  // Expiry "Ongoing" / Status "Lifetime" on the same row. `kind` now drives the same matrix
+  // both places, and defaults to 'warranty' so every pre-existing kind-less call site (the
+  // status FILTER <select> in warranties-client.tsx) keeps saying plain "Lifetime".
+  it('routes the lifetime label through the per-kind open-ended word (MUST-19.11)', () => {
+    expect(statusLabel('lifetime', null, TODAY, 'warranty')).toBe('Lifetime');
+    expect(statusLabel('lifetime', null, TODAY, 'subscription')).toBe('Lifetime');
+    expect(statusLabel('lifetime', null, TODAY, 'contract')).toBe('Ongoing');
+    expect(statusLabel('lifetime', null, TODAY, 'loan')).toBe('Open-ended');
+  });
+
+  it('defaults the lifetime label to "Lifetime" when no kind is passed (kind-less filter option list)', () => {
+    expect(statusLabel('lifetime', null, TODAY)).toBe('Lifetime');
+  });
 });
 
 describe('STATUS_CASE_SQL', () => {

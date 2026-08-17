@@ -154,6 +154,78 @@ describe('renameItemType / setItemTypeKind', () => {
     expect(() => renameItemType(9999, 'Nope')).toThrowError(/no longer exists|not found/i);
     expect(findItemType(9999)).toBeNull();
   });
+
+  // review fix (v1.3.0): switching a type's kind to one where billing is disallowed must
+  // clear billing_cycle/billing_amount_cents on every item of that type, in the same
+  // transaction -- otherwise the invariant documented in drizzle/0005_billing_cycle.sql
+  // ("only subscription/contract items ever carry non-NULL billing columns") goes stale in
+  // the database the moment an admin recategorises a type from Settings -> Item types,
+  // bypassing the item-write path (assertBillingMatchesKind in items.ts) entirely.
+  describe('setItemTypeKind clears stale billing on the type flip', () => {
+    function billingOf(itemId: number): { billing_cycle: string | null; billing_amount_cents: number | null } {
+      return current!.sqlite
+        .prepare('select billing_cycle, billing_amount_cents from warranty_items where id = ?')
+        .get(itemId) as { billing_cycle: string | null; billing_amount_cents: number | null };
+    }
+
+    it('nulls both billing columns on every item when the new kind disallows billing', () => {
+      const { userId } = setup();
+      const sub = createItemType('Streaming Kind Flip', 'subscription');
+      const itemId = insertItem(sub.id, userId, 'Netflix');
+      current!.sqlite
+        .prepare('update warranty_items set billing_cycle = ?, billing_amount_cents = ? where id = ?')
+        .run('monthly', 1599, itemId);
+      expect(billingOf(itemId)).toEqual({ billing_cycle: 'monthly', billing_amount_cents: 1599 });
+
+      setItemTypeKind(sub.id, 'warranty');
+
+      expect(billingOf(itemId)).toEqual({ billing_cycle: null, billing_amount_cents: null });
+    });
+
+    it('nulls billing when flipping to loan too (the other disallowed kind)', () => {
+      const { userId } = setup();
+      const contract = createItemType('Gym Kind Flip', 'contract');
+      const itemId = insertItem(contract.id, userId, 'Gym membership');
+      current!.sqlite
+        .prepare('update warranty_items set billing_cycle = ?, billing_amount_cents = ? where id = ?')
+        .run('annual', 49999, itemId);
+
+      setItemTypeKind(contract.id, 'loan');
+
+      expect(billingOf(itemId)).toEqual({ billing_cycle: null, billing_amount_cents: null });
+    });
+
+    it('leaves billing untouched when flipping between the two ALLOWED kinds', () => {
+      const { userId } = setup();
+      const sub = createItemType('Streaming Kind Flip Allowed', 'subscription');
+      const itemId = insertItem(sub.id, userId, 'Spotify');
+      current!.sqlite
+        .prepare('update warranty_items set billing_cycle = ?, billing_amount_cents = ? where id = ?')
+        .run('monthly', 999, itemId);
+
+      setItemTypeKind(sub.id, 'contract');
+
+      expect(billingOf(itemId)).toEqual({ billing_cycle: 'monthly', billing_amount_cents: 999 });
+    });
+
+    it('leaves other types items alone', () => {
+      const { userId } = setup();
+      const sub = createItemType('Streaming Kind Flip Scope', 'subscription');
+      const otherSub = createItemType('Other Streaming Kind Flip Scope', 'subscription');
+      const flippedItem = insertItem(sub.id, userId, 'Flipped');
+      const untouchedItem = insertItem(otherSub.id, userId, 'Untouched');
+      for (const id of [flippedItem, untouchedItem]) {
+        current!.sqlite
+          .prepare('update warranty_items set billing_cycle = ?, billing_amount_cents = ? where id = ?')
+          .run('monthly', 500, id);
+      }
+
+      setItemTypeKind(sub.id, 'warranty');
+
+      expect(billingOf(flippedItem)).toEqual({ billing_cycle: null, billing_amount_cents: null });
+      expect(billingOf(untouchedItem)).toEqual({ billing_cycle: 'monthly', billing_amount_cents: 500 });
+    });
+  });
 });
 
 describe('typeUsageCount / listItemTypesWithUsage', () => {

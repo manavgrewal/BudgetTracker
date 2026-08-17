@@ -357,6 +357,51 @@ describe('createWarrantyAction — billing cycle and amount', () => {
     expect(result.error).toBeTruthy();
     expect(current!.db.get<{ c: number }>(sql`select count(*) as c from warranty_items`).c).toBe(0);
   });
+
+  it('refuses a PAIRED billing cycle+amount on an untyped item (the kind rule alone, not the pairing rule)', async () => {
+    const result = await createWarrantyAction(
+      {},
+      formData(baseFields({ billingCycle: 'monthly', billingAmount: '9.99' })),
+    );
+    expect(result.error).toBeTruthy();
+    expect(current!.db.get<{ c: number }>(sql`select count(*) as c from warranty_items`).c).toBe(0);
+  });
+
+  // review fix: cycle and amount must be entered together, or not at all.
+  describe('billing cycle and amount must be a pair', () => {
+    it('rejects a cycle with no amount, with the written pairing message', async () => {
+      const sub = createItemType('Streaming Action Pair Cycle', 'subscription');
+      const result = await createWarrantyAction(
+        {},
+        formData(baseFields({ typeId: String(sub.id), billingCycle: 'monthly' })),
+      );
+      expect(result.error).toBe('Enter both a billing cycle and an amount, or neither.');
+      expect(current!.db.get<{ c: number }>(sql`select count(*) as c from warranty_items`).c).toBe(0);
+    });
+
+    it('rejects an amount with no cycle, with the written pairing message', async () => {
+      const sub = createItemType('Streaming Action Pair Amount', 'subscription');
+      const result = await createWarrantyAction(
+        {},
+        formData(baseFields({ typeId: String(sub.id), billingAmount: '9.99' })),
+      );
+      expect(result.error).toBe('Enter both a billing cycle and an amount, or neither.');
+      expect(current!.db.get<{ c: number }>(sql`select count(*) as c from warranty_items`).c).toBe(0);
+    });
+
+    it('accepts both set together, and neither set at all', async () => {
+      const sub = createItemType('Streaming Action Pair Both', 'subscription');
+      const to = await redirectPath(() =>
+        createWarrantyAction(
+          {},
+          formData(baseFields({ typeId: String(sub.id), billingCycle: 'monthly', billingAmount: '9.99' })),
+        ),
+      );
+      const item = getWarrantyItem(Number(to.split('/').pop()))!;
+      expect(item.billingCycle).toBe('monthly');
+      expect(item.billingAmountCents).toBe(999);
+    });
+  });
 });
 
 describe('updateWarrantyAction', () => {

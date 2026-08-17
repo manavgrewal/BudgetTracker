@@ -205,4 +205,18 @@ describe('WarrantiesClient', () => {
     const cells = Array.from(container.querySelectorAll('tbody td:nth-child(9)')).map((td) => td.textContent);
     expect(cells).toEqual(['—', '—']);
   });
+
+  // review fix: a partial pair must never render the amount alone (silently dropping the
+  // cycle the member chose) nor the cycle alone against a blank amount -- both collapse to
+  // a plain em dash, same as neither being set.
+  it('shows an em dash for a partial billing pair, in either direction', () => {
+    const { container } = renderList(
+      result([
+        item({ id: 33, kind: 'subscription', typeId: 2, typeName: 'Subscription', billingCycle: 'monthly', billingAmountCents: null }),
+        item({ id: 34, kind: 'subscription', typeId: 2, typeName: 'Subscription', billingCycle: null, billingAmountCents: 1599 }),
+      ]),
+    );
+    const cells = Array.from(container.querySelectorAll('tbody td:nth-child(9)')).map((td) => td.textContent);
+    expect(cells).toEqual(['—', '—']);
+  });
 });
