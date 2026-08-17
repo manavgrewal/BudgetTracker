@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createTestDb, insertTestUser, type TestDb } from '../helpers/db';
-import { getSmtp, getTarget, getUserSettings, saveEmailTarget, saveSmtp, saveTelegramTarget } from '@/lib/notify/config';
+import { getSmtp, getTarget, getUserSettings, saveEmailTarget, saveSmtp, saveTelegramTarget, saveUserSettings, setPref } from '@/lib/notify/config';
 import { resetNotifyRateLimitsForTests } from '@/lib/notify/ratelimit';
 import { resetNotifySenderForTests, setNotifySenderForTests, NotifyError } from '@/lib/notify/send';
 import { resetOutboxPumpForTests } from '@/lib/notify/outbox';
@@ -262,6 +262,49 @@ describe('MUST-12.7: Send test bypasses the outbox', () => {
     expect(refused.error).toMatch(/Too many test messages\. Try again in \d+ minutes\./);
     expect(calls).toBe(3);
   });
+
+  it('an unconfigured target never spends test-send quota, so a later configured send still gets its full three', async () => {
+    // No target saved at all: every one of these must fail on the guard, not the limiter,
+    // and must not touch the bucket.
+    for (let i = 0; i < 5; i += 1) {
+      const result = await actions.testTargetAction(form({ channel: 'email' }));
+      expect(result.error).toBe('Set this channel up first.');
+    }
+
+    relay();
+    saveEmailTarget({ userId: currentUser.value.id, destination: 'sam@example.com', enabled: true });
+    let calls = 0;
+    setNotifySenderForTests(async () => {
+      calls += 1;
+    });
+    for (let i = 0; i < 3; i += 1) {
+      const result = await actions.testTargetAction(form({ channel: 'email' }));
+      expect(result.message).toBeDefined();
+    }
+    expect(calls).toBe(3);
+    const refused = await actions.testTargetAction(form({ channel: 'email' }));
+    expect(refused.error).toMatch(/Too many test messages\. Try again in \d+ minutes\./);
+  });
+
+  it('a missing relay never spends test-send quota either', async () => {
+    // Target configured, but no SMTP relay saved yet: the relay guard must refuse before
+    // the limiter is touched.
+    saveEmailTarget({ userId: currentUser.value.id, destination: 'sam@example.com', enabled: true });
+    for (let i = 0; i < 5; i += 1) {
+      const result = await actions.testTargetAction(form({ channel: 'email' }));
+      expect(result.error).toBe('An admin needs to set up outbound email before this can send.');
+    }
+
+    relay();
+    let calls = 0;
+    setNotifySenderForTests(async () => {
+      calls += 1;
+    });
+    for (let i = 0; i < 3; i += 1) await actions.testTargetAction(form({ channel: 'email' }));
+    expect(calls).toBe(3);
+    const refused = await actions.testTargetAction(form({ channel: 'email' }));
+    expect(refused.error).toMatch(/Too many test messages\. Try again in \d+ minutes\./);
+  });
 });
 
 describe('MUST-3.7: savePreferencesAction writes only changed toggles', () => {
@@ -311,6 +354,58 @@ describe('MUST-3.7: savePreferencesAction writes only changed toggles', () => {
     expect((await actions.savePreferencesAction({}, form({ ...base, budgetThresholdPct: '100' }))).error).toBeDefined();
     expect((await actions.savePreferencesAction({}, form({ ...base, comingDueDays: '0' }))).error).toBeDefined();
     expect((await actions.savePreferencesAction({}, form({ ...base, dailyHour: '24' }))).error).toBeDefined();
+  });
+
+  it('MUST-12.4: a forged userId field does not touch another member\'s prefs or knobs', async () => {
+    const other = insertTestUser(t.db, { username: 'other' });
+    saveUserSettings(other, {
+      comingDueDays: 30,
+      budgetThresholdPct: 50,
+      staleImportWeeks: 5,
+      dailyHour: 6,
+      digestWeekday: 2,
+      digestHour: 9,
+    });
+    setPref(other, 'weekly_digest', 'email', true);
+
+    // Even with a userId field present in the body, the other member's settings survive
+    // untouched — the id comes from the session, never a field.
+    await actions.savePreferencesAction(
+      {},
+      form({
+        userId: String(other),
+        'pref:weekly_digest:email': 'off',
+        comingDueDays: '14',
+        budgetThresholdPct: '80',
+        staleImportWeeks: '3',
+        dailyHour: '8',
+        digestWeekday: '1',
+        digestHour: '8',
+      }),
+    );
+
+    expect(getUserSettings(other)).toEqual({
+      comingDueDays: 30,
+      budgetThresholdPct: 50,
+      staleImportWeeks: 5,
+      dailyHour: 6,
+      digestWeekday: 2,
+      digestHour: 9,
+    });
+    const row = t.sqlite
+      .prepare('select enabled from notification_prefs where user_id = ? and event_id = ? and channel = ?')
+      .get(other, 'weekly_digest', 'email') as { enabled: number } | undefined;
+    expect(row?.enabled).toBe(1);
+
+    // The caller's own settings, meanwhile, WERE written.
+    expect(getUserSettings(currentUser.value.id)).toEqual({
+      comingDueDays: 14,
+      budgetThresholdPct: 80,
+      staleImportWeeks: 3,
+      dailyHour: 8,
+      digestWeekday: 1,
+      digestHour: 8,
+    });
   });
 
   it('MUST-4.3: a member cannot enable an admin-only event', async () => {

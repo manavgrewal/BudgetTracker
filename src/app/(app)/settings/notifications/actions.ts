@@ -3,7 +3,7 @@
 import { headers } from 'next/headers';
 import { revalidatePath } from 'next/cache';
 import { z } from 'zod';
-import { isSameOrigin } from '@/lib/auth/csrf';
+import { CROSS_ORIGIN_ERROR, isSameOrigin } from '@/lib/auth/csrf';
 import { requireAdmin, requireUser } from '@/lib/auth/session';
 import {
   getSmtp,
@@ -37,12 +37,6 @@ export interface DetectChatIdState {
   chats?: TelegramChat[];
 }
 
-/**
- * Lives here as a private const, not an export: Next 15 permits ONLY async function
- * exports from a 'use server' file (the same reason src/app/(app)/warranties/actions.ts
- * cannot re-export it).
- */
-const CROSS_ORIGIN_ERROR = 'Cross-origin request rejected';
 const TOKEN_FIRST = 'Save your bot token first.';
 const PATH = '/settings/notifications';
 
@@ -223,23 +217,32 @@ export async function testTargetAction(formData: FormData): Promise<Notification
  * writes no outbox row, but it DOES update last_error / last_success_at / verified_at.
  */
 async function runTest(userId: number, channel: Channel, opts: { relayOnly: boolean }): Promise<NotificationsState> {
+  const target = getTarget(userId, channel);
+  if (!target) return { error: 'Set this channel up first.' };
+  if (channel === 'email' && getSmtp() === null) {
+    return { error: 'An admin needs to set up outbound email before this can send.' };
+  }
+
+  // Quota is spent only once a send is actually about to be attempted — checked AFTER the
+  // target/relay guards above, so pressing the button against an unconfigured destination
+  // or a missing relay cannot burn per-user or global tokens while sending nothing.
   const verdict = checkTestSend(userId, channel);
   if (!verdict.allowed) {
     return { error: `Too many test messages. Try again in ${verdict.retryAfterMinutes} minutes.` };
   }
 
-  const target = getTarget(userId, channel);
-  if (!target) return { error: 'Set this channel up first.' };
-
   const subject = 'Budget Tracker test message';
   const body = 'This is a test from Budget Tracker. If you can read it, this channel works.';
 
+  let credential: string | undefined;
   try {
     if (channel === 'telegram') {
-      await deliver({ channel: 'telegram', destination: target.destination, botToken: getTelegramToken(userId), subject, body });
+      credential = getTelegramToken(userId);
+      await deliver({ channel: 'telegram', destination: target.destination, botToken: credential, subject, body });
     } else {
       const relay = getSmtp();
       if (!relay) return { error: 'An admin needs to set up outbound email before this can send.' };
+      credential = getSmtpPassword();
       await deliver({
         channel: 'email',
         destination: target.destination,
@@ -248,7 +251,7 @@ async function runTest(userId: number, channel: Channel, opts: { relayOnly: bool
           port: relay.port,
           security: relay.security,
           username: relay.username,
-          password: getSmtpPassword(),
+          password: credential,
           fromEmail: relay.fromEmail,
           fromName: relay.fromName,
         },
@@ -258,9 +261,10 @@ async function runTest(userId: number, channel: Channel, opts: { relayOnly: bool
     }
   } catch (error) {
     const raw = error instanceof Error ? error.message : 'The test could not be sent.';
-    // MUST-5.5: belt and braces — the transports scrub already, a credential-read failure
-    // does not go near one, and anything else must not slip through.
-    const message = scrubSecrets(raw, []);
+    // MUST-5.5: belt and braces — the transports scrub already; this is a real second net
+    // keyed on the credential actually in play for this attempt (undefined, harmlessly, if
+    // the failure happened before either credential read completed).
+    const message = scrubSecrets(raw, credential ? [credential] : []);
     if (error instanceof NotifyError && error.scope === 'relay') recordSmtpOutcome({ ok: false, error: message });
     else recordTargetOutcome({ userId, channel, ok: false, error: message });
     revalidatePath(PATH);
