@@ -461,27 +461,50 @@ function buildRecoveryText(dataDir: string, plan: RestorePlan): string {
   const safetyCopyPath = plan.safetyCopy ? path.join(dataDir, plan.safetyCopy) : null;
   if (safetyCopyPath && fs.existsSync(safetyCopyPath)) {
     // T1 re-review D2: the same class of hazard D1 fixed for the automated replay path
-    // applies here too, by hand. A stray -wal/-shm at the LIVE path (e.g. an impostor
-    // database's leftover sidecars) would be replayed over the recovered file the instant
-    // it is next opened, corrupting it the same way — so those are DELETED, never
-    // preserved, before the safety copy is moved into place. And the safety copy's OWN
-    // -wal/-shm can hold a committed-but-uncheckpointed transaction — moving only the .db
-    // file back would silently drop it, so the trio moves together. Every line is
-    // conditioned on the file actually existing, checked at the moment this text is built,
-    // and never assumed from `plan` alone.
+    // applies here too, by hand — a stray -wal/-shm at the LIVE path would be replayed over
+    // the recovered file the instant it is next opened. And the safety copy's OWN -wal/-shm
+    // can hold a committed-but-uncheckpointed transaction — moving only the .db file back
+    // would silently drop it, so the trio moves together. Every line is conditioned on the
+    // file actually existing, checked at the moment this text is built, never assumed from
+    // `plan` alone.
+    //
+    // T1 re-review round 2 (BLOCKER fix): a live -wal/-shm is NOT always impostor garbage.
+    // The discriminator is `dbTarget` itself: getDb() always creates its main file before
+    // ever writing a WAL frame, so an impostor's sidecars are NEVER seen without an impostor
+    // main file sitting right beside them. If `dbTarget` is ABSENT but a -wal/-shm is
+    // present anyway, that can only mean step 1/2 (renaming the ORIGINAL live db's own
+    // -wal/-shm to the safety copy) failed after step 0 (renaming the main file) already
+    // succeeded — this is the ORIGINAL database's own orphaned journal, possibly holding
+    // committed transactions, and deleting it would be a straight data-loss regression. It
+    // is preserved instead: moved to join the safety copy under its proper name (unless
+    // that name is already occupied, in which case nothing safe can be inferred and it is
+    // left alone for the operator to reconcile by hand).
     const liveWal = `${dbTarget}-wal`;
     const liveShm = `${dbTarget}-shm`;
     const safetyWal = `${safetyCopyPath}-wal`;
     const safetyShm = `${safetyCopyPath}-shm`;
     const steps: string[] = [];
+    let safetyWalExists = fs.existsSync(safetyWal);
+    let safetyShmExists = fs.existsSync(safetyShm);
     if (fs.existsSync(dbTarget)) {
+      // An impostor main file is present — its sidecars, if any, are impostor garbage.
       steps.push(`mv ${dbTarget} ${path.join(dataDir, `budget.failed-${plan.stamp}.db`)}`);
+      if (fs.existsSync(liveWal)) steps.push(`rm -f ${liveWal}`);
+      if (fs.existsSync(liveShm)) steps.push(`rm -f ${liveShm}`);
+    } else {
+      // No main file — a sidecar here is the original database's own orphaned journal.
+      if (fs.existsSync(liveWal) && !safetyWalExists) {
+        steps.push(`mv ${liveWal} ${safetyWal}`);
+        safetyWalExists = true;
+      }
+      if (fs.existsSync(liveShm) && !safetyShmExists) {
+        steps.push(`mv ${liveShm} ${safetyShm}`);
+        safetyShmExists = true;
+      }
     }
-    if (fs.existsSync(liveWal)) steps.push(`rm -f ${liveWal}`);
-    if (fs.existsSync(liveShm)) steps.push(`rm -f ${liveShm}`);
     steps.push(`mv ${safetyCopyPath} ${dbTarget}`);
-    if (fs.existsSync(safetyWal)) steps.push(`mv ${safetyWal} ${liveWal}`);
-    if (fs.existsSync(safetyShm)) steps.push(`mv ${safetyShm} ${liveShm}`);
+    if (safetyWalExists) steps.push(`mv ${safetyWal} ${liveWal}`);
+    if (safetyShmExists) steps.push(`mv ${safetyShm} ${liveShm}`);
     commands.push(steps.join(' && '));
   }
   const receiptsTarget = path.join(dataDir, 'receipts');
@@ -610,20 +633,23 @@ function runCommitAttempt(applying: string, marker: MarkerFields, plan: RestoreP
  * - **Readable, and its PERSISTED attempts is under the cap** → `'restart'` is sound: the
  *   value on disk is UNCHANGED (this write never landed), so the next boot resumes from
  *   exactly the same state this one started from — no different than any other
- *   `'restart'`. This does not loop forever in the ordinary case: a real ENOSPC/read-only
- *   condition is something the operator fixes (or the attempt cap is reached some other
- *   way), and reaching the cap resolves to the branch below.
+ *   `'restart'`. (The cap-reached case is handled entirely by the caller BEFORE this
+ *   function is ever invoked — `resumeApplying` already routes to `failExhausted` when
+ *   `plan.attempts >= MAX_COMMIT_ATTEMPTS`, so this branch never has to consider it.)
  * - **Unreadable, or already at the cap** → treated as terminal, exactly like a corrupt
  *   commit.json (`failCorruptCommitJson`), which always converges: it renames
  *   restore-applying/ away, so no later boot can find this state again.
  *
  * The one case this does NOT bound is a filesystem that reliably fails every WRITE while
- * every READ keeps succeeding, forever, with attempts never reaching the cap — that would
- * restart indefinitely. This is accepted as out of scope: a filesystem in that specific,
- * narrow failure mode (writes permanently broken, reads permanently fine) is not
- * meaningfully different from one that simply cannot run this app at all, and every restart
- * cycle still leaves live data untouched (nothing has been renamed away yet at this point,
- * or whatever was already moved is exactly reproducible from the unchanged commit.json).
+ * every READ keeps succeeding, forever, with attempts never reaching the cap — that
+ * restarts indefinitely, BY DESIGN: terminality can only ever be recorded by a successful
+ * write (both the failed outcome and the rename-away that makes it stick require one), so a
+ * volume that is read-only or full produces a Docker-restart-policy-throttled boot loop
+ * rather than a false "recorded as failed" that a genuinely half-applied restore does not
+ * deserve. Fail-stop (keep retrying, change nothing further) beats fail-corrupt (declare
+ * defeat on a guess and leave the state machine possibly wrong) here. The operator's fix is
+ * to repair the volume (free space / remount writable), at which point the very next
+ * restart either completes the commit or reaches the cap and resolves normally.
  */
 function persistAttemptsOrTerminal(
   applying: string,

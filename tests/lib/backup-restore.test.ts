@@ -439,6 +439,51 @@ describe('MUST-20.17: the state machine', () => {
     expect(mvSafetyWal).toBeLessThan(mvSafetyShm);
   });
 
+  it('T1 re-review round 2 BLOCKER: an orphaned safety-copy WAL (no impostor main file present) is preserved, never rm -f\'d', () => {
+    stageArchiveBackup();
+    const applying = applyingDir();
+    fs.renameSync(stagedDir(), applying);
+    const plan = prepareRestore(path.join(applying, 'payload'), {
+      dataDir,
+      scratchDir: applying,
+      migrationsFolder: migrationsFolder(),
+      now: new Date('2026-08-16T23:00:00.000Z'),
+    });
+    expect(plan.safetyCopy).not.toBeNull();
+
+    // Run only the first step (the main-file safety-copy rename) for real: step 0 succeeds
+    // (budget.db moved aside), but simulate step 1 (its -wal rename) having failed
+    // persistently — the ORIGINAL live database's own -wal is left orphaned at
+    // budget.db-wal. There is no impostor main file at dbTarget, so this -wal cannot be
+    // impostor garbage; it may hold committed transactions from the original database.
+    try {
+      commitRestore({ ...plan, steps: plan.steps.slice(0, 1) }, { dataDir, now: new Date('2026-08-16T23:00:01.000Z') });
+    } catch {
+      /* the step itself ran; only the truncated call's own result-reporting throws */
+    }
+    const dbTarget = path.join(dataDir, 'budget.db');
+    const safetyCopyPath = path.join(dataDir, plan.safetyCopy!);
+    expect(fs.existsSync(dbTarget)).toBe(false); // step 0 succeeded: no impostor main file
+    expect(fs.existsSync(safetyCopyPath)).toBe(true);
+    expect(fs.existsSync(`${safetyCopyPath}-wal`)).toBe(false); // step 1 never completed
+
+    fs.writeFileSync(`${dbTarget}-wal`, 'the original live database\'s own committed WAL data');
+
+    const exhausted: RestorePlan = { ...plan, attempts: MAX_COMMIT_ATTEMPTS };
+    fs.writeFileSync(path.join(applying, 'commit.json'), JSON.stringify(exhausted));
+
+    applyStagedRestoreOnBoot(new Date('2026-08-16T23:05:00.000Z'));
+
+    const error = readRestoreState().result?.error ?? '';
+    // No destructive command anywhere in the text — this is real data, not impostor garbage.
+    expect(error).not.toMatch(/rm -f/);
+    // Preserved: moved to join the safety copy under its proper name...
+    expect(error).toContain(`mv ${dbTarget}-wal ${safetyCopyPath}-wal`);
+    // ...and, having been preserved there, moved back to the live path along with the rest
+    // of the safety copy.
+    expect(error).toContain(`mv ${safetyCopyPath}-wal ${dbTarget}-wal`);
+  });
+
   it('T1 re-review D3: a failed commit.json write during a resume restarts (attempts unchanged, under the cap) and self-heals next boot', () => {
     stageArchiveBackup();
     const applying = applyingDir();
