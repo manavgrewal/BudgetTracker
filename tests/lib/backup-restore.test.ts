@@ -382,6 +382,140 @@ describe('MUST-20.17: the state machine', () => {
     expect(error).toMatch(/mv \S*[/\\]receipts \S*[/\\]receipts\.failed-\S+ && mv \S*[/\\]receipts\.pre-restore-\S+ \S*[/\\]receipts\b/);
   });
 
+  it('T1 re-review D2: F18 recovery text moves the db+wal+shm trio and clears stale live sidecars, in safe order', () => {
+    stageArchiveBackup();
+    const applying = applyingDir();
+    fs.renameSync(stagedDir(), applying);
+    const plan = prepareRestore(path.join(applying, 'payload'), {
+      dataDir,
+      scratchDir: applying,
+      migrationsFolder: migrationsFolder(),
+      now: new Date('2026-08-16T22:00:00.000Z'),
+    });
+    expect(plan.safetyCopy).not.toBeNull();
+
+    // Run only the first step (the safety-copy db rename) for real, so the safety copy
+    // genuinely exists on disk...
+    try {
+      commitRestore({ ...plan, steps: plan.steps.slice(0, 1) }, { dataDir, now: new Date('2026-08-16T22:00:01.000Z') });
+    } catch {
+      /* the step itself ran; only the truncated call's own result-reporting throws */
+    }
+    const safetyCopyPath = path.join(dataDir, plan.safetyCopy!);
+    expect(fs.existsSync(safetyCopyPath)).toBe(true);
+
+    // ...give the safety copy its own -wal/-shm (a committed-but-uncheckpointed transaction
+    // that must not be silently dropped)...
+    fs.writeFileSync(`${safetyCopyPath}-wal`, 'safety copy wal content');
+    fs.writeFileSync(`${safetyCopyPath}-shm`, 'safety copy shm content');
+
+    // ...and plant an impostor at the LIVE path with its OWN stray sidecars (garbage that
+    // must be deleted, never preserved — the same hazard D1 fixes for the automated path).
+    const dbTarget = path.join(dataDir, 'budget.db');
+    fs.writeFileSync(dbTarget, 'impostor');
+    fs.writeFileSync(`${dbTarget}-wal`, 'impostor wal');
+    fs.writeFileSync(`${dbTarget}-shm`, 'impostor shm');
+
+    const exhausted: RestorePlan = { ...plan, attempts: MAX_COMMIT_ATTEMPTS };
+    fs.writeFileSync(path.join(applying, 'commit.json'), JSON.stringify(exhausted));
+
+    applyStagedRestoreOnBoot(new Date('2026-08-16T22:05:00.000Z'));
+
+    const error = readRestoreState().result?.error ?? '';
+    const mvImpostor = error.indexOf(`mv ${dbTarget} `);
+    const rmWal = error.indexOf(`rm -f ${dbTarget}-wal`);
+    const rmShm = error.indexOf(`rm -f ${dbTarget}-shm`);
+    const mvSafety = error.indexOf(`mv ${safetyCopyPath} ${dbTarget}`);
+    const mvSafetyWal = error.indexOf(`mv ${safetyCopyPath}-wal ${dbTarget}-wal`);
+    const mvSafetyShm = error.indexOf(`mv ${safetyCopyPath}-shm ${dbTarget}-shm`);
+    for (const idx of [mvImpostor, rmWal, rmShm, mvSafety, mvSafetyWal, mvSafetyShm]) {
+      expect(idx).toBeGreaterThan(-1);
+    }
+    // Safe order: evict the impostor db, clear its stray sidecars, THEN restore the trio.
+    expect(mvImpostor).toBeLessThan(rmWal);
+    expect(rmWal).toBeLessThan(mvSafety);
+    expect(rmShm).toBeLessThan(mvSafety);
+    expect(mvSafety).toBeLessThan(mvSafetyWal);
+    expect(mvSafetyWal).toBeLessThan(mvSafetyShm);
+  });
+
+  it('T1 re-review D3: a failed commit.json write during a resume restarts (attempts unchanged, under the cap) and self-heals next boot', () => {
+    stageArchiveBackup();
+    const applying = applyingDir();
+    fs.renameSync(stagedDir(), applying);
+    const plan = prepareRestore(path.join(applying, 'payload'), {
+      dataDir,
+      scratchDir: applying,
+      migrationsFolder: migrationsFolder(),
+      now: new Date('2026-08-16T22:10:00.000Z'),
+    });
+    fs.writeFileSync(path.join(applying, 'commit.json'), JSON.stringify({ ...plan, attempts: 1 }));
+
+    // Simulate the commit.json write itself failing (ENOSPC/read-only fs), not a commit
+    // step. writeJsonAtomically() always opens "<target>.partial" first.
+    const commitJsonPartial = path.join(applying, 'commit.json.partial');
+    const realOpenSync = fs.openSync.bind(fs);
+    const spy = vi.spyOn(fs, 'openSync').mockImplementation(((target: fs.PathLike, flags: unknown, mode?: unknown) => {
+      if (String(target) === commitJsonPartial) {
+        throw new Error('EROFS simulated: read-only filesystem');
+      }
+      return realOpenSync(target, flags as fs.OpenMode, mode as fs.Mode);
+    }) as typeof fs.openSync);
+
+    let outcome: 'continue' | 'restart';
+    try {
+      outcome = applyStagedRestoreOnBoot(new Date('2026-08-16T22:11:00.000Z'));
+    } finally {
+      spy.mockRestore();
+    }
+
+    // T1 re-review D3: the persisted attempts count is UNCHANGED (the write never landed),
+    // so 'restart' is exactly as safe as any other resume — commit.json and
+    // restore-applying/ both survive, untouched, for the next boot, and nothing terminal is
+    // recorded yet.
+    expect(outcome).toBe('restart');
+    expect(fs.existsSync(applying)).toBe(true);
+    expect(JSON.parse(fs.readFileSync(path.join(applying, 'commit.json'), 'utf8')).attempts).toBe(1);
+    expect(readRestoreState().result).toBeNull();
+
+    // Next boot: the mock is gone, the same (unchanged) commit.json resumes and completes.
+    const outcome2 = applyStagedRestoreOnBoot(new Date('2026-08-16T22:12:00.000Z'));
+    expect(outcome2).toBe('continue');
+    expect(readRestoreState().result?.status).toBe('success');
+  });
+
+  it('T1 re-review D3: a failed FIRST commit.json write (nothing on disk yet to resume from) terminates rather than restarting forever', () => {
+    const backup = runNightlyBackup(new Date('2026-08-16T22:00:00.000Z'));
+    stageRestore({ backupName: backup.name, userId: 1, username: 'admin' });
+    // Left in STAGED: promoteStagedAndPrepare() -> prepareAndCommit() will rename it to
+    // restore-applying/ and attempt the FIRST-EVER commit.json write for this request.
+
+    const applying = applyingDir();
+    const commitJsonPartial = path.join(applying, 'commit.json.partial');
+    const realOpenSync = fs.openSync.bind(fs);
+    const spy = vi.spyOn(fs, 'openSync').mockImplementation(((target: fs.PathLike, flags: unknown, mode?: unknown) => {
+      if (String(target) === commitJsonPartial) {
+        throw new Error('EROFS simulated: read-only filesystem');
+      }
+      return realOpenSync(target, flags as fs.OpenMode, mode as fs.Mode);
+    }) as typeof fs.openSync);
+
+    let outcome: 'continue' | 'restart';
+    try {
+      outcome = applyStagedRestoreOnBoot(new Date('2026-08-16T22:01:00.000Z'));
+    } finally {
+      spy.mockRestore();
+    }
+
+    // No commit.json ever existed to re-read (this was the FIRST write), so re-reading it
+    // fails and the failure is terminal — this can never restart indefinitely, because
+    // failCorruptCommitJson() always renames restore-applying/ away.
+    expect(outcome).toBe('continue');
+    expect(fs.existsSync(applying)).toBe(false);
+    expect(fs.readdirSync(dataDir).some((name) => name.startsWith('restore-failed-'))).toBe(true);
+    expect(readRestoreState().result?.status).toBe('failed');
+  });
+
   it('does not retry once attempts have been exhausted (MUST-20.19)', () => {
     stageArchiveBackup();
     const applying = applyingDir();

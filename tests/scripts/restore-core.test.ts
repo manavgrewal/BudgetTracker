@@ -446,6 +446,84 @@ describe('MUST-20.22: commitRestore replays idempotently', () => {
   });
 });
 
+describe('T1 re-review D1: incoming-step replay clears stale WAL/SHM sidecars, not just the main file', () => {
+  /**
+   * Fabricates a "dirty" WAL-mode SQLite file whose real content lives only in an
+   * un-checkpointed -wal file — exactly what a getDb() call followed by an unclean process
+   * death leaves behind. Captures the raw bytes from a live connection BEFORE closing it,
+   * because closing the last connection to a WAL database triggers SQLite's own automatic
+   * checkpoint, which would erase the very evidence this test needs to plant.
+   */
+  function makeDirtyWalImpostor(destDbPath: string): void {
+    const tmpFile = path.join(work, `impostor-src-${Math.random().toString(36).slice(2)}.db`);
+    const db = new Database(tmpFile);
+    db.pragma('journal_mode = WAL');
+    db.exec('create table impostor_marker (id integer primary key)');
+    db.exec('insert into impostor_marker default values');
+    fs.copyFileSync(tmpFile, destDbPath);
+    const walSrc = `${tmpFile}-wal`;
+    if (fs.existsSync(walSrc)) fs.copyFileSync(walSrc, `${destDbPath}-wal`);
+    const shmSrc = `${tmpFile}-shm`;
+    if (fs.existsSync(shmSrc)) fs.copyFileSync(shmSrc, `${destDbPath}-shm`);
+    db.close();
+  }
+
+  it('an impostor db with an alien, unapplied -wal at the live path is fully replaced, not silently merged', async () => {
+    const dataDir = makeLiveDataDir();
+    const artifact = await makeArchive(work, { whens: [1000] });
+    const migrationsFolder = fakeJournal(4, 'd1');
+    const now = new Date('2026-08-16T22:00:00Z');
+    const plan = prepareRestore(artifact, {
+      dataDir,
+      scratchDir: path.join(work, 'd1-scratch'),
+      migrationsFolder,
+      now,
+    });
+
+    const dbStepIndex = plan.steps.findIndex(
+      (step) => step.op === 'rename' && step.incoming && step.to === path.join(dataDir, 'budget.db'),
+    );
+    expect(dbStepIndex).toBeGreaterThan(-1);
+
+    // Run every step up to (but not including) the final incoming db rename for real — the
+    // exact state a boot finds after a PRIOR attempt wrongly reached getDb() following a
+    // failed commit, then died before the real payload's db rename ever ran.
+    try {
+      commitRestore({ ...plan, steps: plan.steps.slice(0, dbStepIndex) }, { dataDir, now });
+    } catch {
+      /* the steps themselves ran; only the truncated call's own result-reporting throws
+         (budget.db does not exist yet at this halfway point) */
+    }
+
+    const dbTarget = path.join(dataDir, 'budget.db');
+    expect(fs.existsSync(dbTarget)).toBe(false);
+    makeDirtyWalImpostor(dbTarget);
+    expect(fs.existsSync(`${dbTarget}-wal`)).toBe(true);
+
+    // Resume: only the final incoming db-rename step remains.
+    commitRestore(plan, { dataDir, now });
+
+    expect(fs.existsSync(`${dbTarget}-wal`)).toBe(false);
+    expect(fs.existsSync(`${dbTarget}-shm`)).toBe(false);
+
+    const finalDb = new Database(dbTarget, { readonly: true });
+    try {
+      const tables = new Set(
+        (finalDb.prepare("select name from sqlite_master where type='table'").all() as { name: string }[]).map(
+          (row) => row.name,
+        ),
+      );
+      // The real payload, not the impostor merged in via WAL replay (the exact silent
+      // corruption a stray sidecar would otherwise cause).
+      expect(tables.has('impostor_marker')).toBe(false);
+      expect(tables.has('users')).toBe(true);
+      expect(finalDb.pragma('quick_check', { simple: true })).toBe('ok');
+    } finally {
+      finalDb.close();
+    }
+  });
+});
+
 describe('restoreFromArtifact (unchanged behaviour, re-expressed in terms of prepare/commit)', () => {
   it('produces the same RestoreResult shape as the direct prepare+commit path', async () => {
     const dataDir = makeLiveDataDir();

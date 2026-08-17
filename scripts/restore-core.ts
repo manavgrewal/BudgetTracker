@@ -514,6 +514,20 @@ function runStep(step: RestoreStep, now: Date): number {
   if (step.incoming) {
     if (fs.existsSync(step.from)) {
       fs.rmSync(step.to, { recursive: true, force: true });
+      // T1 re-review D1: clearing `to` is not enough if `to` was an impostor SQLite
+      // database created in WAL mode (e.g. by a boot that wrongly reached getDb() after a
+      // failed, non-exhausted commit) and then died uncleanly — its -wal/-shm sidecars
+      // survive the rmSync above, sitting at these exact paths, and SQLite replays a -wal
+      // over whatever file it finds at its matching main-file path the moment that path is
+      // next opened. Left in place, the impostor's -wal would silently overwrite the REAL
+      // payload we are about to install here, and PRAGMA quick_check would still report
+      // "ok" afterward (the merged result is structurally valid, just wrong). This is safe
+      // unconditionally: any LEGITIMATE -wal/-shm for the path this step replaces was
+      // already relocated by the earlier safety-copy steps (their own `rename` ops target
+      // `*.pre-restore-<stamp>.db-wal`/`-shm`), and the receipts incoming step's `to` has no
+      // such sidecars to begin with, making this a harmless no-op there.
+      fs.rmSync(`${step.to}-wal`, { force: true });
+      fs.rmSync(`${step.to}-shm`, { force: true });
       fs.renameSync(step.from, step.to);
       return 0;
     }
