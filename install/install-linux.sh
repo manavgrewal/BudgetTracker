@@ -304,7 +304,7 @@ print_failure() {
    docker compose ps
    curl -v http://127.0.0.1:${port}/api/health
 
- Common causes: a missing or too-short SECRET_KEY, an unwritable ./data, or an
+ Common causes: a too-short SECRET_KEY, an unwritable ./data, or an
  image built for the wrong CPU architecture. See INSTALL.md's troubleshooting FAQ.
 ============================================================
 EOF

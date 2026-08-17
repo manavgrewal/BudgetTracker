@@ -103,6 +103,16 @@ describe('buildArchive (MUST-12.1, MUST-12.2)', () => {
     expect(fs.readdirSync(tempDir()).filter((n) => n.endsWith('.db') || n.includes('archive'))).toEqual([]);
   });
 
+  it('never includes DATA_DIR/secret.key — offsite backup copies must never be able to decrypt TOTP secrets', async () => {
+    fs.writeFileSync(path.join(dataDir, 'secret.key'), 'z'.repeat(64), { mode: 0o600 });
+
+    const target = path.join(dataDir, 'secret-key-exclusion.tar.gz');
+    buildArchive(target);
+
+    const entries = await entriesOf(target);
+    expect(entries.some((name) => name.includes('secret.key'))).toBe(false);
+  });
+
   it('works when there are no receipts at all', async () => {
     const target = path.join(dataDir, 'empty.tar.gz');
     buildArchive(target);

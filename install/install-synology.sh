@@ -150,7 +150,7 @@ print_failure() {
    docker compose ps
    curl -v http://127.0.0.1:${PORT}/api/health
 
- Common causes: a missing or too-short SECRET_KEY, an unwritable data
+ Common causes: a too-short SECRET_KEY, an unwritable data
  directory, or an image built for the wrong CPU architecture.
 ============================================================
 EOF

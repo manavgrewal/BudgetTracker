@@ -72,17 +72,23 @@ function readOrGenerateSecretKeyFile(dataDir: string): string {
       );
     }
   } else {
-    value = crypto.randomBytes(GENERATED_SECRET_KEY_BYTES).toString('base64');
+    const generated = crypto.randomBytes(GENERATED_SECRET_KEY_BYTES).toString('base64');
     fs.mkdirSync(dataDir, { recursive: true });
-    // Atomic write: generate under a unique temp name in the SAME directory, then rename —
-    // never a partially-written key is ever visible at the final path.
-    const tmpPath = path.join(
-      dataDir,
-      `.${SECRET_KEY_FILENAME}.tmp-${process.pid}-${crypto.randomBytes(6).toString('hex')}`,
-    );
-    fs.writeFileSync(tmpPath, value, { mode: 0o600 });
-    fs.renameSync(tmpPath, keyPath);
-    console.log(`[env] generated ${keyPath} — back this file up; losing it means re-enrolling two-factor devices`);
+    // Exclusive create ('wx'): two processes racing to boot first (e.g. a Docker Compose
+    // Swarm/replica start, or simply starting the container twice) must never let the second
+    // writer clobber the first's key with renameSync's silent overwrite — the loser would then
+    // cache a key that is no longer the one on disk, permanently undecryptable for every TOTP
+    // secret it goes on to encrypt. 'wx' makes the OS refuse the write with EEXIST if the file
+    // already exists, atomically, so exactly one process's key ever lands on disk; every other
+    // racer just re-reads and adopts whatever won.
+    try {
+      fs.writeFileSync(keyPath, generated, { flag: 'wx', mode: 0o600 });
+      value = generated;
+      console.log(`[env] generated ${keyPath} — back this file up; losing it means re-enrolling two-factor devices`);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+      value = fs.readFileSync(keyPath, 'utf8').trim();
+    }
   }
 
   cachedKeyPath = keyPath;

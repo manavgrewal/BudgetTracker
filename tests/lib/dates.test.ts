@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
 import {
   DATE_FORMATS,
   addDaysIso,
@@ -212,5 +214,18 @@ describe('monthLabel', () => {
     expect(monthLabel('')).toBe('');
     expect(monthLabel('2026-13')).toBe('2026-13');
     expect(monthLabel('2026-08-16')).toBe('2026-08-16');
+  });
+});
+
+describe('client-graph boundary', () => {
+  it('never imports from @/lib/env, which pulls in node:fs/path/crypto and breaks the client webpack build', () => {
+    // src/lib/dates.ts is reachable from client components (budgets-client.tsx,
+    // new-warranty-client.tsx). @/lib/env statically imports node builtins for its
+    // SECRET_KEY-file resolution, and tree-shaking happens AFTER module resolution — so
+    // importing anything from it, even a single constant, fails the client build outright.
+    // dates.ts must get TZ resolution from the fs-free @/lib/env-tz instead. This is a
+    // regression test for that exact failure mode (see src/lib/env-tz.ts's docblock).
+    const source = fs.readFileSync(path.join(process.cwd(), 'src/lib/dates.ts'), 'utf8');
+    expect(source).not.toMatch(/from ['"]@\/lib\/env['"]/);
   });
 });

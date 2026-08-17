@@ -2,6 +2,7 @@ node_modules
 .next
 .git
 .tmp-data
+data
 docs
 coverage
 *.db

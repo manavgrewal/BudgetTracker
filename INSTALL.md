@@ -58,7 +58,9 @@ encryption keys for stored TOTP secrets — but you do not need to provide one. 
 first boot, the app generates one itself at `data/secret.key` and reuses it on every start after
 that. The Linux, Windows and Synology-over-SSH installers still generate one into `.env` up front,
 which is the recommended path for a script-driven install and always takes precedence over the
-generated file; provide `SECRET_KEY` yourself only if you want to manage it that way.
+generated file; provide `SECRET_KEY` yourself only if you want to manage it that way. The
+`data/secret.key` file is whitespace-trimmed when read; the `SECRET_KEY` environment variable is
+taken verbatim, so stray leading/trailing whitespace in `.env` is significant there.
 
 > **Keep it safe, whichever way it was created.** It is never used directly as a cipher key —
 > encryption keys are derived from it. If it is lost or changed, everyone who turned on two-factor

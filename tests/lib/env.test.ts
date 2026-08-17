@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -68,6 +68,12 @@ describe('readEnv', () => {
     const env = readEnv({ SECRET_KEY: goodSecret, TZ: 'UTC', DATA_DIR: '/srv/data' });
     expect(env.tz).toBe('UTC');
     expect(env.dataDir).toBe('/srv/data');
+  });
+
+  it('takes the SECRET_KEY env var verbatim, including surrounding whitespace (unlike the key file, which is trimmed)', () => {
+    const padded = `  ${goodSecret}  `;
+    const env = readEnv({ SECRET_KEY: padded });
+    expect(env.secretKey).toBe(padded);
   });
 });
 
@@ -175,5 +181,52 @@ describe('readEnv — zero-config SECRET_KEY file resolution', () => {
 
     const env = readEnv({ SECRET_KEY: goodSecret, DATA_DIR: dataDir });
     expect(env.secretKey).toBe(goodSecret);
+  });
+
+  it('adopts the winning key instead of clobbering it when another process wins a first-boot generation race', () => {
+    // Two processes can both find no key file (ENOENT) and both decide to generate. The
+    // exclusive-create ('wx') write is what makes only one of them actually land on disk —
+    // simulated here by having the very first writeFileSync call plant a DIFFERENT key (as a
+    // concurrent winner would) and then fail with EEXIST, exactly as the real flag would.
+    const dataDir = freshDataDir();
+    const keyPath = path.join(dataDir, SECRET_KEY_FILENAME);
+    const winnersKey = 'w'.repeat(64);
+    const realWriteFileSync = fs.writeFileSync.bind(fs);
+
+    const spy = vi.spyOn(fs, 'writeFileSync').mockImplementationOnce(() => {
+      realWriteFileSync(keyPath, winnersKey, { mode: 0o600 });
+      const err = new Error('EEXIST: file already exists, open') as NodeJS.ErrnoException;
+      err.code = 'EEXIST';
+      throw err;
+    });
+
+    try {
+      const env = readEnv({ DATA_DIR: dataDir });
+      // The loser must adopt the winner's key from disk, NOT cache the value it tried (and
+      // failed) to write — losing that distinction is how a TOTP secret becomes permanently
+      // undecryptable.
+      expect(env.secretKey).toBe(winnersKey);
+      expect(spy).toHaveBeenCalledTimes(1);
+      const attemptedValue = spy.mock.calls[0]?.[1];
+      expect(attemptedValue).not.toBe(winnersKey);
+      expect(fs.readFileSync(keyPath, 'utf8')).toBe(winnersKey);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('rethrows a non-EEXIST error from the generation write instead of swallowing it', () => {
+    const dataDir = freshDataDir();
+    const spy = vi.spyOn(fs, 'writeFileSync').mockImplementationOnce(() => {
+      const err = new Error('ENOSPC: no space left on device') as NodeJS.ErrnoException;
+      err.code = 'ENOSPC';
+      throw err;
+    });
+
+    try {
+      expect(() => readEnv({ DATA_DIR: dataDir })).toThrowError(/ENOSPC/);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

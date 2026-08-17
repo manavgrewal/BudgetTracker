@@ -113,14 +113,20 @@ describe('version and changelog', () => {
 
   it('has a dated 1.2.1 section and a fresh empty Unreleased above it', () => {
     expect(changelog).toContain('## [1.2.1] - 2026-08-17');
+    expect(changelog).toContain('## [1.2.0] - 2026-08-17');
     const unreleased = changelog.indexOf('## Unreleased');
-    const released = changelog.indexOf('## [1.2.1]');
+    const released121 = changelog.indexOf('## [1.2.1]');
+    const released120 = changelog.indexOf('## [1.2.0]');
     expect(unreleased).toBeGreaterThan(-1);
-    expect(unreleased).toBeLessThan(released);
+    expect(unreleased).toBeLessThan(released121);
+    expect(released121).toBeLessThan(released120);
     // The previously-unreleased GHCR entry is ABSORBED into 1.2.1 (it was never tagged as a
     // release — v1.2.0 predates commit 3e86842), so Unreleased is now empty and must no
     // longer mention it.
-    expect(changelog.slice(unreleased, released)).not.toContain('Prebuilt multi-arch images');
+    expect(changelog.slice(unreleased, released121)).not.toContain('Prebuilt multi-arch images');
+    // §17.23's original absorption invariant, restored alongside the 1.2.1 one above: whatever
+    // was absorbed into 1.2.0 at THAT release must not still be sitting in Unreleased either.
+    expect(changelog.slice(unreleased, released120)).not.toContain('Forced password change');
   });
 
   it('records the backup format change in 1.1.0', () => {
