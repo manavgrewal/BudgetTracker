@@ -161,12 +161,37 @@ Backup (or your NAS equivalent) at the `/data` share and turn on its client-side
 
 ### Restore
 
-Restoring is always an offline, container-stopped procedure — there is deliberately no in-app
-restore button, since restoring under a live SQLite connection is how you corrupt a database. Use
-the bundled `restore-backup` script rather than copying files by hand: it detects which kind of
-backup you gave it by looking at the file's contents, not its name, refuses anything it doesn't
-recognise, and — for a `.tar.gz` archive — renames any existing `data/receipts/` aside instead of
-deleting it, so a mistaken restore is recoverable.
+**Settings → Backups → Restore** is the normal way to restore a backup. Pick a row, tick the
+confirm box, and click **Restore and restart**: the app validates the archive completely before
+staging anything, then restarts itself and applies the restore on the way back up, before the
+database is opened — restoring under a live SQLite connection is how you corrupt one, which is
+why the app restarts instead of restoring in place. The page will be unreachable for about 30
+seconds; refresh it after that to see the outcome. The previous database is kept as
+`data/budget.pre-restore-<timestamp>.db` and, for a `.tar.gz` restore, the previous receipts as
+`data/receipts.pre-restore-<timestamp>/` — both are swept after 30 days, but the most recent of
+each is always kept.
+
+If the container has no restart policy, nothing is lost: the request survives on disk and is
+applied automatically the next time the app is started, by hand or otherwise —
+`docker-compose.yml` ships `restart: unless-stopped`, so this only matters for a custom setup.
+
+A backup made by a *newer* version of Budget Tracker than the one currently running is refused,
+with an explanation; upgrade first, then restore. Restoring an older backup works normally —
+migrations run forward automatically on the boot that applies it. Deleting `-wal`/`-shm` files
+before writing the restored database is handled for you and is not optional: SQLite in WAL mode
+would otherwise replay the old write-ahead log on top of your restored database.
+
+Restoring a v1.0.0 `.db` backup works the same way and only ever replaces `budget.db` — it never
+touches `data/receipts/`, since a database-only backup says nothing about which receipt files
+should exist; any warranty whose receipt is missing after a cross-version restore simply shows a
+missing-file state in the UI.
+
+#### If the app will not start
+
+Use the bundled `restore-backup` script rather than copying files by hand: it detects which kind
+of backup you gave it by looking at the file's contents, not its name, refuses anything it
+doesn't recognise, and — for a `.tar.gz` archive — renames any existing `data/receipts/` aside
+instead of deleting it, so a mistaken restore is recoverable.
 
 ```bash
 docker compose down
@@ -174,16 +199,6 @@ docker compose run --rm --entrypoint node budget-tracker \
   --experimental-strip-types scripts/restore-backup.ts /data/backups/budget-2026-08-16.tar.gz
 docker compose up -d
 ```
-
-Restoring a v1.0.0 `.db` backup works the same way and only ever replaces `budget.db` — it never
-touches `data/receipts/`, since a database-only backup says nothing about which receipt files
-should exist; any warranty whose receipt is missing after a cross-version restore simply shows a
-missing-file state in the UI. A v1.1 `.tar.gz` archive is **not** restorable by a v1.0.0 install —
-this is one-way; downgrading is not supported.
-
-Deleting `-wal`/`-shm` files before writing the restored database is handled for you and is not
-optional: SQLite in WAL mode would otherwise replay the old write-ahead log on top of your
-restored database.
 
 ### Synology guidance
 

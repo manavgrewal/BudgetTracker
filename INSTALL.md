@@ -231,8 +231,34 @@ backups folder costs roughly `retention × (database + all receipts)`. Fourteen 
 of a 300 MB receipt library is about 4 GB. Settings → Backups lists each archive's size and
 lets you lower the retention count.
 
-Restoring is always an offline, container-stopped procedure — there is deliberately no in-app
-restore button, because restoring under a live SQLite connection is how you corrupt a database.
+**Settings → Backups → Restore** is the normal way to restore a backup — pick a row, tick the box
+confirming that current data will be replaced, and click **Restore and restart**. The app
+validates the archive completely (magic bytes, the tar entry allow-list, an integrity check of
+the database inside it) before it stages anything, then restarts itself and applies the restore
+on the way back up, before the database is opened — restoring under a live SQLite connection is
+how you corrupt one, which is why the app restarts instead of restoring in place. The page goes
+unreachable for about 30 seconds; refresh it after that and Settings → Backups reports whether it
+succeeded. The previous database is kept as `data/budget.pre-restore-<timestamp>.db` and, for a
+`.tar.gz` restore, the previous receipts as `data/receipts.pre-restore-<timestamp>/` — both are
+swept after 30 days by the nightly maintenance job, except that the most recent of each is always
+kept.
+
+**If your container has no restart policy, nothing is lost** — the request survives on disk and
+is applied automatically the next time the app is started, by hand or otherwise. This install's
+`docker-compose.yml` ships `restart: unless-stopped`, so this only matters if you changed that.
+
+A backup made by a *newer* version of Budget Tracker than the one currently installed is refused,
+with a written explanation; upgrade first, then restore. Restoring an *older* backup works
+normally — migrations run forward automatically on the boot that applies it, which is the same
+one-way rule as before: downgrading a running install to an older version is not supported and
+never was, since migrations are append-only.
+
+Deleting `-wal`/`-shm` files before writing the restored database is handled for you and is not
+optional: SQLite runs in WAL mode and would otherwise replay the old write-ahead log on top of
+the database you just restored.
+
+### If the app will not start
+
 Use the bundled `restore-backup` script rather than copying files by hand: it works out which
 kind of backup you gave it by looking at the file's contents (not its name), refuses anything it
 doesn't recognise, and — for a `.tar.gz` archive — renames any existing `data/receipts/` aside
@@ -249,14 +275,6 @@ Restoring a v1.0.0 `.db` backup works the same way and only ever replaces `budge
 never touches `data/receipts/`, since a database-only backup says nothing about which receipt
 files should exist. Any warranty whose receipt is missing after a cross-version restore simply
 shows a missing-file state in the UI; the script prints how many receipt rows are affected.
-
-**This direction only goes one way.** A v1.1 `.tar.gz` archive is not restorable by a v1.0.0
-install — the restore tool says so if you hand it an artifact it cannot read. Downgrading a
-running install to an older version is not supported and never was: migrations are append-only.
-
-Deleting `-wal`/`-shm` files before writing the restored database is handled for you and is not
-optional: SQLite runs in WAL mode and would otherwise replay the old write-ahead log on top of
-the database you just restored.
 
 ## Keeping backups on a separate NAS
 
