@@ -28,7 +28,7 @@ All notable changes to Budget Tracker are recorded here.
 - **Edit no longer opens below the item detail view.** On a Contracts & Coverage item's
   detail page, clicking Edit used to render the edit form BELOW the still-visible read-only
   view, so a scrolled-down member saw no change and assumed the click did nothing. The edit
-  form now replaces the read-only view in place; Cancel edit — or a successful save — restores
+  form now replaces the read-only view in place; Cancel edit (or a successful save) restores
   the view.
 - **Success message now names the item's actual kind.** Saving an edit used to always say
   "Warranty updated.", even for a subscription, contract, or loan. The confirmation now reads
@@ -44,16 +44,16 @@ All notable changes to Budget Tracker are recorded here.
 
 - **Automatic updates for the prebuilt-image install.** `install/synology-compose-pull.yml`
   now ships a Watchtower companion service alongside `budget-tracker`. Watchtower polls GHCR
-  once a day, pulls a newer `:latest` image the moment one is published, and recreates the
-  container against it — no manual re-pull, no Container Manager "Update" click needed.
-  Database migrations already run automatically on boot, so unattended container replacement
-  is safe by design. Scoped to this app only via
+  once a day, pulls a newer `:latest` image when one is published, and recreates the
+  container against it. You no longer need to re-pull manually or click Update in Container
+  Manager. Database migrations already run automatically on boot, so the container can be
+  replaced unattended without any extra step. Scoped to this app only via
   `com.centurylinklabs.watchtower.enable: "true"` on the budget-tracker service and
   `WATCHTOWER_LABEL_ENABLE` on watchtower, so the socket access it needs never reaches any
   other container on the host.
 - **Billing cycle and amount for subscriptions and contracts.** The add/edit item form now
   shows a Billing cycle select (Monthly/Annual, defaulting to "Not set") and an amount field
-  for items whose type is a subscription or contract — never for warranty or loan. The item
+  for items whose type is a subscription or contract, never for warranty or loan. The item
   detail page and the items list show the formatted amount and cycle (e.g. "$15.99 / month")
   wherever it is set. Enforced server-side by looking up the selected type's kind, matching
   every other kind-dependent rule in the tracker (migration `0005_billing_cycle.sql` adds the
@@ -69,7 +69,7 @@ All notable changes to Budget Tracker are recorded here.
 - `docs/INSTALL-SYNOLOGY.md`'s update instructions now lead with "nothing to do" for the
   default auto-updating install, keep the manual tag-edit path for pinned installs, and note
   that Container Manager's Image tab "Update" button does not work for GHCR images (Docker
-  Hub only) — which is why Watchtower exists in the compose file at all.
+  Hub only), which is why Watchtower exists in the compose file at all.
 
 ### Fixed
 
@@ -78,7 +78,7 @@ All notable changes to Budget Tracker are recorded here.
   those installs were effectively stuck on whatever image they first pulled. Documented the
   one-time YAML-replace step to adopt the new compose file and gain auto-updates.
 - An open-ended item (the "no end date" / Lifetime checkbox) used to render its end date as a
-  bare blank/em dash on the items list and detail page — indistinguishable from missing data.
+  bare blank or em dash on the items list and detail page, indistinguishable from missing data.
   It now shows a proper per-kind word instead: "Lifetime" for a warranty or subscription,
   "Ongoing" for a contract, "Open-ended" for a loan. Open-ended items were already excluded
   from the dashboard's "Coming due" widget and every expiring-soon query; a regression test
@@ -89,25 +89,25 @@ All notable changes to Budget Tracker are recorded here.
 
 ### Added
 
-- **Contract and loan item kinds.** Item types now carry a `kind` — warranty, subscription,
-  contract, or loan — alongside the existing subscription flag (kept, and derived from `kind`
+- **Contract and loan item kinds.** Item types now carry a `kind` (warranty, subscription,
+  contract, or loan) alongside the existing subscription flag (kept, and derived from `kind`
   on every write). Loans and contracts reuse the exact same start-date/term/end-date fields as
-  warranties and subscriptions; loans are dates and documents only — no balance, no payment
-  schedule, no interest math (deliberate scope cut).
+  warranties and subscriptions; loans are dates and documents only, with no balance, payment
+  schedule, or interest math (deliberate scope cut).
 - **Kind-aware wording** throughout the tracker: the add/edit forms, the list, the detail page
   and the dashboard widget all show labels and verbs (start date / term / end date / "expires"
-  vs. "cancel by" vs. "ends on" vs. "paid off by") that follow the item's own kind — and, on
+  vs. "cancel by" vs. "ends on" vs. "paid off by") that follow the item's own kind, and, on
   the add and edit forms, follow the **currently selected type live**, before saving.
 
 ### Changed
 
 - **The warranty tracker is renamed "Contracts & Coverage"** in the navigation, the list page
-  title and the add-item header — user feedback that the tracker had grown past warranties
-  alone. Labels only: every route, action and field name is unchanged.
+  title and the add-item header. The rename reflects user feedback that the tracker had grown
+  past warranties alone. Labels only: every route, action and field name is unchanged.
 - Form labels changed to match the new kind matrix: "Warranty length" → "Warranty (months)",
   a subscription's "Period start" → "Start date", "Period length" → "Duration (months)", and
   the "Cancel by" label → "Cancel-by date" (detail page) / "Active through" (live badge).
-  Deliberate, owner-approved wording changes — see the design spec §19.12 for the full list.
+  Deliberate, owner-approved wording changes. See the design spec §19.12 for the full list.
 - Dashboard widget retitled "Warranties expiring soon" → **"Coming due"**.
 - List page empty state retitled "No warranties yet" → "Nothing tracked yet", naming all four
   kinds.
@@ -119,18 +119,18 @@ All notable changes to Budget Tracker are recorded here.
 - **Zero-config SECRET_KEY.** A fresh install no longer needs one set at all: if `SECRET_KEY`
   is unset on first boot, the app generates a random key itself at `data/secret.key` and
   reuses it on every start after that. Setting `SECRET_KEY` yourself still works exactly as
-  before and always takes precedence — this only removes the requirement, not the option.
+  before and always takes precedence. This only removes the requirement, not the option.
 - **Prebuilt multi-arch images on GHCR.** Tagging a release (`v*`) or running the new
   `Release image` workflow by hand builds and pushes `ghcr.io/manavgrewal/budgettracker`
   for linux/amd64 and linux/arm64, tagged with both the version and `latest`. Paired with a
   new pull-only compose file, `install/synology-compose-pull.yml`, installing no longer
-  requires a source checkout or a `docker build` — Immich-style paste-and-go, on Synology,
-  QNAP, Unraid, or any other Docker host.
+  requires a source checkout or a `docker build`. It is an Immich-style paste-and-go install
+  on Synology, QNAP, Unraid, or any other Docker host.
 
 ### Changed
 
 - `docker-compose.yml`, `install/synology-compose.yml` and `install/synology-compose-pull.yml`
-  no longer require `SECRET_KEY` to be set before starting — the pull compose drops the
+  no longer require `SECRET_KEY` to be set before starting: the pull compose drops the
   placeholder line entirely, and the other two ship it commented out as an optional override.
   The install scripts (`install-linux.sh`, `install-windows.ps1`, `install-synology.sh`) are
   unchanged: they still generate a `.env` with its own `SECRET_KEY` up front, which remains
@@ -139,7 +139,7 @@ All notable changes to Budget Tracker are recorded here.
 
 ## [1.2.0] - 2026-08-17
 
-**Verify after updating:** restore a backup once via Settings → Backups → Restore — the app
+**Verify after updating:** restore a backup once via Settings → Backups → Restore: the app
 will restart itself, be unreachable for about 30 seconds, and show the restore outcome on
 Settings → Backups when it comes back. If your container runs without a restart policy
 (docker-compose.yml ships restart: unless-stopped, so this is only relevant for a custom
@@ -150,7 +150,7 @@ setup), starting it back up by hand applies the restore the same way.
 - **Restore from Settings.** Restoring a backup no longer requires stopping the container by
   hand: pick a backup on **Settings → Backups**, tick the confirm box and click **Restore and
   restart**. The archive is fully validated before anything is staged, then the app restarts
-  itself and applies the restore on the way back up, before the database is opened — the page
+  itself and applies the restore on the way back up, before the database is opened. The page
   is unreachable for about 30 seconds, and refreshing it afterwards shows whether the restore
   succeeded. The previous database and (for a `.tar.gz` restore) the previous receipts folder
   are kept as timestamped safety copies and swept after 30 days, with the most recent of each
@@ -158,8 +158,8 @@ setup), starting it back up by hand applies the restore the same way.
   on disk and is applied the next time the app is started, by hand or otherwise. A backup made
   by a newer version of Budget Tracker than the one running is refused with an explanation.
 - **A modern visual redesign**, light and dark, following your device's theme by default with
-  a manual toggle in the header that remembers your choice. Every page — dashboard,
-  transactions, import, review, budgets, goals, reports, warranties and every settings page —
+  a manual toggle in the header that remembers your choice. Every page (dashboard,
+  transactions, import, review, budgets, goals, reports, warranties and every settings page)
   now shares one design system: a real navigation rail on desktop that collapses to a top bar
   and menu on phones, consistent cards, tables, buttons and empty states, and signed amounts
   coloured by sign. Accessibility pass included: clearer focus rings, labelled icon-only
@@ -200,7 +200,7 @@ setup), starting it back up by hand applies the restore the same way.
 ### Added
 
 - **Warranty tracker.** Record what you bought, who owns it, what it cost and how long it is
-  covered — months, or a Lifetime tick for the things that never expire. A new Warranties
+  covered: months, or a Lifetime tick for the things that never expire. A new Warranties
   page lists everything with an at-a-glance badge: active, expiring soon, expired, lifetime,
   or term unknown.
 - **Item types**, admin-maintained under **Settings → Item types** (Laptop, Appliance and
@@ -214,7 +214,7 @@ setup), starting it back up by hand applies the restore the same way.
   and are only ever served to a signed-in member.
 - **Every word on the receipt is searchable.** Receipts are read by an OCR engine that runs
   entirely on the server with no internet connection, and the text is folded into a full-text
-  index. Searching for a store name, a model number or a line item finds the item — and
+  index. Searching for a store name, a model number or a line item finds the item, and
   typing `metro` finds `MÉTRO`.
 - **Suggest and confirm.** After a receipt is read, the purchase date, vendor and total are
   proposed in the form. Nothing is ever saved without you pressing Save, and a field you have
@@ -237,13 +237,13 @@ setup), starting it back up by hand applies the restore the same way.
 
 - **Backups are now `.tar.gz` archives** containing the database *and* every receipt file,
   instead of a bare `.db` copy. Older `.db` backups from v1.0.0 are still listed, still
-  counted against your retention setting, and still restore — restoring one leaves your
+  counted against your retention setting, and still restore. Restoring one leaves your
   receipts folder completely untouched. A v1.1 archive cannot be restored by a v1.0.0
   install; downgrading has never been supported.
 - Restoring is now driven by `npm run restore-backup`, which detects the artifact type by its
   contents rather than its file name, refuses anything it does not recognise, and moves an
   existing receipts folder aside rather than deleting it. It is still an offline procedure
-  with the container stopped — there is deliberately no in-app restore button.
+  with the container stopped. There is deliberately no in-app restore button.
 - Copying budgets from the previous month now includes archived categories, matching what
   the budgets page already shows for archived spend.
 - A manually entered transaction runs the categorization engine even when a category was
@@ -257,7 +257,7 @@ setup), starting it back up by hand applies the restore the same way.
 ### Fixed
 
 - CSV export now neutralises spreadsheet formula triggers (`=`, `+`, `-`, `@`, tab) in
-  exported text, while leaving plain numbers — the whole Amount column — as numbers.
+  exported text, while leaving plain numbers (the whole Amount column) as numbers.
 - Transaction search treats `%` and `_` literally instead of as SQL wildcards, so
   searching for "50%" no longer matches "5000".
 - Busy guards on the import undo button and the bank-profile wizard upload prevent a
@@ -269,7 +269,7 @@ setup), starting it back up by hand applies the restore the same way.
 
 - The receipt file route is session-authenticated with an Origin check, serves the stored
   content type rather than a sniffed one, and hands PDFs over as downloads instead of
-  opening them inline — a same-origin inline PDF would run the viewer's JavaScript in this
+  opening them inline: a same-origin inline PDF would run the viewer's JavaScript in this
   app's origin.
 - Search input is escaped into full-text-search syntax as literal phrases, so a query
   containing a quote or the word `AND` returns results instead of an error.
@@ -277,7 +277,7 @@ setup), starting it back up by hand applies the restore the same way.
   the browser claims, and are stored under server-generated names that can never contain a
   path.
 - Backup archives now contain photographs of receipts. They remain unencrypted, exactly like
-  the database — if you copy them off the NAS, use your backup tool's client-side encryption.
+  the database: if you copy them off the NAS, use your backup tool's client-side encryption.
 - An admin "reset MFA" now signs the target user out everywhere, matching what an admin
   password reset already did.
 
@@ -309,8 +309,8 @@ Initial release: a self-hosted household budget tracker for a home NAS.
   Origin-verified CSRF check on every mutating request, and a strict nonce-based CSP.
 - **Backups**: scheduled and on-demand `VACUUM INTO` snapshots with retention, download
   from the browser, and a documented restore procedure.
-- **Sharing packs**: export and import merchant-rule and import-profile packs,
-  privacy-preserving by construction.
+- **Sharing packs**: export and import privacy-preserving merchant-rule and import-profile
+  packs.
 - **SimpleFIN connector** (optional, dormant until configured): claim-once setup token, an
   encrypted access URL, manual sync with overlap windows, and the same undo path as CSV.
 - **Installers and operations**: Linux, Windows and Synology install scripts, a
