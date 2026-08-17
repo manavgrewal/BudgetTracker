@@ -25,6 +25,7 @@ function RestorePanel({
   onCancel,
   action,
   disabled,
+  error,
 }: {
   backup: { name: string };
   confirmed: boolean;
@@ -32,17 +33,23 @@ function RestorePanel({
   onCancel: () => void;
   action: (formData: FormData) => void;
   disabled: boolean;
+  error?: string;
 }) {
   return (
     <div className="flex flex-col gap-2 py-2 text-sm">
       <p>
         Restore <strong>{backup.name}</strong>? This replaces all data currently in the app with the contents of
-        that backup. The current database is kept as <code>budget.pre-restore-&lt;timestamp&gt;.db</code>.
+        that backup. The current database is kept as <code>data/budget.pre-restore-&lt;timestamp&gt;.db</code>.
       </p>
       <p className="text-xs text-slate-500 dark:text-slate-400">
-        The app restarts to apply this. If your container has no restart policy, the restore still takes effect the
-        next time you start it by hand — nothing is lost, only the automatic part.
+        The app restarts to apply this. If your container has no restart policy (this install's{' '}
+        <code>docker-compose.yml</code> ships <code>restart: unless-stopped</code>), the restore still takes effect
+        the next time the app starts — nothing is lost, only the automatic part.
       </p>
+      {/* IMPORTANT (review): a restore refusal (F5/F6/F7) must surface right where the admin is
+          looking, not only in a top-level banner a stale retention/backup-now message could be
+          masking. */}
+      <FormError message={error} />
       <label className="flex items-center gap-2">
         <input
           type="checkbox"
@@ -76,8 +83,10 @@ function ResultBanner({ result }: { result: RestoreOutcome }) {
   return (
     <p className="rounded-md bg-green-50 px-3 py-2 text-sm text-green-800 dark:bg-green-950 dark:text-green-300">
       Restored {result.sourceName} on {formatStamp(result.finishedAt)} — {result.receiptsRestored} receipt files
-      restored. The previous database was kept as{' '}
-      {result.safetyCopy ?? 'no safety copy (nothing was replaced yet when this failed)'}.
+      restored.
+      {/* M4 (review): a success outcome should never say "no safety copy" — that phrase implied
+          nothing was replaced, contradicting the banner it sits in. Omit the clause instead. */}
+      {result.safetyCopy ? <> The previous database was kept as {result.safetyCopy}.</> : null}
     </p>
   );
 }
@@ -128,7 +137,10 @@ export function BackupsClient({
   return (
     <div className="flex flex-col gap-6">
       <h1 className="text-xl font-semibold">Backups</h1>
-      <FormError message={retentionState.error ?? notice?.error ?? restoreState.error} />
+      {/* IMPORTANT (review): restoreState.error is deliberately NOT included here — a stale
+          retention/backup-now error would otherwise permanently mask a restore refusal. It is
+          rendered inside RestorePanel instead, where the admin is actually looking. */}
+      <FormError message={retentionState.error ?? notice?.error} />
       {retentionState.message ?? notice?.message ? (
         <p className="text-sm text-green-700 dark:text-green-400">{retentionState.message ?? notice?.message}</p>
       ) : null}
@@ -183,6 +195,7 @@ export function BackupsClient({
                   onCancel={closeRow}
                   action={restoreAction}
                   disabled={stagedElsewhere}
+                  error={restoreState.error}
                 />
               ) : (
                 <div className="flex items-center justify-between gap-3 py-1">

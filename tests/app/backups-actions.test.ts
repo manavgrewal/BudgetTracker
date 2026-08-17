@@ -85,6 +85,22 @@ describe('MUST-20.36: stageRestoreAction gate order', () => {
     expect(state.error).toBe('That backup is empty. Nothing was changed.');
     expect(state.restarting).toBeFalsy();
   });
+
+  it('MUST-20.10: refuses a second stage while one is already staged/applying, and arms no timer', async () => {
+    const { RestoreError } = await import('../../scripts/restore-core.ts');
+    stageRestore.mockImplementation(() => {
+      throw new RestoreError('A restore is already staged; restart the app to apply it.');
+    });
+    vi.useFakeTimers();
+    try {
+      const state = await stageRestoreAction({}, form({ name: 'budget-2026-08-16.tar.gz', confirm: 'on' }));
+      expect(state.error).toBe('A restore is already staged; restart the app to apply it.');
+      expect(state.restarting).toBeFalsy();
+      expect(vi.getTimerCount()).toBe(0); // the exit is never armed on a refusal
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 describe('MUST-20.28: the restart is armed once, after the response', () => {

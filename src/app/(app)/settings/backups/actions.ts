@@ -78,15 +78,12 @@ export async function stageRestoreAction(
 
   let request;
   try {
+    // MUST-20.38: stageRestore() itself already emits the one required audit line
+    // ("[restore] staged ..."); logging it again here would be a second line for one event.
     request = stageRestore({ backupName: parsed.data.name, userId: user.id, username: user.username });
   } catch (error) {
     return { error: error instanceof Error ? error.message : 'That backup could not be staged.' };
   }
-
-  console.log(
-    `[restore] staged ${request.sourceName} (${request.kind}, ${request.bytes} bytes, ` +
-      `sha256 ${request.sha256.slice(0, 12)}) requested by user ${user.id}`,
-  );
 
   armRestart();
   revalidatePath('/settings/backups');
