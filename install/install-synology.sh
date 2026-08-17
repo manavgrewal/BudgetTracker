@@ -209,6 +209,18 @@ run mkdir -p "${SYNO_ROOT}/data"
 say "Setting ownership to uid 1000 (the container's non-root user)"
 run chown -R 1000:1000 "${SYNO_ROOT}/data" || warn "chown failed; rerun this script with sudo if the app reports EACCES."
 
+# Synology ACLs (the '+' in ls -l) override POSIX permissions: a folder that
+# looks 777/uid-1000 can still deny the container's uid, whose only matching
+# ACE is usually "everyone: read-only" — the app then dies with
+# SQLITE_CANTOPEN. Dropping the inherited ACL on the data dir makes the POSIX
+# bits (set above) authoritative. Harmless where synoacltool is absent.
+if command -v synoacltool >/dev/null 2>&1 || [ -x /usr/syno/bin/synoacltool ]; then
+  SYNOACL="$(command -v synoacltool || echo /usr/syno/bin/synoacltool)"
+  say "Removing the inherited Synology ACL on data/ (POSIX permissions take over)"
+  run "$SYNOACL" -del "${SYNO_ROOT}/data" || warn "Could not remove the ACL — if the app logs SQLITE_CANTOPEN, run: sudo synoacltool -del ${SYNO_ROOT}/data && sudo chmod 777 ${SYNO_ROOT}/data"
+  run chmod 777 "${SYNO_ROOT}/data" || true
+fi
+
 step "Configuring"
 if [ -f "${SYNO_ROOT}/.env" ] && grep -q '^SECRET_KEY=.\+' "${SYNO_ROOT}/.env"; then
   say "${SYNO_ROOT}/.env already has a SECRET_KEY — leaving it untouched."
