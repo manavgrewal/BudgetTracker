@@ -34,6 +34,13 @@ All notable changes to Budget Tracker are recorded here.
   `com.centurylinklabs.watchtower.enable: "true"` on the budget-tracker service and
   `WATCHTOWER_LABEL_ENABLE` on watchtower, so the socket access it needs never reaches any
   other container on the host.
+- **Billing cycle and amount for subscriptions and contracts.** The add/edit item form now
+  shows a Billing cycle select (Monthly/Annual, defaulting to "Not set") and an amount field
+  for items whose type is a subscription or contract — never for warranty or loan. The item
+  detail page and the items list show the formatted amount and cycle (e.g. "$15.99 / month")
+  wherever it is set. Enforced server-side by looking up the selected type's kind, matching
+  every other kind-dependent rule in the tracker (migration `0005_billing_cycle.sql` adds the
+  two nullable, CHECK-constrained columns to `warranty_items`).
 
 ### Changed
 
@@ -53,8 +60,12 @@ All notable changes to Budget Tracker are recorded here.
   Manager cannot detect GHCR updates and never re-pulls an already-present `:latest` tag, so
   those installs were effectively stuck on whatever image they first pulled. Documented the
   one-time YAML-replace step to adopt the new compose file and gain auto-updates.
-
-No app-code changes in this release.
+- An open-ended item (the "no end date" / Lifetime checkbox) used to render its end date as a
+  bare blank/em dash on the items list and detail page — indistinguishable from missing data.
+  It now shows a proper per-kind word instead: "Lifetime" for a warranty or subscription,
+  "Ongoing" for a contract, "Open-ended" for a loan. Open-ended items were already excluded
+  from the dashboard's "Coming due" widget and every expiring-soon query; a regression test
+  now pins that guarantee.
 
 ## [1.2.2] - 2026-08-17
 

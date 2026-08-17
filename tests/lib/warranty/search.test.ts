@@ -352,4 +352,65 @@ describe('expiringSoonItems (MUST-10.5)', () => {
     expect(expiringSoonItems(5, null, TODAY)).toHaveLength(5);
     expect(expiringSoonItems(5, 999_999, TODAY)).toHaveLength(0);
   });
+
+  // v1.3.0 user request, task B regression: an open-ended item (isLifetime) must never
+  // appear on the expiring-soon dashboard widget or the 'expiring' status filter, no matter
+  // its kind or purchase date. computeExpiryDate() already forces expiry_date to NULL for a
+  // lifetime item, and the shared STATUS_CASE_SQL/warrantyStatus() classify is_lifetime = 1
+  // as 'lifetime' before it ever checks expiry_date -- this test pins that guarantee
+  // end-to-end through the real search path, specifically for an open-ended SUBSCRIPTION
+  // (the kind most likely to be mistaken for "coming due" by billing cycle alone).
+  it('excludes an open-ended (lifetime) subscription from expiringSoonItems and the "expiring" status filter', () => {
+    const TODAY = '2026-08-16';
+    const sub = createItemType('Lifetime Streaming', 'subscription');
+    const openEndedId = createWarrantyItem({
+      name: 'Grandfathered Streaming Plan',
+      vendor: null, model: null, serial: null,
+      // A purchase date old enough that, if isLifetime were ignored, an old-style term-based
+      // read might otherwise look "due" -- the guarantee under test is that isLifetime alone
+      // is what keeps it out, regardless of dates.
+      purchaseDate: '2020-01-01', warrantyMonths: null, isLifetime: true,
+      priceCents: null, ownerUserId: owner, transactionId: null, typeId: sub.id, notes: null,
+      billingCycle: 'monthly', billingAmountCents: 999,
+    });
+
+    expect(expiringSoonItems(50, null, TODAY).map((r) => r.id)).not.toContain(openEndedId);
+    const expiring = searchWarrantyItems({ status: 'expiring', today: TODAY });
+    expect(expiring.rows.map((r) => r.id)).not.toContain(openEndedId);
+
+    const own = searchWarrantyItems({ status: 'lifetime', today: TODAY });
+    expect(own.rows.map((r) => r.id)).toContain(openEndedId);
+    expect(own.rows.find((r) => r.id === openEndedId)!.expiryDate).toBeNull();
+  });
+});
+
+// v1.3.0: billingCycle/billingAmountCents surface on search rows exactly as stored.
+describe('billing cycle and amount surface on list rows', () => {
+  const TODAY = '2026-08-16';
+
+  it('carries billingCycle/billingAmountCents through to WarrantyListItem', () => {
+    const sub = createItemType('Billing Search', 'subscription');
+    const id = createWarrantyItem({
+      name: 'Netflix Search',
+      vendor: null, model: null, serial: null,
+      purchaseDate: '2026-08-16', warrantyMonths: null, isLifetime: false,
+      priceCents: null, ownerUserId: owner, transactionId: null, typeId: sub.id, notes: null,
+      billingCycle: 'monthly', billingAmountCents: 1599,
+    });
+    const row = searchWarrantyItems({ today: TODAY }).rows.find((r) => r.id === id)!;
+    expect(row.billingCycle).toBe('monthly');
+    expect(row.billingAmountCents).toBe(1599);
+  });
+
+  it('surfaces null billing fields for an untyped item', () => {
+    const id = createWarrantyItem({
+      name: 'Untyped Search',
+      vendor: null, model: null, serial: null,
+      purchaseDate: '2026-08-16', warrantyMonths: null, isLifetime: false,
+      priceCents: null, ownerUserId: owner, transactionId: null, typeId: null, notes: null,
+    });
+    const row = searchWarrantyItems({ today: TODAY }).rows.find((r) => r.id === id)!;
+    expect(row.billingCycle).toBeNull();
+    expect(row.billingAmountCents).toBeNull();
+  });
 });

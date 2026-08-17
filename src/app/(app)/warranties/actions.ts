@@ -25,6 +25,7 @@ import {
 import { MAX_FILES_PER_UPLOAD } from '@/lib/warranty/receipts';
 import { STAGING_ID_RE } from '@/lib/warranty/staging';
 import { findItemType } from '@/lib/warranty/types';
+import { isBillingCycle, type BillingCycle } from '@/lib/warranty/constants';
 
 export interface WarrantyActionState {
   error?: string;
@@ -94,6 +95,23 @@ function readPriceCents(formData: FormData): number | null {
   return Math.abs(cents);
 }
 
+/** '' -> null; anything else must be one of the two billing cycle values (§ user request). */
+function readBillingCycle(formData: FormData): BillingCycle | null {
+  const raw = str(formData, 'billingCycle').trim();
+  if (raw.length === 0) return null;
+  if (!isBillingCycle(raw)) throw new Error('Billing must be Monthly or Annual.');
+  return raw;
+}
+
+/** '' -> null; anything else must parse as money, as a non-negative magnitude, same as price. */
+function readBillingAmountCents(formData: FormData): number | null {
+  const raw = str(formData, 'billingAmount').trim();
+  if (raw.length === 0) return null;
+  const cents = parseAmountToCents(raw);
+  if (cents === null) throw new Error('The amount is not a number.');
+  return Math.abs(cents);
+}
+
 function readMonths(formData: FormData): number | null {
   const raw = str(formData, 'warrantyMonths').trim();
   if (raw.length === 0) return null;
@@ -144,6 +162,8 @@ function readItemInput(formData: FormData, fallbackOwnerId: number) {
     transactionId: readOptionalId(formData, 'transactionId'),
     typeId: readTypeId(formData),
     notes: str(formData, 'notes'),
+    billingCycle: readBillingCycle(formData),
+    billingAmountCents: readBillingAmountCents(formData),
   });
 }
 

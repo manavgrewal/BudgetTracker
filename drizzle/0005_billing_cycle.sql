@@ -1,0 +1,31 @@
+-- WARNING: this migration is hand-maintained, not drizzle-kit-generated.
+-- Read the header of drizzle/0000_init.sql and the docblock in drizzle.config.ts before
+-- adding another one: there is no 0000_snapshot.json, so `drizzle-kit generate` would
+-- diff against an empty baseline and re-emit the whole schema. Hand-author the SQL,
+-- append the matching entry to drizzle/meta/_journal.json, and mirror the tables in
+-- src/db/schema.ts -- in that order.
+--
+-- Billing cycle and amount for subscriptions/contracts (v1.3.0 user request). Only items
+-- whose TYPE has kind 'subscription' or 'contract' ever carry non-NULL values here -- that
+-- rule is enforced in the app layer (src/lib/warranty/items.ts), the same way MUST-3.5's
+-- lifetime/term rule is a CHECK here but the kind rule lives in code, because a CHECK on
+-- warranty_items cannot see across to warranty_item_types.kind.
+-- Objects that exist ONLY in SQL and have NO Drizzle representation now number, after
+-- this migration:
+--   1. the categories.parent_id self-referencing foreign key            (0000)
+--   2. the COALESCE(display_description, raw_description) index         (0000)
+--   3. the COALESCE month expression index                              (0000)
+--   4. every CHECK constraint on warranty_items                         (0002, extended here)
+--   5. every CHECK constraint on warranty_receipts                      (0002)
+--   6. the warranty_search FTS5 contentless virtual table               (0002)
+--   7. its six triggers, which are its ONLY writer                      (0002)
+--   8. the is_subscription/name CHECK constraints on warranty_item_types (0003)
+--   9. the COLLATE NOCASE collation on warranty_item_types_name_uq      (0003)
+--  10. warranty_items.type_id arriving by ALTER TABLE ADD COLUMN        (0003)
+--  11. the CHECK constraint on warranty_item_types.kind                 (0004)
+--  12. warranty_item_types.kind itself arriving by ALTER TABLE ADD COLUMN (0004)
+--  13. the CHECK constraints on billing_cycle and billing_amount_cents below, and both
+--      columns arriving by ALTER TABLE ADD COLUMN                       (0005)
+ALTER TABLE `warranty_items` ADD COLUMN `billing_cycle` text CHECK (`billing_cycle` IN ('monthly', 'annual') OR `billing_cycle` IS NULL);
+--> statement-breakpoint
+ALTER TABLE `warranty_items` ADD COLUMN `billing_amount_cents` integer CHECK (`billing_amount_cents` IS NULL OR `billing_amount_cents` >= 0);

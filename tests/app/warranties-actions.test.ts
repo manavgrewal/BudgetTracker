@@ -56,7 +56,7 @@ import { MAX_FILES_PER_UPLOAD, receiptFileExists } from '@/lib/warranty/receipts
 import { writeSidecar, writeStagedReceipt } from '@/lib/warranty/staging';
 import { resetOcrQueueForTests } from '@/lib/warranty/ocr/queue';
 import { setOcrEngineForTests } from '@/lib/warranty/ocr/engine';
-import { listItemTypes } from '@/lib/warranty/types';
+import { createItemType, listItemTypes } from '@/lib/warranty/types';
 
 let current: TestDb | null = null;
 let dataDir: string;
@@ -293,6 +293,68 @@ describe('createWarrantyAction', () => {
   it('refuses an unknown typeId and writes nothing', async () => {
     const result = await createWarrantyAction({}, formData(baseFields({ typeId: '999999' })));
     expect(result.error).toBe('That item type no longer exists.');
+    expect(current!.db.get<{ c: number }>(sql`select count(*) as c from warranty_items`).c).toBe(0);
+  });
+});
+
+// v1.3.0 user request: billing cycle + amount for subscriptions/contracts.
+describe('createWarrantyAction — billing cycle and amount', () => {
+  it('accepts billingCycle/billingAmount for a subscription type and stores cents', async () => {
+    const sub = createItemType('Streaming Action', 'subscription');
+    const to = await redirectPath(() =>
+      createWarrantyAction(
+        {},
+        formData(baseFields({ typeId: String(sub.id), billingCycle: 'monthly', billingAmount: '15.99' })),
+      ),
+    );
+    const item = getWarrantyItem(Number(to.split('/').pop()))!;
+    expect(item.billingCycle).toBe('monthly');
+    expect(item.billingAmountCents).toBe(1599);
+  });
+
+  it('leaves billing fields null when omitted, even for a subscription type', async () => {
+    const sub = createItemType('Streaming Action Blank', 'subscription');
+    const to = await redirectPath(() =>
+      createWarrantyAction({}, formData(baseFields({ typeId: String(sub.id) }))),
+    );
+    const item = getWarrantyItem(Number(to.split('/').pop()))!;
+    expect(item.billingCycle).toBeNull();
+    expect(item.billingAmountCents).toBeNull();
+  });
+
+  it('rejects an invalid billing cycle value with a written message', async () => {
+    const sub = createItemType('Streaming Action Bad Cycle', 'subscription');
+    const result = await createWarrantyAction(
+      {},
+      formData(baseFields({ typeId: String(sub.id), billingCycle: 'weekly' })),
+    );
+    expect(result.error).toBe('Billing must be Monthly or Annual.');
+    expect(current!.db.get<{ c: number }>(sql`select count(*) as c from warranty_items`).c).toBe(0);
+  });
+
+  it('rejects a non-numeric billing amount with a written message', async () => {
+    const sub = createItemType('Streaming Action Bad Amount', 'subscription');
+    const result = await createWarrantyAction(
+      {},
+      formData(baseFields({ typeId: String(sub.id), billingAmount: 'lots' })),
+    );
+    expect(result.error).toBeTruthy();
+    expect(current!.db.get<{ c: number }>(sql`select count(*) as c from warranty_items`).c).toBe(0);
+  });
+
+  it('refuses billing fields on a warranty-kind type and writes nothing', async () => {
+    const warranty = createItemType('Appliance Action', 'warranty');
+    const result = await createWarrantyAction(
+      {},
+      formData(baseFields({ typeId: String(warranty.id), billingCycle: 'monthly', billingAmount: '9.99' })),
+    );
+    expect(result.error).toBeTruthy();
+    expect(current!.db.get<{ c: number }>(sql`select count(*) as c from warranty_items`).c).toBe(0);
+  });
+
+  it('refuses billing fields on an untyped item and writes nothing', async () => {
+    const result = await createWarrantyAction({}, formData(baseFields({ billingCycle: 'monthly' })));
+    expect(result.error).toBeTruthy();
     expect(current!.db.get<{ c: number }>(sql`select count(*) as c from warranty_items`).c).toBe(0);
   });
 });

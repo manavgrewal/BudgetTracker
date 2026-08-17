@@ -359,6 +359,15 @@ export const warrantyItems = sqliteTable(
      * deleting a type that is in use is blocked in the app layer (MUST-19.5/19.6).
      */
     typeId: integer('type_id').references(() => warrantyItemTypes.id),
+    /**
+     * v1.3.0, added by drizzle/0005_billing_cycle.sql. Declared last -- same
+     * ALTER-TABLE-ADD-COLUMN convention as typeId above. Both nullable: only an item whose
+     * TYPE has kind 'subscription' or 'contract' ever carries a non-NULL value here, and
+     * that rule is enforced in the app layer (src/lib/warranty/items.ts), never derived on
+     * read -- a CHECK on this table cannot see across to warranty_item_types.kind.
+     */
+    billingCycle: text('billing_cycle', { enum: ['monthly', 'annual'] }),
+    billingAmountCents: integer('billing_amount_cents'),
   },
   (t) => [
     index('warranty_items_expiry_idx').on(t.expiryDate),

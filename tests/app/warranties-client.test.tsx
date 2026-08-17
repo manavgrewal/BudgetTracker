@@ -15,6 +15,7 @@ function item(over: Partial<WarrantyListItem> = {}): WarrantyListItem {
     priceCents: 129999, ownerUserId: 7, ownerName: 'Alice', transactionId: null,
     typeId: null, typeName: null, isSubscription: false, kind: 'warranty', notes: null,
     createdAt: '2026-08-16T00:00:00.000Z', updatedAt: '2026-08-16T00:00:00.000Z',
+    billingCycle: null, billingAmountCents: null,
     status: 'active', receiptCount: 1,
     ...over,
   };
@@ -165,5 +166,43 @@ describe('WarrantiesClient', () => {
     );
     expect(screen.getByText(/ends on 2028-08-16/)).toBeTruthy();
     expect(screen.getByText(/paid off by 2028-08-16/)).toBeTruthy();
+  });
+
+  // --- v1.3.0: open-ended display label (task B) ---
+
+  it('shows the per-kind open-ended word in the Expiry cell instead of a blank/dash for an open-ended item', () => {
+    const { container } = renderList(
+      result([
+        item({ id: 20, isLifetime: true, expiryDate: null, kind: 'warranty' }),
+        item({ id: 21, isLifetime: true, expiryDate: null, kind: 'subscription' }),
+        item({ id: 22, isLifetime: true, expiryDate: null, kind: 'contract' }),
+        item({ id: 23, isLifetime: true, expiryDate: null, kind: 'loan' }),
+      ]),
+    );
+    const cells = Array.from(container.querySelectorAll('tbody td:nth-child(5)')).map((td) => td.textContent);
+    expect(cells).toEqual(['Lifetime', 'Lifetime', 'Ongoing', 'Open-ended']);
+  });
+
+  // --- v1.3.0: billing cycle and amount (task A) ---
+
+  it('shows the Billing column with the formatted amount and cycle suffix when set', () => {
+    const { container } = renderList(
+      result([
+        item({ id: 30, kind: 'subscription', typeId: 2, typeName: 'Subscription', billingCycle: 'monthly', billingAmountCents: 1599 }),
+      ]),
+    );
+    const cell = container.querySelector('tbody td:nth-child(9)');
+    expect(cell?.textContent).toBe('$15.99 / month');
+  });
+
+  it('shows an em dash in the Billing column for a warranty item and for an unset subscription', () => {
+    const { container } = renderList(
+      result([
+        item({ id: 31, kind: 'warranty' }),
+        item({ id: 32, kind: 'subscription', typeId: 2, typeName: 'Subscription' }),
+      ]),
+    );
+    const cells = Array.from(container.querySelectorAll('tbody td:nth-child(9)')).map((td) => td.textContent);
+    expect(cells).toEqual(['—', '—']);
   });
 });

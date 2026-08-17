@@ -13,7 +13,15 @@ import { Field, inputClass, selectClass } from '@/components/ui/form';
 // Ruling P4: WARRANTY_SORTS/WarrantySort come from constants.ts (pure, client-safe), NOT
 // from search.ts -- search.ts imports @/db/client, and a VALUE import from it (as opposed to
 // a type-only one) drags better-sqlite3 into this client bundle and breaks `next build`.
-import { expiryPhraseForKind, WARRANTY_SORTS, type ItemKind, type WarrantySort } from '@/lib/warranty/constants';
+import {
+  billingAllowedForKind,
+  billingCycleSuffix,
+  expiryPhraseForKind,
+  openEndedDisplayLabel,
+  WARRANTY_SORTS,
+  type ItemKind,
+  type WarrantySort,
+} from '@/lib/warranty/constants';
 import { statusLabel, WARRANTY_STATUSES } from '@/lib/warranty/expiry';
 import type { WarrantySearchResult } from '@/lib/warranty/search';
 
@@ -160,6 +168,7 @@ export function WarrantiesClient({
                 <th scope="col">Status</th>
                 <th scope="col">Owner</th>
                 <th scope="col" className="text-right">Price</th>
+                <th scope="col" className="text-right">Billing</th>
               </tr>
             </thead>
             <tbody>
@@ -180,14 +189,33 @@ export function WarrantiesClient({
                   <td className="tabnum whitespace-nowrap text-muted">{row.purchaseDate}</td>
                   {/* Delta T9, generalized to `kind` in v1.2.2 Task 2: expiryPhraseForKind()
                       supplies the expires/cancel by/ends on/paid off by verb -- no component
-                      hard-codes any of them (MUST-19.11). */}
-                  <td className="whitespace-nowrap text-muted">{row.expiryDate === null ? '—' : expiryPhraseForKind(row.kind, row.expiryDate)}</td>
+                      hard-codes any of them (MUST-19.11). v1.3.0 fix: an open-ended item
+                      (isLifetime) has no expiry_date -- that used to render as a bare em dash
+                      here, indistinguishable from "no data". Show the per-kind open-ended word
+                      instead. */}
+                  <td className="whitespace-nowrap text-muted">
+                    {row.isLifetime
+                      ? openEndedDisplayLabel(row.kind)
+                      : row.expiryDate === null
+                        ? '—'
+                        : expiryPhraseForKind(row.kind, row.expiryDate)}
+                  </td>
                   <td>
                     <StatusBadge status={row.status} expiryDate={row.expiryDate} today={today} kind={row.kind} />
                   </td>
                   <td className="whitespace-nowrap text-muted">{row.ownerName}</td>
                   <td className="text-right">
                     {row.priceCents === null ? <span className="text-subtle">—</span> : <Money cents={row.priceCents} plain />}
+                  </td>
+                  <td className="whitespace-nowrap text-right text-muted">
+                    {billingAllowedForKind(row.kind) && row.billingAmountCents !== null ? (
+                      <>
+                        <Money cents={row.billingAmountCents} plain />
+                        {row.billingCycle === null ? null : ` ${billingCycleSuffix(row.billingCycle)}`}
+                      </>
+                    ) : (
+                      <span className="text-subtle">—</span>
+                    )}
                   </td>
                 </tr>
               ))}

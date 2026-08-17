@@ -1,7 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import {
+  BILLING_CYCLES,
+  BILLING_CYCLE_LABELS,
   ITEM_KINDS,
   ITEM_KIND_LABELS,
+  billingAllowedForKind,
+  billingCycleSuffix,
   coveredThroughLabelForKind,
   expiryNoun,
   expiryNounForKind,
@@ -13,7 +17,9 @@ import {
   formOpenEndedLabel,
   formStartLabel,
   formTermLabel,
+  isBillingCycle,
   isItemKind,
+  openEndedDisplayLabel,
 } from '@/lib/warranty/constants';
 
 describe('subscription wording (MUST-19.10 / MUST-19.11)', () => {
@@ -134,6 +140,48 @@ describe('item kinds (v1.2.2 — Contracts & Coverage)', () => {
     expect(expiryPhrase(true, '2027-03-01')).toBe(expiryPhraseForKind('subscription', '2027-03-01'));
     expect(expiringSoonLabel(false, 12)).toBe(expiringSoonLabelForKind('warranty', 12));
     expect(expiringSoonLabel(true, 12)).toBe(expiringSoonLabelForKind('subscription', 12));
+  });
+});
+
+// v1.3.0 user request: billing cycle + amount for subscriptions/contracts, and a per-kind
+// open-ended DISPLAY label (distinct from formOpenEndedLabel's checkbox-label wording).
+describe('billing cycle constants (v1.3.0)', () => {
+  it('lists exactly monthly and annual, recognised by the guard', () => {
+    expect(BILLING_CYCLES).toEqual(['monthly', 'annual']);
+    expect(isBillingCycle('monthly')).toBe(true);
+    expect(isBillingCycle('annual')).toBe(true);
+    expect(isBillingCycle('weekly')).toBe(false);
+  });
+
+  it('has a human label for each cycle', () => {
+    expect(BILLING_CYCLE_LABELS).toEqual({ monthly: 'Monthly', annual: 'Annual' });
+  });
+
+  it('builds the display suffix used after the formatted amount', () => {
+    expect(billingCycleSuffix('monthly')).toBe('/ month');
+    expect(billingCycleSuffix('annual')).toBe('/ year');
+  });
+
+  it('only allows billing for subscription and contract kinds', () => {
+    expect(billingAllowedForKind('subscription')).toBe(true);
+    expect(billingAllowedForKind('contract')).toBe(true);
+    expect(billingAllowedForKind('warranty')).toBe(false);
+    expect(billingAllowedForKind('loan')).toBe(false);
+  });
+});
+
+describe('open-ended DISPLAY label per kind (v1.3.0)', () => {
+  it('matches the user-approved matrix, distinct from the checkbox label wording', () => {
+    expect(openEndedDisplayLabel('warranty')).toBe('Lifetime');
+    expect(openEndedDisplayLabel('subscription')).toBe('Lifetime');
+    expect(openEndedDisplayLabel('contract')).toBe('Ongoing');
+    expect(openEndedDisplayLabel('loan')).toBe('Open-ended');
+    // The two matrices are deliberately different strings for warranty/subscription/loan --
+    // this label is a short word for a blank-value slot; formOpenEndedLabel is a full
+    // checkbox sentence.
+    expect(openEndedDisplayLabel('warranty')).not.toBe(formOpenEndedLabel('warranty'));
+    expect(openEndedDisplayLabel('subscription')).not.toBe(formOpenEndedLabel('subscription'));
+    expect(openEndedDisplayLabel('loan')).not.toBe(formOpenEndedLabel('loan'));
   });
 });
 

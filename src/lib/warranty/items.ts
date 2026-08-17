@@ -16,7 +16,8 @@ import {
 } from '@/lib/warranty/receipts';
 import { sniffReceiptType, type ReceiptMime } from '@/lib/warranty/sniff';
 import { deleteSidecar, findStagedReceipt, readSidecar } from '@/lib/warranty/staging';
-import type { ItemKind } from '@/lib/warranty/constants';
+import { billingAllowedForKind, BILLING_CYCLES, type BillingCycle, type ItemKind } from '@/lib/warranty/constants';
+import { findItemType } from '@/lib/warranty/types';
 
 export const MAX_NAME_CHARS = 200;
 export const MAX_TEXT_CHARS = 200;
@@ -60,6 +61,14 @@ export interface WarrantyItemRow {
   notes: string | null;
   createdAt: string;
   updatedAt: string;
+  /**
+   * v1.3.0: billing cycle + amount for subscriptions/contracts (§ user request). Always
+   * present on a read row (NULL for every warranty/loan item, and for a subscription/
+   * contract item that has not set them) -- never omitted, matching every other nullable
+   * column above.
+   */
+  billingCycle: BillingCycle | null;
+  billingAmountCents: number | null;
 }
 
 export interface WarrantyReceiptRow {
@@ -97,6 +106,14 @@ export interface WarrantyInput {
   /** Delta T6: nullable -- NULL is a legitimate "unclassified" value, not an omission. */
   typeId: number | null;
   notes: string | null;
+  /**
+   * v1.3.0: optional -- a caller that predates this feature (or a test fixture) simply
+   * omits them and gets NULL, same as passing null explicitly. Normalised to null (never
+   * left undefined) before either reaches the database; see createWarrantyItem/
+   * updateWarrantyItem.
+   */
+  billingCycle?: BillingCycle | null;
+  billingAmountCents?: number | null;
 }
 
 /**
@@ -157,6 +174,20 @@ export function warrantyInputSchema(today: string) {
       // Uncategorised row to fall back to, so null must parse, not just be omitted.
       typeId: z.number().int().positive().nullable(),
       notes: optionalText(MAX_NOTES_CHARS),
+      // v1.3.0: shape-only here (a real string enum value, or null/omitted). Whether billing
+      // is even ALLOWED for this item's kind is a separate check in createWarrantyItem/
+      // updateWarrantyItem, below -- that requires a DB lookup of the type's kind, which has
+      // no place inside a synchronous shape schema like this one.
+      billingCycle: z
+        .enum(BILLING_CYCLES, { errorMap: () => ({ message: 'Billing must be Monthly or Annual.' }) })
+        .nullable()
+        .optional(),
+      billingAmountCents: z
+        .number()
+        .int('The amount must be a whole number of cents')
+        .nonnegative('The amount must be a positive number.')
+        .nullable()
+        .optional(),
     })
     .superRefine((value, ctx) => {
       // MUST-3.5, enforced by zod at the action boundary AND by a CHECK in 0002.
@@ -187,6 +218,8 @@ const ITEM_COLUMNS = {
   notes: warrantyItems.notes,
   createdAt: warrantyItems.createdAt,
   updatedAt: warrantyItems.updatedAt,
+  billingCycle: warrantyItems.billingCycle,
+  billingAmountCents: warrantyItems.billingAmountCents,
 };
 
 /**
@@ -199,6 +232,30 @@ function toItemRow<T extends { isSubscription: boolean | null; kind: ItemKind | 
   row: T,
 ): Omit<T, 'isSubscription' | 'kind'> & { isSubscription: boolean; kind: ItemKind } {
   return { ...row, isSubscription: row.isSubscription ?? false, kind: row.kind ?? 'warranty' };
+}
+
+export const BILLING_KIND_ERROR = 'Billing cycle and amount only apply to subscriptions and contracts.';
+
+/** typeId null (unclassified) normalises to 'warranty', same as toItemRow()'s own read-side default. */
+function kindForTypeId(typeId: number | null): ItemKind {
+  if (typeId === null) return 'warranty';
+  return findItemType(typeId)?.kind ?? 'warranty';
+}
+
+/**
+ * v1.3.0: server-side enforcement that billing_cycle/billing_amount_cents are NULL for
+ * every warranty/loan item -- mirrors how typeExistsOrNull() in actions.ts already looks up
+ * the type before trusting a write, except this lookup has to happen in the data layer
+ * itself (not just the 'use server' action) so createWarrantyItem/updateWarrantyItem stay
+ * correct for every caller, not only the ones that route through actions.ts.
+ */
+function assertBillingMatchesKind(
+  typeId: number | null,
+  billingCycle: BillingCycle | null,
+  billingAmountCents: number | null,
+): void {
+  if (billingCycle === null && billingAmountCents === null) return;
+  if (!billingAllowedForKind(kindForTypeId(typeId))) throw new Error(BILLING_KIND_ERROR);
 }
 
 export function getWarrantyItem(id: number): WarrantyItemRow | null {
@@ -223,6 +280,12 @@ export function createWarrantyItem(
   staged: StagedReceiptRef[] = [],
   at: string = nowIso(),
 ): number {
+  // v1.3.0: checked BEFORE the transaction even opens -- a mismatch here writes nothing,
+  // exactly like typeExistsOrNull's early return in actions.ts.
+  const billingCycle = input.billingCycle ?? null;
+  const billingAmountCents = input.billingAmountCents ?? null;
+  assertBillingMatchesKind(input.typeId, billingCycle, billingAmountCents);
+
   const db = getDb();
   const expiryDate = computeExpiryDate(input);
   // Ruling P9: tracked DURING the adoption loop (append as each rename succeeds inside
@@ -237,7 +300,10 @@ export function createWarrantyItem(
     const id = db.transaction((tx) => {
       const row = tx
         .insert(warrantyItems)
-        .values({ ...input, expiryDate, createdAt: at, updatedAt: at })
+        // billingCycle/billingAmountCents override input's own (possibly undefined) values
+        // with the normalised-to-null pair computed above -- undefined would otherwise
+        // reach better-sqlite3's bind step for an omitted column.
+        .values({ ...input, billingCycle, billingAmountCents, expiryDate, createdAt: at, updatedAt: at })
         .returning({ id: warrantyItems.id })
         .get();
       commitStaged(tx, row.id, staged, at, adopted, deferred);
@@ -257,9 +323,14 @@ export function createWarrantyItem(
 
 /** MUST-3.6: any write that touches purchase_date, months or lifetime recomputes expiry. */
 export function updateWarrantyItem(id: number, input: WarrantyInput, at: string = nowIso()): boolean {
+  // v1.3.0: same kind check as createWarrantyItem, run before the write.
+  const billingCycle = input.billingCycle ?? null;
+  const billingAmountCents = input.billingAmountCents ?? null;
+  assertBillingMatchesKind(input.typeId, billingCycle, billingAmountCents);
+
   const result = getDb()
     .update(warrantyItems)
-    .set({ ...input, expiryDate: computeExpiryDate(input), updatedAt: at })
+    .set({ ...input, billingCycle, billingAmountCents, expiryDate: computeExpiryDate(input), updatedAt: at })
     .where(eq(warrantyItems.id, id))
     .run();
   return result.changes > 0;

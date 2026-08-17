@@ -6,7 +6,7 @@ import {
   type WarrantyStatus,
 } from '@/lib/warranty/expiry';
 import type { WarrantyItemRow } from '@/lib/warranty/items';
-import { WARRANTY_SORTS, isWarrantySort, type ItemKind, type WarrantySort } from '@/lib/warranty/constants';
+import { WARRANTY_SORTS, isWarrantySort, type BillingCycle, type ItemKind, type WarrantySort } from '@/lib/warranty/constants';
 
 /** §17.22 */
 export const WARRANTY_PAGE_SIZE = 50;
@@ -137,6 +137,8 @@ interface RawRow {
   notes: string | null;
   created_at: string;
   updated_at: string;
+  billing_cycle: BillingCycle | null;
+  billing_amount_cents: number | null;
   status: WarrantyStatus;
   receipt_count: number;
 }
@@ -166,6 +168,8 @@ function toListItem(row: RawRow): WarrantyListItem {
     notes: row.notes,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    billingCycle: row.billing_cycle,
+    billingAmountCents: row.billing_amount_cents,
     status: row.status,
     receiptCount: row.receipt_count,
   };

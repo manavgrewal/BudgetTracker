@@ -5,6 +5,7 @@ import path from 'node:path';
 import { sql } from 'drizzle-orm';
 import { createSeededTestDb, insertTestUser, type TestDb } from '../../helpers/db';
 import {
+  BILLING_KIND_ERROR,
   FUTURE_PURCHASE_DATE_ERROR,
   LIFETIME_WITH_TERM_ERROR,
   attachStagedReceipts,
@@ -135,6 +136,43 @@ describe('warrantyInputSchema', () => {
     expect(schema().safeParse(input({ typeId: -1 })).success).toBe(false);
     expect(schema().safeParse(input({ typeId: 1.5 })).success).toBe(false);
   });
+
+  // v1.3.0: billing cycle + amount for subscriptions/contracts (§ user request). This
+  // schema is shape-only (a real enum value, or null/omitted) -- whether billing even
+  // APPLIES to the item's kind is checked separately, by createWarrantyItem/
+  // updateWarrantyItem below, since that needs a DB lookup of the type's kind.
+  describe('billing cycle and amount (shape only)', () => {
+    it('accepts omitted billing fields, defaulting to undefined (normalised to null on write)', () => {
+      const parsed = schema().safeParse(input());
+      expect(parsed.success).toBe(true);
+      expect(parsed.success && parsed.data.billingCycle).toBeUndefined();
+      expect(parsed.success && parsed.data.billingAmountCents).toBeUndefined();
+    });
+
+    it('accepts null and both valid billing cycle values', () => {
+      expect(schema().safeParse(input({ billingCycle: null })).success).toBe(true);
+      expect(schema().safeParse(input({ billingCycle: 'monthly' })).success).toBe(true);
+      expect(schema().safeParse(input({ billingCycle: 'annual' })).success).toBe(true);
+    });
+
+    it('rejects a billing cycle outside monthly/annual', () => {
+      const parsed = schema().safeParse(input({ billingCycle: 'weekly' as unknown as WarrantyInput['billingCycle'] }));
+      expect(parsed.success).toBe(false);
+      expect(parsed.success === false && parsed.error.issues[0].message).toBe('Billing must be Monthly or Annual.');
+    });
+
+    it('accepts a non-negative billing amount and rejects a negative one', () => {
+      expect(schema().safeParse(input({ billingAmountCents: 0 })).success).toBe(true);
+      expect(schema().safeParse(input({ billingAmountCents: 1599 })).success).toBe(true);
+      const parsed = schema().safeParse(input({ billingAmountCents: -1 }));
+      expect(parsed.success).toBe(false);
+      expect(parsed.success === false && parsed.error.issues[0].message).toBe('The amount must be a positive number.');
+    });
+
+    it('rejects a non-integer billing amount', () => {
+      expect(schema().safeParse(input({ billingAmountCents: 15.5 })).success).toBe(false);
+    });
+  });
 });
 
 describe('createWarrantyItem', () => {
@@ -158,6 +196,86 @@ describe('createWarrantyItem', () => {
 
   it('returns null for an unknown id', () => {
     expect(getWarrantyItem(999)).toBeNull();
+  });
+});
+
+// v1.3.0: billing cycle + amount for subscriptions/contracts (§ user request).
+describe('billing cycle and amount', () => {
+  it('round-trips billingCycle and billingAmountCents on create for a subscription type', () => {
+    const sub = createItemType('Streaming Billing', 'subscription');
+    const id = createWarrantyItem(input({ typeId: sub.id, billingCycle: 'monthly', billingAmountCents: 1599 }));
+    const row = getWarrantyItem(id)!;
+    expect(row.billingCycle).toBe('monthly');
+    expect(row.billingAmountCents).toBe(1599);
+  });
+
+  it('round-trips billingCycle and billingAmountCents on create for a contract type', () => {
+    const contract = createItemType('Gym Billing', 'contract');
+    const id = createWarrantyItem(input({ typeId: contract.id, billingCycle: 'annual', billingAmountCents: 49999 }));
+    const row = getWarrantyItem(id)!;
+    expect(row.billingCycle).toBe('annual');
+    expect(row.billingAmountCents).toBe(49999);
+  });
+
+  it('defaults billingCycle/billingAmountCents to null when omitted', () => {
+    const id = createWarrantyItem(input());
+    const row = getWarrantyItem(id)!;
+    expect(row.billingCycle).toBeNull();
+    expect(row.billingAmountCents).toBeNull();
+  });
+
+  it('round-trips a change to billing fields on update', () => {
+    const sub = createItemType('Streaming Billing Update', 'subscription');
+    const id = createWarrantyItem(input({ typeId: sub.id, billingCycle: 'monthly', billingAmountCents: 999 }));
+    updateWarrantyItem(id, input({ typeId: sub.id, billingCycle: 'annual', billingAmountCents: 9999 }));
+    const row = getWarrantyItem(id)!;
+    expect(row.billingCycle).toBe('annual');
+    expect(row.billingAmountCents).toBe(9999);
+  });
+
+  it('clears billing fields back to null on update', () => {
+    const sub = createItemType('Streaming Billing Clear', 'subscription');
+    const id = createWarrantyItem(input({ typeId: sub.id, billingCycle: 'monthly', billingAmountCents: 999 }));
+    updateWarrantyItem(id, input({ typeId: sub.id, billingCycle: null, billingAmountCents: null }));
+    const row = getWarrantyItem(id)!;
+    expect(row.billingCycle).toBeNull();
+    expect(row.billingAmountCents).toBeNull();
+  });
+
+  it('refuses billingCycle on a warranty-kind item, and writes nothing', () => {
+    const warranty = createItemType('Appliance Billing', 'warranty');
+    expect(() => createWarrantyItem(input({ typeId: warranty.id, billingCycle: 'monthly' }))).toThrowError(
+      BILLING_KIND_ERROR,
+    );
+  });
+
+  it('refuses billingAmountCents on a loan-kind item, and writes nothing', () => {
+    const loan = createItemType('Car Loan Billing', 'loan');
+    expect(() => createWarrantyItem(input({ typeId: loan.id, billingAmountCents: 100 }))).toThrowError(
+      BILLING_KIND_ERROR,
+    );
+  });
+
+  it('refuses billing fields on an untyped item (untyped normalises to warranty)', () => {
+    expect(() => createWarrantyItem(input({ typeId: null, billingCycle: 'monthly' }))).toThrowError(BILLING_KIND_ERROR);
+  });
+
+  it('refuses billing fields on update just like on create', () => {
+    const warranty = createItemType('Appliance Billing Update', 'warranty');
+    const id = createWarrantyItem(input({ typeId: warranty.id }));
+    expect(() => updateWarrantyItem(id, input({ typeId: warranty.id, billingAmountCents: 500 }))).toThrowError(
+      BILLING_KIND_ERROR,
+    );
+    // Nothing was written: the item is untouched.
+    expect(getWarrantyItem(id)!.billingAmountCents).toBeNull();
+  });
+
+  it('allows a subscription/contract item to have no billing set at all', () => {
+    const sub = createItemType('Streaming No Billing', 'subscription');
+    const id = createWarrantyItem(input({ typeId: sub.id }));
+    const row = getWarrantyItem(id)!;
+    expect(row.billingCycle).toBeNull();
+    expect(row.billingAmountCents).toBeNull();
   });
 });
 

@@ -193,3 +193,55 @@ export const WARRANTY_SORTS: readonly WarrantySort[] = ['expiry', 'name', 'purch
 export function isWarrantySort(value: string): value is WarrantySort {
   return (WARRANTY_SORTS as readonly string[]).includes(value);
 }
+
+/**
+ * v1.3.0 user request: billing cycle + amount for subscriptions and contracts only. Kept
+ * here (not items.ts) for the same client-safety reason as everything else in this file --
+ * the add/edit forms are client components and need the enum, the labels and the display
+ * suffix without dragging in @/db.
+ */
+export const BILLING_CYCLES = ['monthly', 'annual'] as const;
+export type BillingCycle = (typeof BILLING_CYCLES)[number];
+
+export function isBillingCycle(value: string): value is BillingCycle {
+  return (BILLING_CYCLES as readonly string[]).includes(value);
+}
+
+/** The add/edit form's Billing <select> options. */
+export const BILLING_CYCLE_LABELS: Record<BillingCycle, string> = {
+  monthly: 'Monthly',
+  annual: 'Annual',
+};
+
+/** Appended after the formatted amount: `${formatCents(cents)} ${billingCycleSuffix(cycle)}` -> "$15.99 / month". */
+export function billingCycleSuffix(cycle: BillingCycle): string {
+  return cycle === 'monthly' ? '/ month' : '/ year';
+}
+
+/**
+ * Only these two kinds ever show the Billing fields on the add/edit form, or carry a
+ * non-NULL billing_cycle / billing_amount_cents (enforced server-side in
+ * src/lib/warranty/items.ts by looking up the selected type's kind).
+ */
+export function billingAllowedForKind(kind: ItemKind): boolean {
+  return kind === 'subscription' || kind === 'contract';
+}
+
+/**
+ * The user-approved per-kind label shown in place of a blank end date when an item is
+ * open-ended (the "no end date" / Lifetime checkbox, i.e. isLifetime = true). Deliberately a
+ * SEPARATE matrix from KIND_WORDING's `openEnded` above: that one is the checkbox's own
+ * label text ("Lifetime warranty", "Ongoing (no end date)", ...); this one is the short
+ * word shown wherever the end date itself would otherwise render blank (list rows, the
+ * detail page's end-date field) -- the two read very differently on purpose.
+ */
+const OPEN_ENDED_DISPLAY_LABEL: Record<ItemKind, string> = {
+  warranty: 'Lifetime',
+  subscription: 'Lifetime',
+  contract: 'Ongoing',
+  loan: 'Open-ended',
+};
+
+export function openEndedDisplayLabel(kind: ItemKind): string {
+  return OPEN_ENDED_DISPLAY_LABEL[kind];
+}

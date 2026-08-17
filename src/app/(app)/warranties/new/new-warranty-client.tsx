@@ -9,7 +9,16 @@ import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { Field, inputClass, labelClass, selectClass, textareaClass } from '@/components/ui/form';
 import { isIsoDate } from '@/lib/dates';
-import { coveredThroughLabelForKind, formOpenEndedLabel, formStartLabel, formTermLabel, type ItemKind } from '@/lib/warranty/constants';
+import {
+  BILLING_CYCLE_LABELS,
+  BILLING_CYCLES,
+  billingAllowedForKind,
+  coveredThroughLabelForKind,
+  formOpenEndedLabel,
+  formStartLabel,
+  formTermLabel,
+  type ItemKind,
+} from '@/lib/warranty/constants';
 import { computeExpiryDate } from '@/lib/warranty/expiry';
 import { createWarrantyAction, type WarrantyActionState } from '../actions';
 
@@ -72,6 +81,8 @@ export function NewWarrantyClient({
   const [isLifetime, setIsLifetime] = useState(false);
   const [typeId, setTypeId] = useState('');
   const [staged, setStaged] = useState<StagedFile[]>([]);
+  const [billingCycle, setBillingCycle] = useState('');
+  const [billingAmount, setBillingAmount] = useState('');
 
   const onStagedChange = useCallback((files: StagedFile[]) => setStaged(files), []);
 
@@ -102,6 +113,18 @@ export function NewWarrantyClient({
   // place this wording lives (MUST-19.11). No type selected reads as a plain warranty.
   const selectedType = types.find((t) => String(t.id) === typeId);
   const selectedKind: ItemKind = selectedType?.kind ?? 'warranty';
+  // v1.3.0: Billing fields only apply to subscription/contract kinds. Switching the type
+  // away from one of those clears whatever was entered, so a stale value never gets to
+  // submit alongside a kind that does not carry billing (fields simply leave the DOM, and
+  // an absent form field posts as blank -> null, same mechanism as every other optional
+  // field on this form).
+  const billingApplicable = billingAllowedForKind(selectedKind);
+  useEffect(() => {
+    if (!billingApplicable) {
+      setBillingCycle('');
+      setBillingAmount('');
+    }
+  }, [billingApplicable]);
 
   /**
    * The prefill marker. OCR filling a blank field is helpful right up until nobody can
@@ -239,6 +262,37 @@ export function NewWarrantyClient({
                   className={inputClass}
                 />
               </Field>
+
+              {/* v1.3.0: Billing only applies to subscription/contract kinds -- hidden
+                  entirely for warranty/loan, so an absent field posts as blank -> null
+                  (readBillingCycle/readBillingAmountCents in actions.ts). */}
+              {billingApplicable ? (
+                <>
+                  <Field label="Billing">
+                    <select
+                      name="billingCycle"
+                      value={billingCycle}
+                      onChange={(e) => setBillingCycle(e.target.value)}
+                      className={selectClass}
+                    >
+                      <option value="">Not set</option>
+                      {BILLING_CYCLES.map((cycle) => (
+                        <option key={cycle} value={cycle}>{BILLING_CYCLE_LABELS[cycle]}</option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="Amount">
+                    <input
+                      name="billingAmount"
+                      inputMode="decimal"
+                      placeholder="e.g. 15.99"
+                      value={billingAmount}
+                      onChange={(e) => setBillingAmount(e.target.value)}
+                      className={inputClass}
+                    />
+                  </Field>
+                </>
+              ) : null}
             </div>
 
             <fieldset className="flex flex-col gap-2">

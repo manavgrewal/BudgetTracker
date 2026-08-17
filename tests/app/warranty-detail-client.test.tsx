@@ -29,6 +29,7 @@ function item(over: Partial<WarrantyItemRow> = {}): WarrantyItemRow {
     priceCents: 129999, ownerUserId: 7, ownerName: 'Alice', transactionId: null,
     typeId: null, typeName: null, isSubscription: false, kind: 'warranty', notes: 'kitchen',
     createdAt: '2026-08-16T00:00:00.000Z', updatedAt: '2026-08-16T00:00:00.000Z',
+    billingCycle: null, billingAmountCents: null,
     ...over,
   };
 }
@@ -185,5 +186,65 @@ describe('WarrantyDetailClient', () => {
     const remove = screen.getByRole('button', { name: /remove/i }) as HTMLButtonElement;
     expect(rerun.disabled).toBe(false);
     expect(remove.disabled).toBe(false);
+  });
+
+  // --- v1.3.0: open-ended display label (task B) ---
+
+  it('shows the per-kind open-ended word instead of a blank end date when isLifetime is set', () => {
+    renderDetail({ item: item({ isLifetime: true, expiryDate: null, kind: 'warranty' }) });
+    expect(screen.getByText('Lifetime')).toBeTruthy();
+    cleanup();
+    renderDetail({ item: item({ isLifetime: true, expiryDate: null, kind: 'subscription', typeId: 2, typeName: 'Netflix plan' }) });
+    expect(screen.getByText('Lifetime')).toBeTruthy();
+    cleanup();
+    renderDetail({ item: item({ isLifetime: true, expiryDate: null, kind: 'contract' }) });
+    expect(screen.getByText('Ongoing')).toBeTruthy();
+    cleanup();
+    renderDetail({ item: item({ isLifetime: true, expiryDate: null, kind: 'loan', typeId: 3, typeName: 'Car loan' }) });
+    expect(screen.getByText('Open-ended')).toBeTruthy();
+  });
+
+  it('still shows an em dash for a non-lifetime item with a genuinely unknown term', () => {
+    const { container } = renderDetail({ item: item({ isLifetime: false, expiryDate: null, warrantyMonths: null }) });
+    const dt = Array.from(container.querySelectorAll('dt')).find((el) => el.textContent === 'Expiry date')!;
+    expect(dt.nextElementSibling?.textContent).toBe('—');
+  });
+
+  // --- v1.3.0: billing cycle and amount (task A) ---
+
+  it('shows a Billing row with the formatted amount and cycle suffix for a subscription item', () => {
+    const { container } = renderDetail({
+      item: item({ typeId: 2, typeName: 'Netflix plan', kind: 'subscription', billingCycle: 'monthly', billingAmountCents: 1599 }),
+    });
+    const dt = Array.from(container.querySelectorAll('dt')).find((el) => el.textContent === 'Billing')!;
+    expect(dt).toBeTruthy();
+    expect(dt.nextElementSibling?.textContent).toBe('$15.99 / month');
+  });
+
+  it('renders no Billing row at all for a warranty-kind item', () => {
+    renderDetail({ item: item({ kind: 'warranty' }) });
+    expect(screen.queryByText('Billing')).toBeNull();
+  });
+
+  it('renders no Billing row for a loan-kind item even if billing columns were somehow set', () => {
+    renderDetail({ item: item({ kind: 'loan', billingCycle: 'annual', billingAmountCents: 5000 }) });
+    expect(screen.queryByText('Billing')).toBeNull();
+  });
+
+  it("shows the edit form's Billing fields for a subscription type and hides them for warranty", () => {
+    const { container } = renderDetail({
+      item: item({ typeId: 2, typeName: 'Netflix plan', kind: 'subscription', billingCycle: 'monthly', billingAmountCents: 1599 }),
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    const cycleSelect = container.querySelector('form select[name="billingCycle"]') as HTMLSelectElement;
+    const amountInput = container.querySelector('form input[name="billingAmount"]') as HTMLInputElement;
+    expect(cycleSelect).toBeTruthy();
+    expect(cycleSelect.value).toBe('monthly');
+    expect(amountInput.value).toBe('15.99');
+
+    const typeSelect = container.querySelector('form select[name="typeId"]') as HTMLSelectElement;
+    fireEvent.change(typeSelect, { target: { value: '1' } }); // Appliance, kind warranty
+    expect(container.querySelector('form select[name="billingCycle"]')).toBeNull();
+    expect(container.querySelector('form input[name="billingAmount"]')).toBeNull();
   });
 });

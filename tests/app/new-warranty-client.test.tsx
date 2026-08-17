@@ -117,6 +117,44 @@ describe('NewWarrantyClient', () => {
     expect(screen.getByText('Term runs through 2026-02-28')).toBeTruthy();
   });
 
+  // --- v1.3.0: billing cycle and amount (task A) ---
+
+  it('hides the Billing fields until a subscription/contract type is selected', () => {
+    const { container } = renderForm();
+    expect(container.querySelector('select[name="billingCycle"]')).toBeNull();
+    expect(container.querySelector('input[name="billingAmount"]')).toBeNull();
+
+    fireEvent.change(container.querySelector('select[name="typeId"]')!, { target: { value: '2' } }); // Netflix plan, subscription
+    expect(container.querySelector('select[name="billingCycle"]')).toBeTruthy();
+    expect(container.querySelector('input[name="billingAmount"]')).toBeTruthy();
+  });
+
+  it('clears the Billing fields and removes them from the form when the kind switches away', () => {
+    const { container } = renderForm();
+    fireEvent.change(container.querySelector('select[name="typeId"]')!, { target: { value: '2' } }); // subscription
+    fireEvent.change(container.querySelector('select[name="billingCycle"]')!, { target: { value: 'monthly' } });
+    fireEvent.change(container.querySelector('input[name="billingAmount"]')!, { target: { value: '15.99' } });
+    expect((container.querySelector('select[name="billingCycle"]') as HTMLSelectElement).value).toBe('monthly');
+
+    fireEvent.change(container.querySelector('select[name="typeId"]')!, { target: { value: '3' } }); // loan
+    expect(container.querySelector('select[name="billingCycle"]')).toBeNull();
+    expect(container.querySelector('input[name="billingAmount"]')).toBeNull();
+
+    // Switching back to a subscription/contract type starts the fields blank again --
+    // the earlier value was cleared, not just hidden.
+    fireEvent.change(container.querySelector('select[name="typeId"]')!, { target: { value: '2' } });
+    expect((container.querySelector('select[name="billingCycle"]') as HTMLSelectElement).value).toBe('');
+    expect((container.querySelector('input[name="billingAmount"]') as HTMLInputElement).value).toBe('');
+  });
+
+  it('offers a "Not set" default plus Monthly/Annual options', () => {
+    const { container } = renderForm();
+    fireEvent.change(container.querySelector('select[name="typeId"]')!, { target: { value: '2' } });
+    const select = container.querySelector('select[name="billingCycle"]') as HTMLSelectElement;
+    const options = Array.from(select.querySelectorAll('option')).map((o) => [o.getAttribute('value'), o.textContent]);
+    expect(options).toEqual([['', 'Not set'], ['monthly', 'Monthly'], ['annual', 'Annual']]);
+  });
+
   // v1.2.2 Task 2: dynamic form labels -- the Purchase-date field label, the term-length
   // legend and the Lifetime checkbox's own label all follow the SELECTED type's kind live.
   it('follows the SELECTED type kind live for the date label, term legend and open-ended label', () => {

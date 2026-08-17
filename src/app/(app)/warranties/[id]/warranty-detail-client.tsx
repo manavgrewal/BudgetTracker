@@ -11,7 +11,18 @@ import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { Money } from '@/components/ui/Money';
 import { Notice } from '@/components/ui/Notice';
 import { Field, inputClass, labelClass, selectClass, textareaClass } from '@/components/ui/form';
-import { formEndLabel, formOpenEndedLabel, formStartLabel, formTermLabel, type ItemKind } from '@/lib/warranty/constants';
+import {
+  BILLING_CYCLE_LABELS,
+  BILLING_CYCLES,
+  billingAllowedForKind,
+  billingCycleSuffix,
+  formEndLabel,
+  formOpenEndedLabel,
+  formStartLabel,
+  formTermLabel,
+  openEndedDisplayLabel,
+  type ItemKind,
+} from '@/lib/warranty/constants';
 import type { WarrantyStatus } from '@/lib/warranty/expiry';
 import type { WarrantyItemRow, WarrantyReceiptRow } from '@/lib/warranty/items';
 import {
@@ -206,8 +217,24 @@ export function WarrantyDetailClient({
                   ? 'Unknown'
                   : `${item.warrantyMonths} months`}
             </Detail>
-            <Detail label={expiryLabel}>{item.expiryDate ?? '—'}</Detail>
+            {/* v1.3.0 fix: an open-ended item (isLifetime) has no expiry_date to show -- that
+                used to render as a bare blank/em dash here, which reads as broken. Show the
+                per-kind open-ended word instead; a non-lifetime item with a genuinely unknown
+                term still falls through to the em dash, unchanged. */}
+            <Detail label={expiryLabel}>{item.isLifetime ? openEndedDisplayLabel(item.kind) : (item.expiryDate ?? '—')}</Detail>
             <Detail label="Price">{item.priceCents === null ? '—' : <Money cents={item.priceCents} plain />}</Detail>
+            {billingAllowedForKind(item.kind) ? (
+              <Detail label="Billing">
+                {item.billingCycle === null && item.billingAmountCents === null ? (
+                  '—'
+                ) : (
+                  <>
+                    {item.billingAmountCents === null ? '—' : <Money cents={item.billingAmountCents} plain />}
+                    {item.billingCycle === null ? null : ` ${billingCycleSuffix(item.billingCycle)}`}
+                  </>
+                )}
+              </Detail>
+            ) : null}
             <Detail label="Owner">{item.ownerName}</Detail>
             <Detail label="Notes">{item.notes ?? '—'}</Detail>
             <Detail label="Transaction">
@@ -329,6 +356,18 @@ function EditForm({
   const [typeId, setTypeId] = useState(item.typeId === null ? '' : String(item.typeId));
   const selectedType = types.find((t) => String(t.id) === typeId);
   const selectedKind: ItemKind = selectedType?.kind ?? 'warranty';
+  // v1.3.0: same live-follows-the-selected-kind treatment as the type/date fields above.
+  const [billingCycle, setBillingCycle] = useState(item.billingCycle ?? '');
+  const [billingAmount, setBillingAmount] = useState(
+    item.billingAmountCents === null ? '' : (item.billingAmountCents / 100).toFixed(2),
+  );
+  const billingApplicable = billingAllowedForKind(selectedKind);
+  useEffect(() => {
+    if (!billingApplicable) {
+      setBillingCycle('');
+      setBillingAmount('');
+    }
+  }, [billingApplicable]);
 
   return (
     <Card className="max-w-2xl">
@@ -376,6 +415,34 @@ function EditForm({
                 className={inputClass}
               />
             </Field>
+
+            {billingApplicable ? (
+              <>
+                <Field label="Billing">
+                  <select
+                    name="billingCycle"
+                    value={billingCycle}
+                    onChange={(e) => setBillingCycle(e.target.value)}
+                    className={selectClass}
+                  >
+                    <option value="">Not set</option>
+                    {BILLING_CYCLES.map((cycle) => (
+                      <option key={cycle} value={cycle}>{BILLING_CYCLE_LABELS[cycle]}</option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Amount">
+                  <input
+                    name="billingAmount"
+                    inputMode="decimal"
+                    placeholder="e.g. 15.99"
+                    value={billingAmount}
+                    onChange={(e) => setBillingAmount(e.target.value)}
+                    className={inputClass}
+                  />
+                </Field>
+              </>
+            ) : null}
           </div>
 
           <fieldset className="flex flex-col gap-2">
