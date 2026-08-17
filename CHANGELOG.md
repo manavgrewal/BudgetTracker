@@ -121,7 +121,7 @@ All notable changes to Budget Tracker are recorded here.
   reuses it on every start after that. Setting `SECRET_KEY` yourself still works exactly as
   before and always takes precedence. This only removes the requirement, not the option.
 - **Prebuilt multi-arch images on GHCR.** Tagging a release (`v*`) or running the new
-  `Release image` workflow by hand builds and pushes `ghcr.io/manavgrewal/budgettracker`
+  `Release image` workflow by hand builds and pushes `ghcr.io/vibelogiccode/budgettracker`
   for linux/amd64 and linux/arm64, tagged with both the version and `latest`. Paired with a
   new pull-only compose file, `install/synology-compose-pull.yml`, installing no longer
   requires a source checkout or a `docker build`. It is an Immich-style paste-and-go install

@@ -22,9 +22,6 @@ permissions:
   contents: read
   packages: write
 
-env:
-  IMAGE_NAME: ghcr.io/manavgrewal/budgettracker
-
 jobs:
   guard:
     name: Guard (version + OCR assets)
@@ -88,6 +85,14 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # Owner-agnostic so a GitHub account/org rename never breaks this workflow. GHCR
+      # requires lowercase image paths, but github.repository_owner preserves the owner's
+      # display case (e.g. "VibeLogicCode"), so it's explicitly lowercased here.
+      - name: Compute image name
+        run: |
+          OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "IMAGE_NAME=ghcr.io/${OWNER_LC}/budgettracker" >> "$GITHUB_ENV"
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3

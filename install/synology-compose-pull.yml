@@ -1,7 +1,7 @@
 # Budget Tracker — prebuilt image, paste this into Container Manager -> Project -> Create.
 #
 # WHAT THIS IS: the pull-only compose file. Docker pulls a ready-to-run multi-arch image
-# (linux/amd64 + linux/arm64) from GHCR — ghcr.io/manavgrewal/budgettracker — instead of
+# (linux/amd64 + linux/arm64) from GHCR — ghcr.io/vibelogiccode/budgettracker — instead of
 # building one from source. No Dockerfile, no source checkout, no build wait. It works the
 # same way on Synology Container Manager, QNAP, Unraid, TrueNAS, or any other Docker host;
 # nothing in this file is Synology-specific except this comment block.
@@ -28,7 +28,7 @@
 # its own — without Watchtower, an install pinned to ":latest" would in practice never update.
 #
 # PINNING A VERSION (opts OUT of auto-updates): to stay on a known-good release instead of
-# always taking the newest one, change "ghcr.io/manavgrewal/budgettracker:latest" below to a specific version tag, e.g. "ghcr.io/manavgrewal/budgettracker:1.2.0".
+# always taking the newest one, change "ghcr.io/vibelogiccode/budgettracker:latest" below to a specific version tag, e.g. "ghcr.io/vibelogiccode/budgettracker:1.2.0".
 # Watchtower only ever replaces a container when a *new* image lands for the tag that container is running, so a
 # pinned numeric tag never changes underneath you — Watchtower stays running but has nothing
 # to do for this service. If you would rather it not run at all in that case, delete the
@@ -46,7 +46,7 @@
 # above and restarting the project — see docs/INSTALL-SYNOLOGY.md for the click-by-click steps.
 services:
   budget-tracker:
-    image: ghcr.io/manavgrewal/budgettracker:latest
+    image: ghcr.io/vibelogiccode/budgettracker:latest
     container_name: budget-tracker
     restart: unless-stopped
     ports:

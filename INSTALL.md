@@ -28,7 +28,7 @@ newer `:latest` image is published — nothing to run by hand. See "Updating" be
 pinned-version alternative.
 
 Pin a specific release instead of always tracking the newest image by changing `:latest` to a
-version tag in the compose file's `image:` line, e.g. `ghcr.io/manavgrewal/budgettracker:1.2.0`.
+version tag in the compose file's `image:` line, e.g. `ghcr.io/vibelogiccode/budgettracker:1.2.0`.
 Doing so also opts out of the automatic updates described above — Watchtower only replaces a
 container when a newer image lands for the tag it is already running.
 
@@ -159,7 +159,7 @@ Two paths, pick one:
   works — the app's data lives inside this folder):
   ```bash
   cd /volume2/docker        # or /volume1/docker — wherever you cloned/uploaded it
-  git clone https://github.com/manavgrewal/BudgetTracker.git
+  git clone https://github.com/VibeLogicCode/BudgetTracker.git
   cd BudgetTracker
   sudo bash install/install-synology.sh
   ```

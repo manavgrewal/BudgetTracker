@@ -48,8 +48,11 @@ describe('.github/workflows/release-image.yml', () => {
     expect(permissionsBlock).toMatch(/packages:\s*write/);
   });
 
-  it('targets the GHCR image name', () => {
-    expect(workflow).toContain('ghcr.io/manavgrewal/budgettracker');
+  it('targets the GHCR image name, computed from the repo owner rather than hardcoded (so an account/org rename cannot break it), lowercased for GHCR', () => {
+    expect(workflow).toContain('github.repository_owner');
+    expect(workflow).toContain('ghcr.io/${OWNER_LC}/budgettracker');
+    expect(workflow).toMatch(/tr\s+'\[:upper:\]'\s+'\[:lower:\]'/);
+    expect(workflow).not.toMatch(/ghcr\.io\/[a-zA-Z0-9-]+\/budgettracker/);
   });
 
   it('pins every third-party action to a major version, not a floating branch or SHA-less latest', () => {
@@ -113,7 +116,7 @@ describe('install/synology-compose-pull.yml', () => {
   const buildCompose = read('install/synology-compose.yml');
 
   it('pulls the GHCR image and has no build line', () => {
-    expect(pullCompose).toContain('image: ghcr.io/manavgrewal/budgettracker:latest');
+    expect(pullCompose).toContain('image: ghcr.io/vibelogiccode/budgettracker:latest');
     expect(pullCompose).not.toMatch(/^\s*build:\s*\./m);
     expect(pullCompose).not.toContain('build: .');
   });
