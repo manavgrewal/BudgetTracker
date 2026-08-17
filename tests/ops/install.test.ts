@@ -681,7 +681,15 @@ describe('the app makes no network call unless SimpleFIN is configured', () => {
     // Components included — a page.tsx has no 'use client' and still renders
     // server-side) must route through the one allowed server-side call site.
     const srcRoot = path.join(root, 'src');
-    const allowedFile = path.join(srcRoot, 'lib', 'simplefin', 'client.ts');
+    const allowedDirs = [
+      path.join(srcRoot, 'lib', 'simplefin'),
+      // v1.3.0: the second opt-in egress exception (notifications spec MUST-9.5).
+      // Dormant until configured, two destinations, both chosen by the user. The
+      // tighter invariant — exactly two fetch sites, both in send/telegram.ts, and
+      // one URL literal — lives in tests/ops/notify-egress.test.ts (MUST-9.4).
+      path.join(srcRoot, 'lib', 'notify', 'send'),
+    ];
+    const isAllowed = (file: string) => allowedDirs.some((dir) => file === dir || file.startsWith(`${dir}${path.sep}`));
     const offenders: string[] = [];
     const clientComponentHits: string[] = [];
     for (const file of walkTsFiles(srcRoot)) {
@@ -689,7 +697,7 @@ describe('the app makes no network call unless SimpleFIN is configured', () => {
       const stripped = stripComments(raw);
       if (!/\bfetch\s*\(/.test(stripped)) continue;
 
-      if (file === allowedFile) continue;
+      if (isAllowed(file)) continue;
       if (isClientComponent(raw)) {
         clientComponentHits.push(path.relative(root, file));
         continue;
