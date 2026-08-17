@@ -101,8 +101,8 @@ describe('version and changelog', () => {
   const pkg = JSON.parse(read('package.json')) as { version: string; dependencies: Record<string, string> };
   const changelog = read('CHANGELOG.md');
 
-  it('declares 1.1.0 as the single source of truth', () => {
-    expect(pkg.version).toBe('1.1.0');
+  it('declares 1.2.0 as the single source of truth', () => {
+    expect(pkg.version).toBe('1.2.0');
   });
 
   it('declares the three new runtime dependencies (§17.27)', () => {
@@ -111,13 +111,13 @@ describe('version and changelog', () => {
     }
   });
 
-  it('has a dated 1.1.0 section and a fresh empty Unreleased above it', () => {
-    expect(changelog).toContain('## [1.1.0] - 2026-08-16');
+  it('has a dated 1.2.0 section and a fresh empty Unreleased above it', () => {
+    expect(changelog).toContain('## [1.2.0] - 2026-08-17');
     const unreleased = changelog.indexOf('## Unreleased');
-    const released = changelog.indexOf('## [1.1.0]');
+    const released = changelog.indexOf('## [1.2.0]');
     expect(unreleased).toBeGreaterThan(-1);
     expect(unreleased).toBeLessThan(released);
-    // §17.23: the previously-unreleased entries are ABSORBED into 1.1.0, so Unreleased is
+    // §17.23: the previously-unreleased entries are ABSORBED into 1.2.0, so Unreleased is
     // now empty — it must no longer mention them.
     expect(changelog.slice(unreleased, released)).not.toContain('Forced password change');
   });

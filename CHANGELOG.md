@@ -21,6 +21,51 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.2.0] - 2026-08-17
+
+### Added
+
+- **Restore from Settings.** Restoring a backup no longer requires stopping the container by
+  hand: pick a backup on **Settings → Backups**, tick the confirm box and click **Restore and
+  restart**. The archive is fully validated before anything is staged, then the app restarts
+  itself and applies the restore on the way back up, before the database is opened — the page
+  is unreachable for about 30 seconds, and refreshing it afterwards shows whether the restore
+  succeeded. The previous database and (for a `.tar.gz` restore) the previous receipts folder
+  are kept as timestamped safety copies and swept after 30 days, with the most recent of each
+  always kept. If the container has no restart policy, nothing is lost: the request survives
+  on disk and is applied the next time the app is started, by hand or otherwise. A backup made
+  by a newer version of Budget Tracker than the one running is refused with an explanation.
+- **A modern visual redesign**, light and dark, following your device's theme by default with
+  a manual toggle in the header that remembers your choice. Every page — dashboard,
+  transactions, import, review, budgets, goals, reports, warranties and every settings page —
+  now shares one design system: a real navigation rail on desktop that collapses to a top bar
+  and menu on phones, consistent cards, tables, buttons and empty states, and signed amounts
+  coloured by sign. Accessibility pass included: clearer focus rings, labelled icon-only
+  buttons, and form fields properly associated with their labels.
+
+### Changed
+
+- The `restore-backup` CLI gains `--allow-newer` to bypass the one-way migration guard for a
+  genuine disaster-recovery case, and now takes its own timestamped safety copy of the
+  database (and receipts, for an archive) before writing anything, with the same preflight
+  validation the in-app restore uses.
+- The README and INSTALL guides now lead with the Settings → Backups restore path, keeping the
+  CLI procedure as the documented fallback for when the app will not start at all.
+
+### Fixed
+
+- Synology installs no longer assume `/volume1`: the installer roots at wherever the project
+  checkout actually lives, so any-volume installs work correctly.
+- An inherited Synology ACL on the data directory could leave the database unopenable
+  (`SQLITE_CANTOPEN`) even with permissions showing `777`; the installer now removes the
+  inherited ACL so the container can actually write to it.
+
+**Verify after updating:** restore a backup once via Settings → Backups → Restore — the app
+will restart itself, be unreachable for about 30 seconds, and show the restore outcome on
+Settings → Backups when it comes back. If your container runs without a restart policy
+(`docker-compose.yml` ships `restart: unless-stopped`, so this is only relevant for a custom
+setup), starting it back up by hand applies the restore the same way.
+
 ## [1.1.0] - 2026-08-16
 
 ### Added
