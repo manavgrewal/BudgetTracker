@@ -45,7 +45,7 @@ const hostSchema = z
   .string()
   .min(1)
   .max(255)
-  .regex(/^[A-Za-z0-9.:_-]+$/, 'Server must be a hostname, with no https:// in front of it.');
+  .regex(/^[A-Za-z0-9.:_-]+$/, 'Server must be a hostname, not a URL: no scheme (like https) in front of it.');
 
 const smtpSchema = z
   .object({

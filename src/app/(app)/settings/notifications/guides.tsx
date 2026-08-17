@@ -5,8 +5,8 @@ import type { SmtpPreset } from '@/lib/notify/config';
  * spec §11.7. It is content, not placeholder text, and it lives in one module so it is
  * reviewable as prose and testable by string match (§17.5, R10).
  *
- * MUST-9.1a / decision 26 — every external address here is PLAIN TEXT, never an <a href>.
- * Nothing in the app resolves, fetches, embeds, previews or link-checks any of them. That
+ * MUST-9.1a / decision 26 — every external address here is PLAIN TEXT, never a clickable
+ * anchor. Nothing in the app resolves, fetches, embeds, previews or link-checks any of them. That
  * keeps the zero-egress claim trivially auditable, survives copy-paste into a screenshot,
  * and removes any question of what a click inside the app might reach.
  *
