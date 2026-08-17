@@ -11,7 +11,7 @@ import {
   recordSmtpOutcome,
   recordTargetOutcome,
 } from '@/lib/notify/config';
-import { NotifyCredentialError, authPlainBase64, scrubSecrets } from '@/lib/notify/crypto';
+import { CREDENTIAL_UNREADABLE, NotifyCredentialError, authPlainBase64, scrubSecrets } from '@/lib/notify/crypto';
 import { CHANNELS, type Channel } from '@/lib/notify/events';
 import { NotifyError, deliver, type DeliveryRequest } from '@/lib/notify/send';
 
@@ -20,10 +20,18 @@ export const OUTBOX_BATCH = 50;
 export const MAX_ATTEMPTS = 8;
 export const MAX_BACKOFF_MS = 6 * 60 * 60 * 1000;
 export const PENDING_MAX_AGE_HOURS = 24;
-export const OUTBOX_RETENTION_DAYS = 90;
+/**
+ * MUST-3.14/R3 — must exceed the maximum `comingDueDays` window (365, the top of the 1-365
+ * range in notification_user_settings) with margin. A shorter retention would let the sweep
+ * delete a 'sent' coming_due row while the item is still inside the user's lookahead window,
+ * resurrecting its dedup key and re-alerting on the same item every retention period.
+ */
+export const OUTBOX_RETENTION_DAYS = 400;
 
 export const CHANNEL_REMOVED_ERROR = 'Channel was removed before delivery.';
 export const PENDING_EXPIRED_ERROR = 'Not delivered within 24 hours.';
+/** MUST-7.4: written on every row a broken channel group skips without attempting. */
+export const DEFERRED_ERROR = 'Deferred: an earlier send this pass failed for this channel.';
 
 /** MUST-7.6: 2, 4, 8, 16, 32, 64, 128, 256 minutes, capped at six hours. */
 export function backoffMs(attempts: number): number {
@@ -223,10 +231,10 @@ function scrubForRow(message: string, request: DeliveryRequest | null): string {
   return scrubSecrets(message, secrets);
 }
 
-function markSent(id: number, at: string): void {
+function markSent(id: number, attempts: number, at: string): void {
   getDb()
     .update(notificationOutbox)
-    .set({ status: 'sent', sentAt: at, lastError: null })
+    .set({ status: 'sent', attempts, sentAt: at, lastError: null })
     .where(eq(notificationOutbox.id, id))
     .run();
 }
@@ -247,8 +255,12 @@ function markRetry(id: number, attempts: number, message: string, nextAt: string
     .run();
 }
 
-function deferRow(id: number, nextAt: string, message: string): void {
-  getDb().update(notificationOutbox).set({ nextAttemptAt: nextAt, lastError: message }).where(eq(notificationOutbox.id, id)).run();
+function deferRow(id: number, nextAt: string): void {
+  getDb()
+    .update(notificationOutbox)
+    .set({ nextAttemptAt: nextAt, lastError: DEFERRED_ERROR })
+    .where(eq(notificationOutbox.id, id))
+    .run();
 }
 
 /**
@@ -321,13 +333,24 @@ async function drain(now: Date): Promise<{ sent: number; failed: number; deferre
           // MUST-7.4: the per-channel circuit break. Every remaining row is deferred to
           // the same next_attempt_at WITHOUT being attempted, so a dead relay cannot cost
           // 50 × 15 s of connect timeouts inside one tick.
-          deferRow(row.id, brokenNextAt, broken);
+          deferRow(row.id, brokenNextAt);
           deferred += 1;
           continue;
         }
 
         const built = buildRequest(row);
         if ('dead' in built) {
+          // MUST-7.10: an unreadable credential (a rotated SECRET_KEY, a tampered ciphertext)
+          // is still an outcome worth surfacing in Settings, unlike CHANNEL_REMOVED_ERROR
+          // where the target/relay row is simply gone and there is nothing left to record it
+          // on.
+          if (built.dead === CREDENTIAL_UNREADABLE) {
+            if (channel === 'telegram') {
+              recordTargetOutcome({ userId: row.userId, channel, ok: false, error: CREDENTIAL_UNREADABLE, at: now });
+            } else {
+              recordSmtpOutcome({ ok: false, error: CREDENTIAL_UNREADABLE, at: now });
+            }
+          }
           markFailed(row.id, row.attempts, built.dead);
           failed += 1;
           continue;
@@ -336,7 +359,7 @@ async function drain(now: Date): Promise<{ sent: number; failed: number; deferre
         const attempts = row.attempts + 1;
         try {
           await deliver(built.request);
-          markSent(row.id, at);
+          markSent(row.id, attempts, at);
           recordTargetOutcome({ userId: row.userId, channel, ok: true, at: now });
           if (channel === 'email') recordSmtpOutcome({ ok: true, at: now });
           sent += 1;

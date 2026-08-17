@@ -239,7 +239,9 @@ describe('runNightlyJob', () => {
 describe('MUST-3.14: the sweep prunes delivered notifications', () => {
   it('reports outboxRowsPurged and leaves pending rows alone', () => {
     const userId = insertTestUser(current!.db);
-    const old = '2026-01-01T00:00:00.000Z';
+    // MUST-3.12/R3: OUTBOX_RETENTION_DAYS is 400, comfortably past the maximum 365-day
+    // comingDueDays window, so "old" here must be well past 400 days too.
+    const old = '2025-01-01T00:00:00.000Z';
     const recent = '2026-08-17T00:00:00.000Z';
     const insert = (key: string, status: string, createdAt: string) =>
       current!.sqlite
@@ -259,5 +261,29 @@ describe('MUST-3.14: the sweep prunes delivered notifications', () => {
       current!.sqlite.prepare('select dedup_key from notification_outbox order by dedup_key').all() as { dedup_key: string }[]
     ).map((r) => r.dedup_key);
     expect(keys).toEqual(['new-sent', 'old-pending']);
+  });
+
+  it('MUST-3.12/R3: keeps a 399-day-old sent row and purges a 401-day-old one', () => {
+    const userId = insertTestUser(current!.db);
+    const at = new Date('2026-08-17T12:00:00Z');
+    const day = 24 * 60 * 60 * 1000;
+    const at399 = new Date(at.getTime() - 399 * day).toISOString();
+    const at401 = new Date(at.getTime() - 401 * day).toISOString();
+    const insert = (key: string, createdAt: string) =>
+      current!.sqlite
+        .prepare(
+          `insert into notification_outbox (user_id, channel, event_id, dedup_key, subject, body, status, next_attempt_at, created_at)
+           values (?, 'email', 'coming_due', ?, 's', 'b', 'sent', ?, ?)`,
+        )
+        .run(userId, key, createdAt, createdAt);
+    insert('399-old', at399);
+    insert('401-old', at401);
+
+    const result = runMaintenanceSweep(at);
+    expect(result.outboxRowsPurged).toBe(1);
+    const keys = (
+      current!.sqlite.prepare('select dedup_key from notification_outbox order by dedup_key').all() as { dedup_key: string }[]
+    ).map((r) => r.dedup_key);
+    expect(keys).toEqual(['399-old']);
   });
 });

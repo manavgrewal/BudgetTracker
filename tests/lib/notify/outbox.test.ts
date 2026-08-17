@@ -1,12 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { createTestDb, insertTestUser, type TestDb } from '../../helpers/db';
-import { saveEmailTarget, saveSmtp, saveTelegramTarget, getTarget, removeTarget } from '@/lib/notify/config';
+import { getSmtp, saveEmailTarget, saveSmtp, saveTelegramTarget, getTarget, removeTarget } from '@/lib/notify/config';
+import { CREDENTIAL_UNREADABLE } from '@/lib/notify/crypto';
 import { NotifyError, resetNotifySenderForTests, setNotifySenderForTests, type DeliveryRequest } from '@/lib/notify/send';
 import {
   CHANNEL_REMOVED_ERROR,
+  DEFERRED_ERROR,
   MAX_ATTEMPTS,
   MAX_BACKOFF_MS,
+  OUTBOX_RETENTION_DAYS,
   PENDING_EXPIRED_ERROR,
   backoffMs,
   countPendingOutbox,
@@ -110,11 +113,12 @@ describe('MUST-7.3: the pump', () => {
     expect(result).toEqual({ sent: 2, failed: 0, deferred: 0 });
     expect(sent.map((r) => r.channel).sort()).toEqual(['email', 'telegram']);
     expect(sent.every((r) => r.subject === 'Subject' && r.body === 'Body')).toBe(true);
-    const rows = t.sqlite.prepare(`select status, sent_at from notification_outbox`).all() as {
+    const rows = t.sqlite.prepare(`select status, attempts, sent_at from notification_outbox`).all() as {
       status: string;
+      attempts: number;
       sent_at: string | null;
     }[];
-    expect(rows.every((r) => r.status === 'sent' && r.sent_at !== null)).toBe(true);
+    expect(rows.every((r) => r.status === 'sent' && r.attempts === 1 && r.sent_at !== null)).toBe(true);
   });
 
   it('MUST-7.3: per-channel isolation — a Telegram throw leaves email rows untouched', async () => {
@@ -149,14 +153,19 @@ describe('MUST-7.3: the pump', () => {
     const result = await pumpOutbox(new Date('2026-08-17T12:05:00Z'));
     expect(calls).toBe(1);
     expect(result.deferred).toBe(3);
-    const rows = t.sqlite.prepare(`select attempts, next_attempt_at from notification_outbox order by id`).all() as {
+    const rows = t.sqlite.prepare(`select attempts, next_attempt_at, last_error from notification_outbox order by id`).all() as {
       attempts: number;
       next_attempt_at: string;
+      last_error: string;
     }[];
     // Every row in the group shares the same next_attempt_at; only the attempted one
     // incremented its counter.
     expect(rows.map((r) => r.attempts)).toEqual([1, 0, 0, 0]);
     expect(new Set(rows.map((r) => r.next_attempt_at)).size).toBe(1);
+    // The attempted row carries the real (scrubbed) transport error; the three skipped rows
+    // carry the fixed DEFERRED_ERROR constant, never the propagated message (MUST-7.4).
+    expect(rows[0]?.last_error).toBe('relay unreachable');
+    expect(rows.slice(1).every((r) => r.last_error === DEFERRED_ERROR)).toBe(true);
   });
 
   it('MUST-7.7: a permanent failure flips to failed on the first attempt', async () => {
@@ -277,6 +286,36 @@ describe('MUST-7.3: the pump', () => {
     expect(getTarget(userId, 'telegram')?.lastSuccessAt).toBe('2026-08-17T12:01:00.000Z');
   });
 
+  it('MUST-7.10: an unreadable Telegram credential is recorded on the target row', async () => {
+    const userId = configuredUser();
+    removeTarget(userId, 'email');
+    enqueue({ userId, eventId: 'coming_due', dedupKey: 'k', subject: 's', body: 'b', at: new Date('2026-08-17T12:00:00Z') });
+    // Corrupts the stored ciphertext so decryptSecret() throws NotifyCredentialError, exactly
+    // as a rotated SECRET_KEY or a tampered column would.
+    t.sqlite.prepare(`update notification_targets set secret_encrypted = 'not-valid-ciphertext' where user_id = ? and channel = 'telegram'`).run(userId);
+    const result = await pumpOutbox(new Date('2026-08-17T12:05:00Z'));
+    expect(result.failed).toBe(1);
+    expect(sent).toHaveLength(0);
+    expect(getTarget(userId, 'telegram')?.lastError).toBe(CREDENTIAL_UNREADABLE);
+    const row = t.sqlite.prepare(`select status, last_error from notification_outbox`).get() as {
+      status: string;
+      last_error: string;
+    };
+    expect(row.status).toBe('failed');
+    expect(row.last_error).toBe(CREDENTIAL_UNREADABLE);
+  });
+
+  it('MUST-7.10: an unreadable SMTP credential is recorded on the relay row', async () => {
+    const userId = configuredUser();
+    removeTarget(userId, 'telegram');
+    enqueue({ userId, eventId: 'coming_due', dedupKey: 'k', subject: 's', body: 'b', at: new Date('2026-08-17T12:00:00Z') });
+    t.sqlite.prepare(`update notification_smtp set password_encrypted = 'not-valid-ciphertext' where id = 1`).run();
+    const result = await pumpOutbox(new Date('2026-08-17T12:05:00Z'));
+    expect(result.failed).toBe(1);
+    expect(sent).toHaveLength(0);
+    expect(getSmtp()?.lastError).toBe(CREDENTIAL_UNREADABLE);
+  });
+
   it('MUST-6.3: an overlapping pump is a no-op rather than a double send', async () => {
     const userId = configuredUser();
     removeTarget(userId, 'telegram');
@@ -320,11 +359,11 @@ describe('MUST-7.8: boot expiry', () => {
 });
 
 describe('MUST-3.14: retention', () => {
-  it('purges sent and failed rows older than 90 days and keeps pending ones', () => {
+  it('purges sent and failed rows older than 400 days and keeps pending ones', () => {
     const userId = configuredUser();
     removeTarget(userId, 'telegram');
-    enqueue({ userId, eventId: 'coming_due', dedupKey: 'a', subject: 's', body: 'b', at: new Date('2026-01-01T00:00:00Z') });
-    enqueue({ userId, eventId: 'coming_due', dedupKey: 'b', subject: 's', body: 'b', at: new Date('2026-01-01T00:00:00Z') });
+    enqueue({ userId, eventId: 'coming_due', dedupKey: 'a', subject: 's', body: 'b', at: new Date('2025-01-01T00:00:00Z') });
+    enqueue({ userId, eventId: 'coming_due', dedupKey: 'b', subject: 's', body: 'b', at: new Date('2025-01-01T00:00:00Z') });
     enqueue({ userId, eventId: 'coming_due', dedupKey: 'c', subject: 's', body: 'b', at: new Date('2026-08-17T00:00:00Z') });
     t.db.run(sql`update notification_outbox set status = 'sent' where dedup_key = 'a'`);
     t.db.run(sql`update notification_outbox set status = 'failed' where dedup_key = 'b'`);
@@ -332,6 +371,21 @@ describe('MUST-3.14: retention', () => {
     expect(purged).toBe(2);
     const remaining = t.sqlite.prepare(`select dedup_key from notification_outbox`).all() as { dedup_key: string }[];
     expect(remaining.map((r) => r.dedup_key)).toEqual(['c']);
+  });
+
+  it('MUST-3.12/R3: keeps a 399-day-old sent row and purges a 401-day-old one', () => {
+    expect(OUTBOX_RETENTION_DAYS).toBe(400);
+    const userId = configuredUser();
+    removeTarget(userId, 'telegram');
+    const at = new Date('2026-08-17T12:00:00Z');
+    const day = 24 * 60 * 60 * 1000;
+    enqueue({ userId, eventId: 'coming_due', dedupKey: '399-old', subject: 's', body: 'b', at: new Date(at.getTime() - 399 * day) });
+    enqueue({ userId, eventId: 'coming_due', dedupKey: '401-old', subject: 's', body: 'b', at: new Date(at.getTime() - 401 * day) });
+    t.db.run(sql`update notification_outbox set status = 'sent' where dedup_key in ('399-old', '401-old')`);
+    const purged = purgeOldOutboxRows(at);
+    expect(purged).toBe(1);
+    const remaining = t.sqlite.prepare(`select dedup_key from notification_outbox`).all() as { dedup_key: string }[];
+    expect(remaining.map((r) => r.dedup_key)).toEqual(['399-old']);
   });
 });
 

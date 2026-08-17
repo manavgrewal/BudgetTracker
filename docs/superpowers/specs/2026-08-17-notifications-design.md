@@ -258,7 +258,7 @@ and `changes === 0` means "already fired". There is **no separate dedup table an
 
 `notification_prefs`'s composite PK already covers every `user_id`-prefixed lookup. `notification_targets` is at most `2 × users` rows and needs nothing beyond its unique index.
 
-**MUST-3.14 (retention).** `runMaintenanceSweep()` in `src/lib/backup.ts` gains a sixth purge: delete `notification_outbox` rows with `status IN ('sent','failed')` and `created_at` older than `OUTBOX_RETENTION_DAYS = 90`, returned as `outboxRowsPurged` on `SweepResult`. Ninety days is comfortably longer than the longest-lived dedup key that could still matter (a monthly budget key, ~31 days) and short enough that the table stays trivial.
+**MUST-3.14 (retention).** `runMaintenanceSweep()` in `src/lib/backup.ts` gains a sixth purge: delete `notification_outbox` rows with `status IN ('sent','failed')` and `created_at` older than `OUTBOX_RETENTION_DAYS = 400`, returned as `outboxRowsPurged` on `SweepResult`. The window must exceed the maximum `comingDueDays` lookahead (365 days) with margin — a shorter retention could delete a 'sent' `coming_due` row while the item is still inside the user's window, resurrecting its dedup key and re-alerting on the same item every retention period.
 
 ### 3.9 Drizzle mirror
 
@@ -1222,7 +1222,7 @@ Each is a single constant or a one-paragraph change if the owner wants it differ
 13. **Send-test rate limiting is in-memory**, unlike the DB-backed login limiter — different threat, and a restart resetting it is acceptable (MUST-13.2).
 14. **At-least-once delivery**, with a crash mid-send able to duplicate one message. Stated in the spec rather than papered over.
 15. **`PENDING_MAX_AGE_HOURS = 24`** — pending rows older than a day are abandoned at boot, which also handles the restored-database case.
-16. **`OUTBOX_RETENTION_DAYS = 90`**, `MAX_ATTEMPTS = 8`, `OUTBOX_BATCH = 50`, `TELEGRAM_MAX_CHARS = 4000`, 15 s connect/request timeouts, 20 s SMTP socket timeout.
+16. **`OUTBOX_RETENTION_DAYS = 400`** (must exceed the maximum 365-day `comingDueDays` window, or pruning resurrects dedup keys), `MAX_ATTEMPTS = 8`, `OUTBOX_BATCH = 50`, `TELEGRAM_MAX_CHARS = 4000`, 15 s connect/request timeouts, 20 s SMTP socket timeout.
 17. **`nodemailer` is the only new dependency**; Telegram uses raw `fetch`.
 18. **Plain text on both channels** — no Telegram `parse_mode`, no HTML email.
 19. **The singleton SMTP row is enforced in SQL** (`CHECK (id = 1)`), not only in the app layer as `simplefin_connections` does.
