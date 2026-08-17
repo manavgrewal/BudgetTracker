@@ -316,9 +316,7 @@ describe('§11.6: recent deliveries', () => {
               userName: 'Sam',
               channel: 'email',
               eventId: 'coming_due',
-              subject: 'Coming due: Dishwasher',
               status: 'failed',
-              attempts: 8,
               lastError: '550 mailbox unavailable',
               createdAt: '2026-08-17T12:00:00.000Z',
               sentAt: null,
@@ -330,6 +328,159 @@ describe('§11.6: recent deliveries', () => {
     expect(container.textContent).toContain('Something is coming due');
     expect(container.textContent).toContain('550 mailbox unavailable');
     expect(queryByText(/retry/i)).toBeNull();
+  });
+
+  it('renders the timestamp in the app convention, not a raw ISO string', () => {
+    const { container } = render(
+      <NotificationsClient
+        {...props({
+          deliveries: [
+            {
+              id: 1,
+              userId: 1,
+              userName: 'Sam',
+              channel: 'telegram',
+              eventId: 'coming_due',
+              status: 'sent',
+              lastError: null,
+              createdAt: '2026-08-17T12:34:56.000Z',
+              sentAt: '2026-08-17T12:35:00.000Z',
+            },
+          ],
+        })}
+      />,
+    );
+    expect(container.textContent).toContain('2026-08-17 12:35');
+    expect(container.textContent).not.toContain('2026-08-17T12:35:00.000Z');
+  });
+
+  it('review fix (LOW): renders each status as a badge, distinguishing sent/failed/pending', () => {
+    const row = (status: 'sent' | 'failed' | 'pending') => ({
+      id: 1,
+      userId: 1,
+      userName: 'Sam',
+      channel: 'email' as const,
+      eventId: 'coming_due',
+      status,
+      lastError: null,
+      createdAt: '2026-08-17T12:00:00.000Z',
+      sentAt: null,
+    });
+    const sent = render(<NotificationsClient {...props({ deliveries: [row('sent')] })} />);
+    const sentBadge = sent.container.querySelector('.badge');
+    expect(sentBadge?.textContent).toBe('Sent');
+    expect(sentBadge?.className).toContain('badge--green');
+    cleanup();
+
+    const failed = render(<NotificationsClient {...props({ deliveries: [row('failed')] })} />);
+    const failedBadge = failed.container.querySelector('.badge');
+    expect(failedBadge?.textContent).toBe('Failed');
+    expect(failedBadge?.className).toContain('badge--red');
+    cleanup();
+
+    const pending = render(<NotificationsClient {...props({ deliveries: [row('pending')] })} />);
+    const pendingBadge = pending.container.querySelector('.badge');
+    expect(pendingBadge?.textContent).toBe('Pending');
+    expect(pendingBadge?.className).toContain('badge--amber');
+  });
+
+  it('review fix (LOW): shows an EmptyState instead of an empty table when there are zero rows', () => {
+    // The page has one other <table> (the event/channel matrix), so scope the "no table"
+    // assertion to the deliveries table specifically by checking its header cell is absent.
+    const { container, queryByText } = render(<NotificationsClient {...props({ deliveries: [] })} />);
+    expect(container.textContent).toContain('Nothing sent yet.');
+    expect(queryByText('When')).toBeNull();
+  });
+});
+
+describe('review fix (MED-LOW): Detect chat ID recovers from a rejected action', () => {
+  it('re-enables the button and shows an inline error instead of sticking at "Working…"', async () => {
+    detect.mockRejectedValue(new Error('network dropped'));
+    const { getByText, container } = render(
+      <NotificationsClient
+        {...props({ targets: { telegram: target({ channel: 'telegram', destination: '', secretSet: true }), email: null } })}
+      />,
+    );
+    // Captured once, before the click: an exact-text query still resolves uniquely (guides.tsx's
+    // "press Detect chat ID" is a different string), but re-querying by text after the click
+    // would not need to change either way — grabbing the same node keeps the assertion below
+    // about this element regardless of its label at that instant ("Working…" vs "Detect chat ID").
+    const button = getByText('Detect chat ID') as HTMLButtonElement;
+    fireEvent.click(button);
+    await waitFor(() => expect(button.disabled).toBe(false));
+    expect(button.textContent).toBe('Detect chat ID');
+    expect(container.textContent).toContain('Could not reach the server');
+  });
+});
+
+describe('review fix (LOW): stale local state does not survive a Remove', () => {
+  it('the SMTP form resets to preset defaults once data.smtp goes from set to null', () => {
+    const configured = props({
+      smtp: {
+        preset: 'gmail',
+        host: 'smtp.gmail.com',
+        port: 465,
+        security: 'tls',
+        username: 'me@example.com',
+        fromEmail: 'me@example.com',
+        fromName: 'Budget Tracker',
+        enabled: true,
+        passwordSet: true,
+        lastError: null,
+        lastErrorAt: null,
+        lastSuccessAt: null,
+      },
+    });
+    const { getByLabelText, rerender } = render(<NotificationsClient {...configured} />);
+    expect((getByLabelText(/^server/i) as HTMLInputElement).value).toBe('smtp.gmail.com');
+
+    // Simulate the server re-render a successful Remove causes: data.smtp -> null.
+    rerender(<NotificationsClient {...props({ smtp: null })} />);
+    expect((getByLabelText(/^server/i) as HTMLInputElement).value).toBe(SMTP_PRESETS.brevo.host);
+  });
+
+  it('the Telegram Chat ID field clears once data.targets.telegram goes from set to null', () => {
+    const configured = props({
+      targets: { telegram: target({ channel: 'telegram', destination: '5551234', secretSet: true }), email: null },
+    });
+    const { getByLabelText, rerender } = render(<NotificationsClient {...configured} />);
+    expect((getByLabelText(/chat id/i) as HTMLInputElement).value).toBe('5551234');
+
+    rerender(<NotificationsClient {...props({ targets: { telegram: null, email: null } })} />);
+    expect((getByLabelText(/chat id/i) as HTMLInputElement).value).toBe('');
+  });
+});
+
+describe('review fix (MED): the admin payload never carries a delivery subject or attempts count', () => {
+  it('toDeliveryForClient (page.tsx) strips subject and attempts, keeping everything the UI renders', async () => {
+    const { toDeliveryForClient } = await import('@/app/(app)/settings/notifications/page');
+    const raw = {
+      id: 3,
+      userId: 7,
+      channel: 'email' as const,
+      eventId: 'coming_due',
+      subject: 'Coming due: Water heater warranty',
+      status: 'sent' as const,
+      attempts: 1,
+      lastError: null,
+      createdAt: '2026-08-17T12:00:00.000Z',
+      sentAt: '2026-08-17T12:00:05.000Z',
+    };
+    const mapped = toDeliveryForClient(raw, 'Sam');
+    const serialized = JSON.stringify(mapped);
+    expect(serialized).not.toMatch(/"subject"/);
+    expect(serialized).not.toMatch(/"attempts"/);
+    expect(mapped).toMatchObject({
+      id: 3,
+      userId: 7,
+      channel: 'email',
+      eventId: 'coming_due',
+      status: 'sent',
+      lastError: null,
+      createdAt: '2026-08-17T12:00:00.000Z',
+      sentAt: '2026-08-17T12:00:05.000Z',
+      userName: 'Sam',
+    });
   });
 });
 

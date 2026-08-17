@@ -859,6 +859,8 @@ Two sub-cards.
 **MUST-11.2 (Detect chat ID control).** A `btn--secondary` labelled **Detect chat ID**, sitting immediately beside the Chat ID field. It is disabled with the hint *"Save your bot token first"* until a token is stored. Pressing it calls `detectTelegramChatIdAction()` and renders one of three states:
 
 - **chats found** — a radio list, one row per chat: the chat title, its kind (*Private chat* / *Group* / *Channel*), and *"last message <relative time>"*. Choosing one fills the Chat ID field; the raw id is shown in small `text-subtle` text beside each title so a person who *does* know their id can confirm it. Nothing is saved until the user presses Save.
+
+  **Amendment (fix-round review, Task 14):** "relative time" above, and every other raw timestamp this page shows (`last_success_at`, `last_error_at`, a delivery's `sent_at`/`created_at`), is rendered with the app's one existing timestamp convention — `iso.slice(0, 16).replace('T', ' ')`, the same format `settings/backups/backups-client.tsx` already uses — not a computed relative string. No new formatting convention is introduced for this feature.
 - **nothing found** — a `Notice` tone `info` carrying MUST-8.10's exact sentence.
 - **error** — a `Notice` tone `error` carrying MUST-8.10's exact wording for that case.
 

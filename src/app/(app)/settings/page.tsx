@@ -72,7 +72,7 @@ export default async function SettingsPage() {
       </Card>
 
       <Card>
-        <CardHeader title="Notifications" description="where the app messages you, and about what." />
+        <CardHeader title="Notifications" description="Where the app messages you, and about what." />
         <CardBody>
           <Link
             href="/settings/notifications"

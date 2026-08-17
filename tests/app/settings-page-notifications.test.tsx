@@ -9,7 +9,9 @@ const settingsPage = fs.readFileSync(path.join(root, 'src/app/(app)/settings/pag
 describe('MUST-11.1: the Settings entry point', () => {
   it('links to /settings/notifications with the specified blurb', () => {
     expect(settingsPage).toContain('/settings/notifications');
-    expect(settingsPage).toContain('where the app messages you, and about what');
+    // Review fix (LOW): case-insensitive — the copy reads better capitalized ("Where...") as a
+    // sentence-style CardHeader description; the wording itself is what's pinned here, not casing.
+    expect(settingsPage).toMatch(/where the app messages you, and about what/i);
   });
 
   it('is a PERSONAL card, not an ADMIN_LINKS entry — every member configures their own', () => {

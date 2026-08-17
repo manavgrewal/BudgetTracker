@@ -4,10 +4,36 @@ import { users } from '@/db/schema';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { SMTP_PRESETS, getPrefs, getSmtp, getTarget, getUserSettings } from '@/lib/notify/config';
 import { eventsFor } from '@/lib/notify/events';
-import { listRecentDeliveries } from '@/lib/notify/outbox';
+import { listRecentDeliveries, type DeliveryRow } from '@/lib/notify/outbox';
 import { NotificationsClient, type NotificationsPageData } from './notifications-client';
 
 export const dynamic = 'force-dynamic';
+
+/**
+ * Review fix (MED): `subject` is a rendered message line — for coming_due it names the
+ * warranty/subscription, for budget events the category — and `attempts` is internal retry
+ * bookkeeping. Neither is ever displayed by the client (see NotificationsClient's Recent
+ * deliveries table), yet an admin's "household-wide view" spread every OTHER member's row
+ * wholesale into their own RSC flight payload, leaking other members' subjects to the admin's
+ * browser even though nothing on the page shows them. Narrowed explicitly, field by field, so
+ * a future spread can't reintroduce it silently.
+ */
+export function toDeliveryForClient(
+  row: DeliveryRow,
+  userName: string,
+): Omit<DeliveryRow, 'subject' | 'attempts'> & { userName: string } {
+  return {
+    id: row.id,
+    userId: row.userId,
+    channel: row.channel,
+    eventId: row.eventId,
+    status: row.status,
+    lastError: row.lastError,
+    createdAt: row.createdAt,
+    sentAt: row.sentAt,
+    userName,
+  };
+}
 
 export default async function NotificationsPage() {
   const user = await requireUser();
@@ -30,10 +56,9 @@ export default async function NotificationsPage() {
       .all()
       .map((row) => [row.id, row.name] as const),
   );
-  const deliveries = listRecentDeliveries({ userId: user.role === 'admin' ? null : user.id }).map((row) => ({
-    ...row,
-    userName: nameById.get(row.userId) ?? 'Unknown',
-  }));
+  const deliveries = listRecentDeliveries({ userId: user.role === 'admin' ? null : user.id }).map((row) =>
+    toDeliveryForClient(row, nameById.get(row.userId) ?? 'Unknown'),
+  );
 
   const relay = getSmtp();
 
