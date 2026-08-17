@@ -152,21 +152,27 @@ function countMissingReceiptRows(databasePath: string, receiptsPath: string): nu
  * was supposed to leave alone. Stamping every file's mtime to "now" buys the operator a full
  * day to reconcile the DB-only restore (e.g. by also restoring receipts/ from an archive
  * backup, or re-linking transactions) before the sweep looks at these files again.
+ *
+ * Re-review fix: `fs.utimesSync` is wrapped per-file in its own try/catch. Without this, one
+ * EPERM/read-only file in receipts/ would throw AFTER replaceDatabase() had already
+ * succeeded — the CLI would print an error and exit 1 for a restore that in fact completed
+ * (the database is live; only the best-effort mtime housekeeping failed on one file). Instead,
+ * `receiptsTouched` counts only the files actually touched, and every skipped file is logged
+ * by name so the operator knows which one(s) may still need a manual `touch` before the next
+ * nightly sweep.
  */
 function touchReceiptFiles(receiptsPath: string, now: Date): number {
   if (!fs.existsSync(receiptsPath)) return 0;
   let touched = 0;
   for (const entry of fs.readdirSync(receiptsPath)) {
     const file = path.join(receiptsPath, entry);
-    let stats: fs.Stats;
     try {
-      stats = fs.statSync(file);
-    } catch {
-      continue;
+      if (!fs.statSync(file).isFile()) continue;
+      fs.utimesSync(file, now, now);
+      touched += 1;
+    } catch (error) {
+      console.warn(`[restore] could not refresh mtime on ${entry}, skipping:`, error);
     }
-    if (!stats.isFile()) continue;
-    fs.utimesSync(file, now, now);
-    touched += 1;
   }
   return touched;
 }

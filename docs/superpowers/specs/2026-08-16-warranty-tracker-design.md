@@ -297,7 +297,7 @@ Anything else is rejected with "That file type isn't supported. Upload a JPEG, P
 
 **MUST-4.8 (delete order).** Delete the DB row first (inside the transaction; the FTS trigger fires), then unlink the file best-effort. A failed unlink is logged, never surfaced as an error, and swept later. Deleting a **warranty item** cascades its receipt rows and then unlinks each of their files.
 
-**MUST-4.9 (orphan sweep).** The nightly maintenance sweep (`runMaintenanceSweep()` in `src/lib/backup.ts`) gains `receiptOrphansPurged`: files in `receipts/` with **no** matching `stored_filename` row **and** an mtime older than 24 h are removed. The age guard prevents a race with an in-flight upload. The result is logged on the existing `[backup]` line.
+**MUST-4.9 (orphan sweep).** The nightly maintenance sweep (`runMaintenanceSweep()` in `src/lib/backup.ts`) gains `receiptOrphansPurged`: files in `receipts/` with **no** matching `stored_filename` row **and** an mtime older than 24 h are removed. The age guard prevents a race with an in-flight upload. The result is logged on the existing `[backup]` line. **(amended at final review)** The sweep also refuses to run at all — logging a warning and purging nothing — when the database references **zero** receipts but `receipts/` still has files in it (restore protection, §12.9); a crash-orphan on a genuinely zero-receipt install is deliberately left in place until at least one receipt row exists, rather than guessed at.
 
 **MUST-4.10 (missing file is not an error state).** A row whose file is absent renders as "file missing" in the gallery (§10.3), and the download route returns **410 Gone** with a plain-text body. This is the state a v1.0.0 backup restore produces (§12.4) and it must degrade quietly.
 

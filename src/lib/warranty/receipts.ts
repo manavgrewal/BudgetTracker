@@ -173,10 +173,13 @@ export function purgeOrphanReceipts(
   // genuinely zero warranty_receipts rows, or — the dangerous case — because a v1.0.0
   // DB-only restore (scripts/restore-backup.ts) just replaced budget.db with a snapshot
   // that references few or none of the files already sitting in this directory. A
-  // populated receipts/ directory alongside a completely empty known set is never a
-  // legitimate sweep target: it is always either mid-restore or a corrupt read of the
-  // table. Refuse outright rather than guess, so an install-wide read failure or an
-  // in-progress restore cannot be misread as "every receipt is an orphan".
+  // populated receipts/ directory alongside a completely empty known set is almost always
+  // either mid-restore or a corrupt read of the table (re-review: not "never" — a genuine
+  // crash-orphan on an install with zero receipt rows overall is the one legitimate case
+  // this guard also declines to sweep). Refuse outright rather than guess, so an install-wide
+  // read failure or an in-progress restore cannot be misread as "every receipt is an orphan";
+  // a crash-orphan left over on a zero-receipt install is swept later, once at least one
+  // receipt row exists and `known` is no longer empty (MUST-4.9, amended at final review).
   if (
     known.size === 0 &&
     entries.some((entry) => {

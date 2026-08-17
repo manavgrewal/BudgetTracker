@@ -173,9 +173,12 @@ describe('writeReceiptFile / adoptReceiptFile', () => {
     fs.utimesSync(staged, twoDaysAgo, twoDaysAgo);
 
     const name = adoptReceiptFile(staged, 'image/jpeg');
-    // Simulates the DB insert not having committed yet: `known` is empty, so only the
-    // mtime refresh on adoption protects this file from an immediate sweep.
-    const removed = purgeOrphanReceipts(new Set());
+    // Simulates the DB insert not having committed yet: `known` does NOT include `name`, so
+    // only the mtime refresh on adoption protects this file from an immediate sweep. A decoy
+    // entry keeps `known` non-empty (re-review fix): an empty known set would instead be
+    // caught by purgeOrphanReceipts' own belt-and-braces guard (BLOCKER 1b) before the age
+    // check ever runs, which would shadow the very regression this test exists to catch.
+    const removed = purgeOrphanReceipts(new Set([crypto.randomUUID() + '.jpg']));
     expect(removed).toBe(0);
     expect(receiptFileExists(name)).toBe(true);
   });
