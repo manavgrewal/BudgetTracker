@@ -145,7 +145,10 @@ export function warrantyInputSchema(today: string) {
         .refine(isIsoDate, 'Purchase date must be YYYY-MM-DD')
         .refine((value) => value <= today, FUTURE_PURCHASE_DATE_ERROR)
         .refine((value) => value >= MIN_PURCHASE_DATE, 'Purchase date is before 1970-01-01'),
-      warrantyMonths: z.number().int().positive('Warranty length must be at least one month').nullable(),
+      // v1.2.2: kind-agnostic wording -- same reasoning as readMonths() in actions.ts. Old
+      // text was 'Warranty length must be at least one month.' -- wrong once a
+      // Contract/Loan's form legend says 'Term (months)'.
+      warrantyMonths: z.number().int().positive('The term must be at least one month').nullable(),
       isLifetime: z.boolean(),
       priceCents: z.number().int('Price must be a whole number of cents').nonnegative().nullable(),
       ownerUserId: z.number().int().positive(),

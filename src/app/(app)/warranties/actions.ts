@@ -97,7 +97,12 @@ function readPriceCents(formData: FormData): number | null {
 function readMonths(formData: FormData): number | null {
   const raw = str(formData, 'warrantyMonths').trim();
   if (raw.length === 0) return null;
-  if (!/^\d+$/.test(raw)) throw new Error('Warranty length must be a whole number of months.');
+  // v1.2.2: kind-agnostic wording -- this validator has no access to (and does not thread
+  // through) the selected type's kind, so it can't say "Term" vs "Warranty (months)" per
+  // kind. "The term" reads correctly for every kind (warranty/subscription/contract/loan)
+  // without hard-coding one of them. Old text was 'Warranty length must be a whole number of
+  // months.' -- wrong once a Contract/Loan's form legend says 'Term (months)'.
+  if (!/^\d+$/.test(raw)) throw new Error('The term must be a whole number of months.');
   return Number(raw);
 }
 
