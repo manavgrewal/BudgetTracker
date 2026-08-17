@@ -947,7 +947,437 @@ Extending §17, same rules — each is one constant or one paragraph if the owne
 
 ---
 
+## 20. GUI restore-on-next-start (v1.2.0)
+
+**Status of this section.** Requested and approved by the owner on 2026-08-16, after v1.1.0 shipped (commit `1d0fcd1`). Everything here is **additive**: no section above is renumbered, no committed migration is edited, and **no rule in §1–§19 is withdrawn** — with exactly one amendment, stated plainly so it cannot be missed:
+
+> **§12.2 / §17.11 said "there is deliberately no in-app restore button."** That sentence is **superseded** by this section. The reason behind it is *not* withdrawn: restoring under a live SQLite connection still corrupts a database, and this feature never does that. The button does not restore anything. It **validates** an artifact, **stages** it, and **stops the process**; the restore itself is performed by the next boot, **before a single database connection is opened**. MUST-12.4's real invariant — *the database is never replaced while it is open* — holds exactly as before, and is now enforced by the code path rather than by a paragraph in INSTALL.md.
+
+The CLI (`scripts/restore-backup.ts`) **remains, unchanged in behaviour and still documented**, as the disaster fallback for the one case the GUI cannot serve: the app does not boot at all, so there is no Settings page to click.
+
+### 20.1 What this feature is
+
+**MUST-20.1** Settings → Backups gains a **Restore** control on every listed backup row (both `budget-YYYY-MM-DD.tar.gz` and legacy `budget-YYYY-MM-DD.db` — MUST-12.3 already lists both, and both restore). Activating it opens an inline confirm step; confirming stages the restore and restarts the app; the restore is applied on the way back up.
+
+**MUST-20.2** The **only** artifacts that can be restored through the GUI are files **already present in `${DATA_DIR}/backups`** whose names match `ARCHIVE_NAME_RE` or `LEGACY_NAME_RE`. There is **no upload**, no path input, no URL, no "restore from elsewhere". The client sends a *filename*, never a path, and that filename is resolved through the existing `resolveSafeTarget()` (§12.1's controller ruling (b)) before any `fs` call touches it. Restoring an arbitrary file remains a CLI-only, shell-access-only operation.
+
+**MUST-20.3** No schema change. The marker and the result are **files** under `${DATA_DIR}`, not tables: the boot hook has to read them *before* the database exists in a usable state, and a file is both cheaper and readable with `cat` when something has gone wrong. The hand-authored-migration discipline of §3.1/§19.1 is untouched because there is nothing to migrate.
+
+### 20.2 Shared code — resolving the CLI's no-src-imports rule
+
+The tension, stated exactly: the boot hook runs **inside** Next's standalone bundle (it may import `@/…`, it may not import a loose `.ts` file at runtime); the CLI runs **outside** it, under `node --experimental-strip-types`, in an image that ships no `src/` tree (MUST-12.4's amended note, the same constraint `scripts/reset-admin-password.ts` lives under). Neither may import the other.
+
+**MUST-20.4** The resolution is **extraction, not duplication**. A single module `scripts/restore-core.ts` holds every piece of restore logic that both sides need. It is:
+
+- **alias-free** — it imports only from `node:*`, `better-sqlite3`, `tar`, and relative siblings. **No `@/…` import may ever appear in it**, and MUST-20.42 makes that a test, not a convention.
+- **parameterised, never environment-reading** — it takes `dataDir`, `scratchDir` and `migrationsFolder` as arguments. It never calls `readEnv()`, never reads `process.env`, never calls `process.cwd()`.
+- **erasable-syntax only** — no `enum`, no `namespace`, no parameter properties, and type-only imports written as `import type`, because `--experimental-strip-types` erases rather than compiles.
+
+`scripts/restore-backup.ts` becomes a thin CLI shell over it and **re-exports its existing public surface** (`RESTORE_STORED_NAME_RE`, `RestoreError`, `ArtifactKind`, `detectArtifactKind`, `restoreFromArtifact`, `RestoreResult`) so `tests/scripts/restore-backup.test.ts` keeps passing **unmodified** — that file is the regression net for the security properties being moved, and it must not be rewritten in the same change that moves them.
+
+**MUST-20.5** The app side reaches `restore-core.ts` through one thin wrapper, `src/lib/backup/restore.ts`, which is the *only* file in `src/` allowed to import from `scripts/`. The wrapper's whole job is to supply the three parameters (`readEnv().dataDir`, a scratch path, `migrationsFolder()` from `@/db/client`) and to own the state machine of §20.6. Importing `@/db/client` for `migrationsFolder()` does **not** open a database — `src/db/client.ts` is lazy (`instance` stays `null` until `ensureInstance()`), and MUST-20.42 pins that.
+
+**MUST-20.6** The existing pin test stays and is extended: `RESTORE_STORED_NAME_RE` must be `.source`-equal to `STORED_NAME_RE` in `src/lib/warranty/receipts.ts`. That equality is now the *only* remaining deliberate duplication in the restore path, and it exists solely because the CLI cannot import `src/`.
+
+**MUST-20.7** `restore-core.ts` splits the existing monolithic `restoreFromArtifact()` into a **prepare / commit pair**, and `restoreFromArtifact()` is re-expressed in terms of them so the CLI's observable behaviour is bit-for-bit what it is today:
+
+```ts
+export function prepareRestore(
+  artifactPath: string,
+  opts: { dataDir: string; scratchDir: string; migrationsFolder: string; now: Date },
+): RestorePlan;              // extracts, validates, builds the incoming files. Touches NO live path.
+
+export function commitRestore(
+  plan: RestorePlan,
+  opts: { dataDir: string },
+): RestoreResult;            // replays plan.steps. Every step is individually idempotent.
+
+export function restoreFromArtifact(       // unchanged signature, unchanged behaviour
+  artifactPath: string,
+  opts: { dataDir: string; now?: Date },
+): RestoreResult;            // = prepare + commit + rm -rf scratch, in a finally
+```
+
+`prepareRestore()` is **provably non-mutating with respect to live data**: it writes only inside `scratchDir`. That property is what makes the crash-safety argument of §20.7 short enough to be true.
+
+### 20.3 On-disk layout
+
+**MUST-20.8** Exactly these paths, all directly under `${DATA_DIR}`:
+
+```
+${DATA_DIR}/
+  budget.db                                   the live database (unchanged)
+  backups/                                    (unchanged)
+  receipts/                                   (unchanged)
+  tmp/
+    <uuid>-restore/                           staging under construction; NOT yet a request
+      payload                                 the artifact, hard-linked from backups/ (copy fallback)
+      restore-request.json                    the marker
+  restore-staged/                             a committed request, waiting for the next boot
+    payload
+    restore-request.json
+  restore-applying/                           a request the current boot has claimed
+    payload
+    restore-request.json
+    commit.json                               the rename journal (§20.7) — its EXISTENCE is the point of no return
+    work/                                     prepareRestore()'s scratch: extracted archive, budget.db.incoming, receipts.incoming/
+  restore-failed-<stamp>/                     an attempt that exhausted its retries; kept for forensics, NEVER retried
+  restore-result.json                         the outcome of the last boot-time restore (what Settings reads)
+  budget.pre-restore-<stamp>.db               safety copy of the database (+ -wal, -shm siblings if they existed)
+  receipts.pre-restore-<stamp>/               safety copy of receipts (archive restores only) — the §12.8 convention, reused
+```
+
+`<stamp>` is `now.toISOString().replace(/[:.]/g, '-')`, the format `restore-backup.ts` already uses.
+
+**MUST-20.9** Staging is built at `${DATA_DIR}/tmp/<uuid>-restore/` and **committed by renaming that whole directory** to `${DATA_DIR}/restore-staged/`. One `rename(2)` on the same filesystem is the single atomic commit point: `restore-staged/` either does not exist, or exists complete. There is no window in which a marker names a payload that is not fully written.
+
+**MUST-20.10** At most **one** restore may be staged or applying at a time. Staging refuses if either `restore-staged/` or `restore-applying/` exists.
+
+### 20.4 The marker and the result — exact shapes
+
+**MUST-20.11** `restore-request.json`:
+
+```json
+{
+  "version": 1,
+  "payload": "payload",
+  "sourceName": "budget-2026-08-16.tar.gz",
+  "kind": "archive",
+  "bytes": 41238912,
+  "sha256": "9f2c…",
+  "appliedMigrations": 4,
+  "requestedByUserId": 3,
+  "requestedByUsername": "meena",
+  "requestedAt": "2026-08-16T21:04:11.482Z",
+  "appVersion": "1.2.0"
+}
+```
+
+`version` is a hard gate: a marker whose `version` is not `1` is refused at boot (recorded, cleared, boot continues) rather than guessed at. Every field is validated by a zod schema on read — the file is inside `${DATA_DIR}`, which is a bind mount the owner can edit, so it is **untrusted input** exactly like a user upload.
+
+**MUST-20.12** `restore-result.json`:
+
+```json
+{
+  "version": 1,
+  "status": "success",
+  "sourceName": "budget-2026-08-16.tar.gz",
+  "kind": "archive",
+  "requestedByUserId": 3,
+  "requestedByUsername": "meena",
+  "requestedAt": "2026-08-16T21:04:11.482Z",
+  "finishedAt": "2026-08-16T21:04:53.106Z",
+  "safetyCopy": "budget.pre-restore-2026-08-16T21-04-49-772Z.db",
+  "receiptsMovedAside": "receipts.pre-restore-2026-08-16T21-04-49-772Z",
+  "receiptsRestored": 128,
+  "missingReceiptRows": 0,
+  "receiptsTouched": 0,
+  "error": null
+}
+```
+
+`status` is `"success"` or `"failed"`; on `"failed"`, `error` carries a **written, operator-readable** sentence (never a stack trace, never a raw `errno`) and the mutation-bearing fields are whatever actually happened — on a validation failure they are all `null`/`0`, because nothing happened.
+
+**MUST-20.13** Both files are written **atomically**: to a `.partial` sibling, then `rename`d into place. A half-written `restore-result.json` must never be readable by the Settings page.
+
+### 20.5 Validation — everything, before anything is staged
+
+**MUST-20.14** `validateArtifact(artifactPath, { scratchDir, migrationsFolder })` in `restore-core.ts` runs the **complete** check set and returns a `ValidationReport`. It is called **twice**: once by the server action before staging, and again by the boot hook before applying. The second call is not paranoia — the payload has survived a process restart and a filesystem in between.
+
+The checks, in order, all of them fatal:
+
+1. **Existence and shape.** The file exists, is a regular file, and is non-empty.
+2. **Magic bytes (MUST-12.5, unchanged).** `1F 8B` → `archive`; `SQLite format 3\0` → `sqlite`; anything else → refuse. **Never** the file extension.
+3. **Tar entry allow-list (MUST-12.6, unchanged).** `assertArchiveEntriesAreSafe()` — a first pass over the listing, before a byte is written: only `budget.db` (File), `receipts` (Directory) and `receipts/<RESTORE_STORED_NAME_RE>` (File) are accepted; every accepted name also pins the expected entry **type**; absolute paths, `..` segments, symlinks, hardlinks and device nodes abort the whole restore. node-tar's own protections are relied on **in addition to** this, not instead of it.
+4. **Extract to scratch** (archive only), into `scratchDir`, `preservePaths: false`.
+5. **SQLite preflight of the contained `budget.db`** (extended from today's magic-byte-only check):
+   - magic bytes are `SQLite format 3\0` (a well-formed tar can carry a `budget.db` entry that is a File full of garbage);
+   - it opens `readonly` and `PRAGMA quick_check` returns exactly `ok`;
+   - `sqlite_master` contains at minimum the tables `users`, `accounts` and `transactions` — i.e. it is *a Budget Tracker database*, not some other SQLite file that happened to be renamed.
+6. **The one-way guard** of §20.5.1.
+
+**MUST-20.15** Validation failures return a **written error to the UI** and stage nothing. The scratch directory is removed in a `finally`. No path under `${DATA_DIR}` other than `tmp/<uuid>-restore/` is touched, created or renamed by a failed validation — this is testable and MUST-20.36 tests it.
+
+#### 20.5.1 The one-way rule, made checkable
+
+**MUST-20.16** The rule of §12.4 is unchanged in intent (restore is one-way; downgrading is not supported) and is now **enforced at validation time** instead of only being documented:
+
+- Drizzle's better-sqlite3 migrator records applied migrations in `__drizzle_migrations (id, hash, created_at)`, where `created_at` is the migration's `folderMillis` — i.e. **exactly the `when` value** in `drizzle/meta/_journal.json`. This is a stable, inspectable fact about a backup, readable with a `readonly` connection and no migration run.
+- Let `localMaxWhen` / `localCount` be the maximum `when` and the entry count in the **running code's** `drizzle/meta/_journal.json`, and `backupMaxWhen` / `backupCount` the same from the backup's `__drizzle_migrations`.
+- **Refuse the restore if `backupMaxWhen > localMaxWhen` or `backupCount > localCount`.** Message: *"This backup was made by a newer version of Budget Tracker than the one running (it carries N applied migrations; this version ships M). Upgrade the app first, then restore."*
+- A missing `__drizzle_migrations` table counts as `0`/`0` and is **allowed** — that is a pre-migrator or hand-made database, and forward migration is exactly what should happen to it.
+- **Older backups need no guard at all.** Migrations run forward on the very next `getDb()` call, after the restore, on the boot that applied it (MUST-20.24). That is the honest answer to "restoring an old backup", and it is why nothing here tries to *downgrade* anything.
+
+Both conditions are checked because either alone can be fooled: `when` alone misses a same-day migration added after the local one, and `count` alone misses a reordered journal. Together they are the strongest statement that can be made **before** a migration has run, which is the only moment at which it can be made.
+
+### 20.6 The state machine
+
+**MUST-20.17** Exactly four states, and the transition into each is a single atomic filesystem operation:
+
+```
+  (none)
+     │  server action: validate → build tmp/<uuid>-restore/ → RENAME to restore-staged/
+     ▼
+  STAGED            restore-staged/ exists
+     │  boot hook: revalidate → RENAME to restore-applying/
+     ▼
+  APPLYING          restore-applying/ exists, commit.json ABSENT   → prepare phase, live data provably untouched
+     │  prepare succeeds → WRITE commit.json  (the point of no return)
+     ▼
+  COMMITTING        restore-applying/ exists, commit.json PRESENT  → replaying renames, resumable
+     │                                    │
+     │ all steps done                     │ attempts exhausted (3)
+     ▼                                    ▼
+  DONE                                 FAILED
+  write restore-result.json,           write restore-result.json (status failed, recovery text),
+  rm -rf restore-applying/             RENAME restore-applying/ → restore-failed-<stamp>/
+```
+
+**MUST-20.18** The boot hook is the only reader of `STAGED` and the only writer of every other transition. It runs **before any database connection is opened** — see §20.8.
+
+**MUST-20.19 (no boot loops, ever).** The transition `STAGED → APPLYING` is a rename, so a given staged request is claimed **exactly once**. If a boot finds `restore-applying/` **without** `commit.json`, the previous attempt died during prepare — live data is provably untouched (MUST-20.7) — and the attempt is **discarded outright**: recorded as failed, `rm -rf`, boot continues. It is never re-prepared. If a boot finds `restore-applying/` **with** `commit.json`, it resumes the commit (§20.7) under a hard attempt cap. There is no path on which the same request is prepared twice, and no path on which a failure re-arms itself.
+
+**MUST-20.20** The boot hook **never throws**. Its entire body is wrapped; any unanticipated error is logged, recorded in `restore-result.json` on a best-effort basis, and swallowed. A container that will not boot is a worse outcome than a restore that did not happen, and this is the same reasoning MUST-7.6 already applies to the OCR assets.
+
+### 20.7 The commit journal — why a SIGKILL cannot produce a mixture
+
+**MUST-20.21** `prepareRestore()` produces a `RestorePlan` whose `steps` are a **totally ordered list of individually idempotent filesystem operations**, every path absolute and fixed at plan time (so a replay reuses the same `<stamp>`):
+
+```ts
+type RestoreStep =
+  | { op: 'unlink'; path: string }                    // budget.db-wal, budget.db-shm  (MUST-12.7)
+  | { op: 'rename'; from: string; to: string; optional?: boolean }
+  | { op: 'touch-receipts'; dir: string };            // the MUST-12.9 mtime re-arm, bare-db restores only
+```
+
+For an **archive** restore, in this exact order:
+
+| # | Step |
+|---|---|
+| 1 | `rename budget.db → budget.pre-restore-<stamp>.db` *(optional: absent on a first-run install)* |
+| 2 | `rename budget.db-wal → budget.pre-restore-<stamp>.db-wal` *(optional)* |
+| 3 | `rename budget.db-shm → budget.pre-restore-<stamp>.db-shm` *(optional)* |
+| 4 | `rename receipts → receipts.pre-restore-<stamp>` *(optional)* — the §12.8 non-destructive rule, reused verbatim |
+| 5 | `rename work/receipts.incoming → receipts` |
+| 6 | `rename work/budget.db.incoming → budget.db` |
+
+For a **bare-db** restore: steps 1–3, then `rename work/budget.db.incoming → budget.db`, then `touch-receipts receipts/`. **`receipts/` is never renamed, emptied or modified** — MUST-12.9, unchanged, and the mtime re-arm exists for exactly the reason its docblock in `restore-backup.ts` already gives.
+
+**MUST-20.22 (idempotent replay).** Each step is executed only if it has not already happened, decided from the filesystem, not from a flag:
+
+- `rename`: if `from` exists → rename. Else if `to` exists → already done, skip. Else if `optional` → skip. Else → hard error.
+- `unlink`: `rmSync(path, { force: true })` — idempotent by construction.
+- `touch-receipts`: per-file `utimesSync` in its own `try/catch`, counting only what it touched (the existing `touchReceiptFiles()` semantics, including its per-file EPERM tolerance).
+
+`commit.json` holds `{ version: 1, stamp, kind, steps, attempts }`. **`attempts` is incremented and fsynced *before* the first step of each run**, so a step that reliably kills the process still terminates the loop. At `attempts > 3` the attempt is abandoned per MUST-20.19's FAILED branch.
+
+**MUST-20.23 (the crash-safety statement, in full).** For every point at which the process can be killed:
+
+- **Before the `tmp/<uuid>-restore/` → `restore-staged/` rename:** nothing is staged; the orphan is swept by age (MUST-20.32). Live data untouched.
+- **Between staging and the process exit, or between the exit and the restart:** the request survives as `restore-staged/` and is applied by whichever boot comes next, however much later. Live data untouched until then.
+- **During prepare (APPLYING, no `commit.json`):** live data untouched by construction; the attempt is discarded on the next boot.
+- **During commit (COMMITTING):** the next boot replays the remaining steps **before any request is served and before any database connection is opened**. Therefore *no request, and no database connection, ever observes a partially applied restore.* This is the precise form of the "never a mix" guarantee: it is not that the filesystem is never momentarily mixed — no POSIX filesystem can promise a multi-object atomic swap — it is that the mixture is **unobservable**, because the only code that could observe it is the code that finishes it.
+- **After the last step, before `restore-result.json` is written:** the replay is a no-op (every step reads as already done), the result is written, the applying directory is removed. The restore is complete either way; only the *report* was at risk.
+
+**MUST-20.24** After a successful commit the boot hook returns and boot continues normally — `getDb()` opens the **restored** database and Drizzle's migrator runs forward over it (idempotent, append-only). This is the whole of the old-backup story: an artifact from any shipped version migrates up on the boot that restores it.
+
+**MUST-20.25** Forward completion is chosen over automatic rollback. On the exhausted-retries path the safety copies are **left in place and named in `restore-result.json`**, together with the literal `mv` commands that undo the attempt, rather than an automatic rollback being attempted — a rollback is itself a multi-step rename sequence, and a mechanism that has just failed three times is not the thing to trust with the recovery. The manual undo and the CLI (§20.10) are the fallbacks, in that order.
+
+### 20.8 The boot seam
+
+**MUST-20.26** The hook is invoked from `src/instrumentation-node.ts` as the **first statement in the module body**, before `getDb()` and before `startScheduler()`:
+
+```ts
+import { getDb } from '@/db/client';
+import { applyStagedRestoreOnBoot } from '@/lib/backup/restore';
+// ...
+
+// MUST-20.26: this runs BEFORE the first getDb(). Nothing above opens a connection:
+// src/db/client.ts constructs its singleton lazily inside ensureInstance(), so importing
+// it is inert. Next awaits register() before the server accepts a request, so no route
+// module can beat this to the database either.
+applyStagedRestoreOnBoot();
+
+getDb();
+```
+
+This placement is load-bearing and is stated as a rule, not left to inspection: **`applyStagedRestoreOnBoot()` must precede every `getDb()`/`getSqlite()` call reachable from boot.** MUST-20.42 pins both halves — the laziness of `src/db/client.ts`, and the ordering inside `instrumentation-node.ts`.
+
+**MUST-20.27** The fast path is one `fs.existsSync` on `restore-staged/` plus one on `restore-applying/`. On the overwhelmingly common boot, the feature costs two `stat` calls and logs nothing.
+
+### 20.9 The restart
+
+**MUST-20.28** After a successful stage the server action arms the exit and returns normally. The exit **must not** pre-empt the HTTP response:
+
+```ts
+export const RESTART_DELAY_MS = 1500;
+/** EX_TEMPFAIL. Non-zero so an `on-failure` restart policy also brings the container back;
+ *  `always` / `unless-stopped` (what docker-compose.yml ships) restart on any exit code. */
+export const RESTART_EXIT_CODE = 75;
+
+function armRestart(): void {
+  setTimeout(() => {
+    stopScheduler();
+    closeDb();          // checkpoints the WAL, so the boot-time safety copy is a clean file
+    process.exit(RESTART_EXIT_CODE);
+  }, RESTART_DELAY_MS).unref();
+}
+```
+
+`unref()` is correct and not a hazard: the listening HTTP server keeps the event loop alive on its own, so an unref'd timer still fires; and if the process were already exiting for another reason, the timer being unref'd is precisely what stops it from delaying that.
+
+**MUST-20.29** `closeDb()` before exit is not cosmetic — it checkpoints and removes the WAL, so the safety copy taken at boot is a single self-contained file rather than a database plus a write-ahead log that must be kept together.
+
+**MUST-20.30** The UI says, verbatim in substance: **"Restoring — the app will restart. Refresh this page in about 30 seconds."** The confirm step, *before* anything happens, says which backup will be restored, that current data will be replaced, that a copy of the current database is kept as `data/budget.pre-restore-<timestamp>.db`, and that the container must have a restart policy (docker-compose.yml ships `restart: unless-stopped`) — **and that if it does not, the restore still applies the next time the app is started by hand.** Nothing is lost by a missing restart policy; only the automatic part is.
+
+**MUST-20.31** A staged request is **never expired by age.** A container that stays down for a week still applies the restore on the boot that comes after. Only the *uncommitted* `tmp/<uuid>-restore/` staging directory is swept (MUST-20.32) — that one is, by definition, a request that was never made.
+
+### 20.10 Sweeps and the disk cost of undo
+
+**MUST-20.32** `purgeStagedFiles()` in `src/lib/import/staging.ts` already removes stale `<uuid>-archive` directories from `${DATA_DIR}/tmp` once they are older than 24 h, for exactly the reason a killed backup leaves one behind. Its directory rule is **extended to `-restore`** by the same argument and the same age constant. This is a two-word change and one test; nothing else in that sweep moves.
+
+**MUST-20.33** The nightly maintenance sweep gains one new job: `budget.pre-restore-*.db` (with its `-wal`/`-shm` siblings), `receipts.pre-restore-*/` and `restore-failed-*/` older than **30 days** are removed, **except that the most recent of each kind is always kept regardless of age**. Rationale, stated because auto-deleting a user's undo needs one: before this feature a restore was a rare, deliberate, shell-access event and its safety copies leaked forever without anyone noticing; a restore that is one click away can leave a 300 MB `receipts.pre-restore-*/` behind every time it is used. Thirty days is long past the point at which a bad restore has been noticed, and "always keep the newest" means the most recent undo is never the one that disappears. This also retroactively bounds the leak the v1.1.0 CLI already had.
+
+**MUST-20.34** `restore-result.json` is **not** swept. It is a single small file and it is the only record of what happened.
+
+### 20.11 Failure table
+
+Every row: **live data is either untouched or fully restored**, the marker is cleared or advanced, and the boot completes.
+
+| # | Where | Trigger | Behaviour | Live data |
+|---|---|---|---|---|
+| F1 | stage | filename fails `ARCHIVE_NAME_RE`/`LEGACY_NAME_RE`, or resolves outside `backups/` | written error, nothing staged | untouched |
+| F2 | stage | artifact missing, empty, or not a regular file | written error | untouched |
+| F3 | stage | magic bytes are neither gzip nor SQLite | *"That file is neither a `.tar.gz` archive nor a SQLite backup."* | untouched |
+| F4 | stage | tar entry allow-list violation (`..`, absolute, symlink, wrong entry type, unexpected name) | *"Refusing to extract unexpected archive entries: …"* | untouched |
+| F5 | stage | inner `budget.db` is not SQLite / `quick_check` ≠ `ok` / required tables absent | *"…is not a usable Budget Tracker database. Nothing was changed."* | untouched |
+| F6 | stage | one-way guard: backup carries more applied migrations than the code ships | *"…made by a newer version… Upgrade the app first, then restore."* | untouched |
+| F7 | stage | `restore-staged/` or `restore-applying/` already exists | *"A restore is already staged; restart the app to apply it."* | untouched |
+| F8 | stage | ENOSPC / EIO while copying the payload | scratch dir removed in `finally`, written error | untouched |
+| F9 | stage | SIGKILL before the commit rename | orphan `tmp/<uuid>-restore/`, swept at 24 h (MUST-20.32) | untouched |
+| F10 | restart | SIGKILL after the commit rename, before `process.exit` | request survives as `STAGED`; applied on the next boot | untouched until then |
+| F11 | restart | container has no restart policy | request survives as `STAGED`; applied on the next manual start (MUST-20.31) | untouched until then |
+| F12 | boot | `restore-request.json` unparseable, fails zod, or `version !== 1` | recorded failed, `restore-staged/` removed, boot continues | untouched |
+| F13 | boot | payload missing, or sha256 does not match the marker | recorded failed, removed, boot continues | untouched |
+| F14 | boot | re-validation fails (any of F3–F6, on the second pass) | recorded failed, removed, boot continues | untouched |
+| F15 | boot | SIGKILL during prepare (`commit.json` absent) | attempt discarded, recorded failed, `rm -rf`, boot continues | untouched (MUST-20.7) |
+| F16 | boot | ENOSPC during prepare | same as F15, with the disk-space error recorded | untouched |
+| F17 | boot | SIGKILL mid-commit (`commit.json` present) | next boot replays the remaining steps and completes | fully restored, before anything can observe otherwise |
+| F18 | boot | a commit step hard-errors 3 times | recorded failed with the literal `mv` recovery commands; `restore-applying/` → `restore-failed-<stamp>/`; never retried | whatever the steps achieved, with both safety copies present and named |
+| F19 | boot | `restore-result.json` cannot be written | logged to stderr; the restore itself still completed; applying dir removed | fully restored |
+| F20 | boot | anything unanticipated | caught, logged, boot continues (MUST-20.20) | untouched or fully restored |
+
+### 20.12 UI
+
+**MUST-20.35** Settings → Backups (`src/app/(app)/settings/backups/`):
+
+- Each row gains a **Restore** button. Activating it expands an **inline confirm panel** on that row — not a `window.confirm`, which is untestable and cannot carry the wording MUST-20.30 requires. The panel names the backup, states that current data will be replaced, names the safety copy, and requires an explicit checkbox (*"I understand this replaces the current data"*) before its **"Restore and restart"** submit button enables. **Cancel** collapses it. Only one row's panel may be open at a time.
+- After a successful stage the whole page switches to the restarting notice (MUST-20.30) and every control is disabled — there is nothing useful left to click, and the process is about to end.
+- A **result banner** at the top of the page renders the last boot-time restore from `restore-result.json`: on success, *"Restored `budget-2026-08-16.tar.gz` on 2026-08-16 21:04 — 128 receipt files restored. The previous database was kept as `budget.pre-restore-….db`."*; on failure, the recorded `error` sentence verbatim, in the existing `FormError` treatment.
+- Failures from the action itself render through the existing `FormError` / message pair already on this page. No new component.
+
+**MUST-20.36** The server action, in `src/app/(app)/settings/backups/actions.ts`, in this order and no other: `isSameOrigin(await headers())` **first** (MUST-13.1) → `requireAdmin()` (MUST-20.37) → zod parse of `{ name, confirm }` → `resolveSafeTarget()` → validate → stage → arm the restart → return. A cross-origin caller must be rejected **before** the filename is even read, and the test asserts that by observing that no filesystem call happened.
+
+**MUST-20.37** Admin-gated exactly like the rest of Settings → Backups: the page already calls `requireAdmin()`, and the action calls it again — the page gate is UI, the action gate is the security boundary. A non-admin session gets a written refusal, not a redirect, from the action.
+
+**MUST-20.38** One audit line on the server, both ways: `[restore] staged <sourceName> (<kind>, <bytes> bytes, sha256 <first 12>) requested by user <id>` at stage, and at boot `[restore] applied <sourceName> …` or `[restore] FAILED <sourceName>: <error>`.
+
+### 20.13 Security invariants (all of §13 continues to bind)
+
+- **MUST-13.1 unchanged** — `isSameOrigin()` first on the mutating action. This feature adds no route handler, so `assertSameOrigin`/`isSameOriginOrHeaderless` are not involved at all.
+- **MUST-13.2 unchanged** — session-authenticated, admin-only. No anonymous surface, no token, no signed URL.
+- **Untrusted-input discipline extends to `${DATA_DIR}`.** `restore-request.json`, `commit.json` and the payload live on a bind mount. All three are parsed with zod, and the payload is re-validated in full at boot. A hostile `restore-request.json` can at worst point at a file that fails validation.
+- **The tar-slip defence is not weakened, relaxed, or re-implemented** — it is the same function, moved (MUST-20.4), still covered by the same `tests/scripts/restore-backup.test.ts` fixtures including the hand-rolled ustar symlink and absolute-path archives.
+- **MUST-13.8 unchanged** — non-root, read-only rootfs, tmpfs `/tmp`. Every path this feature writes is under `${DATA_DIR}`.
+- **No new dependency and no new network egress.** `tar` and `better-sqlite3` are already in the image; `zod` is already a dependency.
+- **No new Dockerfile line.** `COPY /app/scripts ./scripts` already ships `restore-core.ts` into the runtime image, and the app half is bundled by Next. MUST-20.42 pins that with an ops test rather than trusting it.
+
+### 20.14 Versioning and release
+
+**MUST-20.39** `package.json` `version` → **`1.2.0`** (minor: new feature, no breaking change). The single-source-of-truth chain of MUST-14.1 is unchanged — `src/lib/version.ts`, the footer, Settings → About, `/api/health`, the update scripts.
+
+**MUST-20.40** `CHANGELOG.md` gains `## [1.2.0] — 2026-08-16` with a fresh empty `## Unreleased` above it: **Added** — GUI restore-on-next-start with full pre-staging validation and a boot-time apply; the last-restore outcome on Settings → Backups. **Changed** — the restore documentation now leads with the GUI path, with the CLI kept as the disaster fallback; `.pre-restore-*` safety copies are swept after 30 days (the most recent is always kept). **Security** — restores are admin-only, same-origin-checked, and limited to artifacts already present in `${DATA_DIR}/backups`; a backup carrying migrations the running code does not ship is refused.
+
+**MUST-20.41** `README.md` §4 "Restore" and `INSTALL.md` "Restoring from a backup" are **rewritten to lead with the GUI path** — Settings → Backups → Restore → confirm → wait ~30 s — and to keep the CLI, verbatim as it is today, under a clearly-labelled *"If the app will not start"* heading. Both must state: the safety copies and where they are; that the restore applies on the next start even if the container has no restart policy; that a backup from a newer version is refused; and that `-wal`/`-shm` handling is automatic. The sentence *"there is deliberately no in-app restore button"* is removed from both files — it is now false, and a stale safety claim is worse than no claim.
+
+### 20.15 Testing
+
+On top of §15, all binding. Vitest with explicit imports, TS strict, no globals.
+
+**Unit — `tests/scripts/restore-core.test.ts` (new):**
+- every check of MUST-20.14, each in isolation: empty file, 3-byte file, directory-instead-of-file, gzip that is not a tar, tar whose `budget.db` is a directory, tar whose `receipts` is a plain file, tar carrying `../evil`, `/etc/passwd`, a symlink entry, an unexpected top-level entry (these reuse the existing hand-rolled ustar fixtures);
+- `budget.db` present but garbage → refused; `budget.db` a valid but *empty* SQLite file with no `users` table → refused with the "not a usable Budget Tracker database" message; a deliberately corrupted page → `quick_check` fails → refused;
+- **the one-way guard, four cases:** backup with fewer applied migrations → allowed; equal → allowed; `backupMaxWhen > localMaxWhen` → refused; `backupCount > localCount` with an equal max `when` → refused; `__drizzle_migrations` absent → allowed;
+- `prepareRestore()` **writes nothing outside `scratchDir`** — asserted by snapshotting a `readdir` of the whole data dir before and after, for both artifact kinds and for a failing artifact;
+- `commitRestore()` replay: run the full step list, then run it again → second run is a no-op returning the same result; run it truncated after each step index in turn (simulating a kill) and then replay to completion → **final state is byte-identical to the uninterrupted run**, asserted by sha256 of `budget.db` and a sorted listing of `receipts/`;
+- `attempts` increments before each replay and the 3-attempt cap terminates.
+
+**Unit — `tests/scripts/restore-backup.test.ts` (existing, UNCHANGED):** must pass without edits after the extraction. If a test in it needs changing, the refactor was not behaviour-preserving.
+
+**Unit — `tests/lib/backup-restore.test.ts` (new), the state machine:**
+- staging builds `tmp/<uuid>-restore/` and commits by rename; the marker validates against its zod schema; sha256 matches the payload;
+- `STAGED` → `APPLYING` → `DONE`: the happy path for an archive and for a bare `.db`, each asserting the safety copies exist and the restored data is present;
+- `APPLYING` with no `commit.json` → discarded, recorded failed, live data byte-identical to before;
+- `APPLYING` with `commit.json` and steps half-done → resumed to completion;
+- `attempts: 3` in `commit.json` → not retried, `restore-failed-<stamp>/` created, boot continues;
+- marker with `version: 2`, marker failing zod, payload absent, sha256 mismatch → each recorded failed, staged dir gone, live data untouched;
+- **the hook never throws**: with `${DATA_DIR}` made unwritable, `applyStagedRestoreOnBoot()` returns normally.
+
+**MUST-20.42 — guard tests (`tests/ops/restore-seams.test.ts`, new).** These are the tests that keep the two seams of §20.2 and §20.8 from silently breaking:
+- **MUST-20.4:** `scripts/restore-core.ts` and `scripts/restore-backup.ts` contain **no** `@/` import — a source scan, so the CLI's no-src-imports rule fails a test rather than failing in a container;
+- **MUST-20.4:** neither file contains `enum `, `namespace `, or a non-`import type` type-only import that `--experimental-strip-types` would reject;
+- **MUST-20.5:** `src/lib/backup/restore.ts` is the only file under `src/` importing from `scripts/`;
+- **MUST-20.26:** `src/instrumentation-node.ts` calls `applyStagedRestoreOnBoot()` at a lower source index than its first `getDb()`;
+- **MUST-20.26:** importing `@/db/client` opens no database — `databasePath()` is pointed at a path that does not exist, the module is imported, and no file is created.
+
+**Integration — `tests/integration/gui-restore-flow.test.ts` (new):** seed a database with two warranty items and two receipt files → `runNightlyBackup()` → stage that archive through the real action path (with an admin session and a same-origin header set) → assert `restore-staged/` and the marker → mutate the live data (delete an item, add a third receipt) → run `applyStagedRestoreOnBoot()` → the two original items are back, both receipt files are present with unchanged sha256, the third is in `receipts.pre-restore-*/`, `budget.pre-restore-*.db` contains the mutated data, `restore-result.json` reports success, and the staged/applying directories are gone. Then the same flow with a **legacy `.db`** artifact: `receipts/` is untouched, every file's mtime is re-armed, `missingReceiptRows` is reported.
+
+**Action tests (`tests/app/backups-actions.test.ts`, extended):** cross-origin → rejected **before** any `fs` call; non-admin → written refusal; a name that is not a listed backup → refused; `../../etc/passwd` and an absolute path → refused by `resolveSafeTarget`; `confirm` unchecked → refused; a second stage while one is staged → refused; the happy path returns the restarting message and **arms exactly one timer** (asserted with fake timers; `process.exit` is stubbed).
+
+**Client test (`tests/app/backups-client.test.tsx`, extended):** the confirm panel names the backup; the submit button is disabled until the checkbox is ticked; Cancel collapses it; only one panel opens at a time; the success and failure result banners render their respective texts.
+
+**Sweep tests:** `purgeStagedFiles()` removes an aged `<uuid>-restore` directory and leaves a fresh one (mirroring the existing `-archive` assertions); the nightly sweep removes a 31-day-old `budget.pre-restore-*.db` / `receipts.pre-restore-*/` / `restore-failed-*/` but **keeps the most recent of each kind** even at 400 days old.
+
+**Manual acceptance checks, added to §15.4:**
+- **A8 — the real restart.** On a real Docker install: make a backup, change some data, restore it from Settings, watch the container exit and come back, refresh after ~30 s, confirm the data and the result banner.
+- **A9 — no restart policy.** `docker run` without `--restart`: the container exits and stays down; starting it by hand applies the restore (MUST-20.31).
+- **A10 — the kill test.** `docker kill -s KILL` during the boot apply (a large receipt library makes the window reachable); restart; the restore completes and the result banner reports success.
+- **A11 — refusal.** Hand a v1.1.0 install a backup taken from a build carrying a fifth migration; the UI refuses with the MUST-20.16 message and nothing is staged.
+
+### 20.16 Decisions taken on the owner's behalf in this addendum
+
+Extending §17 and §19.11, same rules — each is one constant or one paragraph if the owner wants it different.
+
+33. **Shared module over duplication.** `scripts/restore-core.ts`, imported by both sides, rather than a second copy of the validation logic in `src/` behind pin tests. Duplicating a tar-slip defence is how one of the two copies quietly stops being fixed.
+34. **`RESTART_EXIT_CODE = 75`** (EX_TEMPFAIL) rather than `0`, so an `on-failure` restart policy also brings the container back.
+35. **`RESTART_DELAY_MS = 1500`.**
+36. **The safety copy is a `rename`, not a `copy`** — instant, no doubled disk, and the old database is still fully intact under a new name.
+37. **The safety copy is taken at boot, not at stage time**, so it captures the database as it actually was at the moment of replacement, with the WAL already checkpointed by MUST-20.29.
+38. **No receipts manifest.** For an archive restore the existing `receipts.pre-restore-<stamp>/` rename *is* the safety copy, for free; for a bare-db restore `receipts/` is not touched at all. A manifest would be a third thing to keep in sync with two directories that already describe themselves.
+39. **`PRAGMA quick_check`, not `integrity_check`** — the same class of answer, in a fraction of the time on a multi-gigabyte database, on a path the operator is watching a spinner for.
+40. **The Budget-Tracker-ness check is `users` + `accounts` + `transactions`**, three tables that have existed since `0000_init` and will not be renamed.
+41. **Forward completion, not automatic rollback** (MUST-20.25).
+42. **A staged request never expires** (MUST-20.31); only the uncommitted staging directory is swept.
+43. **30-day sweep of `.pre-restore-*` with the most recent always kept** (MUST-20.33), which also bounds the leak v1.1.0's CLI already has.
+44. **An inline confirm panel with a checkbox**, not `window.confirm` and not a type-the-filename gate: the checkbox is testable, carries the wording, and is proportionate to an action that keeps a full undo copy.
+45. **The restore is applied by the boot hook, not by a Docker entrypoint script.** The entrypoint would not cover `npm run dev`, would need its own type-stripping invocation, and would put a security-critical path outside the test suite's reach.
+46. **No cancel-a-staged-restore control.** The window between staging and exit is 1.5 s, and after the exit there is no UI to cancel from. Deleting `data/restore-staged/` is the documented manual escape.
+
+### 20.17 Risks and mitigations
+
+| # | Risk | Mitigation |
+|---|---|---|
+| R8 | Next's build refuses, or output-tracing drops, the `scripts/restore-core.ts` import from `src/lib/backup/restore.ts` | The module is a plain alias-free TS file in the project root's `tsconfig` include; `tar` bundles and `better-sqlite3` is already in `serverExternalPackages`; the ops test of MUST-20.42 fails the build rather than production |
+| R9 | The container has no restart policy and the owner thinks the restore was lost | The confirm step says so up front; the request survives as `restore-staged/` and applies on the next manual start (MUST-20.31, acceptance A9) |
+| R10 | A boot-time failure re-arms itself and the container loops | The `STAGED → APPLYING` rename claims a request exactly once; prepare-phase deaths are discarded outright; commit replays are capped at 3; the hook never throws (MUST-20.19, MUST-20.20) |
+| R11 | An operator hand-edits `${DATA_DIR}/restore-request.json` | zod on read, `version` gate, full re-validation of the payload at boot, and the payload can only ever be a file that passes §20.5 |
+| R12 | Safety copies fill the disk now that restores are cheap | The 30-day sweep with a most-recent exemption (MUST-20.33), and the sizes are visible on the same page as the retention setting |
+| R13 | The response does not reach the browser before the process exits | 1.5 s delay armed only *after* the action returns its state, on a timer that cannot itself hold the process open (MUST-20.28), plus acceptance check A8 |
+
+---
+
 ## Revision history
 
 - **v1.0** (2026-08-16): initial approved design for the warranty tracker, targeting Budget Tracker v1.1.0.
 - **v1.1** (2026-08-16): §19 addendum — warranty item types (admin-maintained list, migration `0003`) and subscriptions tracked through the existing purchase/term/expiry fields with `is_subscription`-keyed wording. User-requested mid-build, after Tasks 1–3 had landed; §1–§18 unchanged.
+- **v1.2** (2026-08-16): §20 addendum — GUI restore-on-next-start, targeting Budget Tracker v1.2.0. Adds an admin-only Restore control to Settings → Backups that validates and stages an artifact and restarts the process; the restore is applied by the boot hook before any database connection opens. Amends §12.2/§17.11's "no in-app restore button" while preserving the invariant behind it; extracts the restore logic into `scripts/restore-core.ts` shared by the CLI and the app; no schema change. §1–§19 otherwise unchanged.
