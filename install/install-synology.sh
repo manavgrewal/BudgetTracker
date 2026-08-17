@@ -217,8 +217,9 @@ run chown -R 1000:1000 "${SYNO_ROOT}/data" || warn "chown failed; rerun this scr
 if command -v synoacltool >/dev/null 2>&1 || [ -x /usr/syno/bin/synoacltool ]; then
   SYNOACL="$(command -v synoacltool || echo /usr/syno/bin/synoacltool)"
   say "Removing the inherited Synology ACL on data/ (POSIX permissions take over)"
-  run "$SYNOACL" -del "${SYNO_ROOT}/data" || warn "Could not remove the ACL — if the app logs SQLITE_CANTOPEN, run: sudo synoacltool -del ${SYNO_ROOT}/data && sudo chmod 777 ${SYNO_ROOT}/data"
-  run chmod 777 "${SYNO_ROOT}/data" || true
+  run "$SYNOACL" -del "${SYNO_ROOT}/data" || warn "Could not remove the ACL — if the app logs SQLITE_CANTOPEN, run: sudo synoacltool -del ${SYNO_ROOT}/data && sudo chmod 770 ${SYNO_ROOT}/data"
+  # data dir must never be world-writable — restore staging + receipts live here.
+  run chmod 770 "${SYNO_ROOT}/data" || true
 fi
 
 step "Configuring"

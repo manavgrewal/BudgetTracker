@@ -19,7 +19,8 @@ You will need about 20 minutes, most of it waiting for the image to build.
 1. **Create the folder.** Open **File Station**. If there is no `docker` shared folder, create
    one (Control Panel → Shared Folder → Create → name it `docker`). Inside `docker`, create a
    folder called `budget-tracker`, and inside that one, a folder called `data`.
-   You should end up with `/volume1/docker/budget-tracker/data`.
+   You should end up with `/volumeN/docker/budget-tracker/data` — use whichever volume you use
+   (e.g. `/volume1` or `/volume2`); the rest of this guide assumes that same volume throughout.
 
 2. **Let the container write to `data`.** The app runs as **uid 1000** inside the container, and
    it stores the whole database in that folder — if it cannot write there, the container starts
@@ -56,7 +57,7 @@ You will need about 20 minutes, most of it waiting for the image to build.
 
 6. **Create the Project.** Open **Container Manager → Project → Create**.
    - **Project name:** `budget-tracker`
-   - **Path:** browse to `/volume1/docker/budget-tracker`
+   - **Path:** browse to `/volumeN/docker/budget-tracker` (the volume you used in step 1)
    - **Source:** choose **Create docker-compose.yml**, then paste the text from step 5 into the
      editor.
    - Click **Next**. Skip the web portal settings. Click **Done**.
@@ -77,8 +78,15 @@ You will need about 20 minutes, most of it waiting for the image to build.
    different:
 
    - **The `data` folder is not writable** (step 2). The log says `EACCES`, `SQLITE_CANTOPEN` or
-     `attempt to write a readonly database`. Redo step 2's Read/Write permission and restart the
-     project.
+     `attempt to write a readonly database`. Try redoing step 2's Read/Write permission and
+     restarting the project — that's the no-SSH attempt. Synology's inherited ACLs sometimes
+     override that File Station permission and the container still can't write, in which case
+     you need the SSH remedy: connect over SSH (Control Panel → Terminal & SNMP → enable SSH
+     first if needed) and run
+     ```
+     sudo synoacltool -del /volumeN/docker/budget-tracker/data && sudo chmod 770 /volumeN/docker/budget-tracker/data
+     ```
+     (substitute your volume from step 1), then restart the project.
    - **SECRET_KEY is missing, too short or still the placeholder** (steps 4–5). The log says the
      app refuses to start without at least 32 bytes. Edit the project's compose file and restart.
 
@@ -114,7 +122,8 @@ You will need about 20 minutes, most of it waiting for the image to build.
 
 ## Backups
 
-The app writes a nightly copy to `/volume1/docker/budget-tracker/data/backups/`. Put that folder
+The app writes a nightly copy to `/volumeN/docker/budget-tracker/data/backups/` (the volume you
+used in step 1). Put that folder
 under **Hyper Backup** (and enable its client-side encryption) for offsite copies. There is also
 **Settings → Backups → Download backup now** in the app itself.
 

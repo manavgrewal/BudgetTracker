@@ -3,6 +3,11 @@
 # BEFORE STARTING: replace PASTE-YOUR-GENERATED-KEY-HERE below with a random
 # string of at least 32 bytes. See docs/INSTALL-SYNOLOGY.md step 3 for how to
 # generate one without a terminal.
+#
+# UPDATING FROM AN OLDER COMPOSE with an absolute-path "volumes:" line: move
+# your existing data folder into the project folder (or keep your old
+# absolute-path line) before pasting this in, or the app boots empty against
+# a fresh ./data.
 services:
   budget-tracker:
     # Default: build the image from the uploaded source (see step 5 below).

@@ -23,6 +23,12 @@ All notable changes to Budget Tracker are recorded here.
 
 ## [1.2.0] - 2026-08-17
 
+**Verify after updating:** restore a backup once via Settings → Backups → Restore — the app
+will restart itself, be unreachable for about 30 seconds, and show the restore outcome on
+Settings → Backups when it comes back. If your container runs without a restart policy
+(docker-compose.yml ships restart: unless-stopped, so this is only relevant for a custom
+setup), starting it back up by hand applies the restore the same way.
+
 ### Added
 
 - **Restore from Settings.** Restoring a backup no longer requires stopping the container by
@@ -59,12 +65,19 @@ All notable changes to Budget Tracker are recorded here.
 - An inherited Synology ACL on the data directory could leave the database unopenable
   (`SQLITE_CANTOPEN`) even with permissions showing `777`; the installer now removes the
   inherited ACL so the container can actually write to it.
+- Existing Synology installs updating from the old absolute-path compose file: move your
+  existing `data` folder into the project folder (or keep your old absolute-path `volumes:`
+  line) before pasting in the new compose, otherwise the app boots empty against a fresh
+  `./data`.
 
-**Verify after updating:** restore a backup once via Settings → Backups → Restore — the app
-will restart itself, be unreachable for about 30 seconds, and show the restore outcome on
-Settings → Backups when it comes back. If your container runs without a restart policy
-(`docker-compose.yml` ships `restart: unless-stopped`, so this is only relevant for a custom
-setup), starting it back up by hand applies the restore the same way.
+### Security
+
+- Restoring a backup is admin-only and same-origin-checked, and restorable artifacts are
+  limited to files already inside `data/backups` that match the backup naming pattern.
+- A backup made by a newer version of Budget Tracker than the one running is refused (the
+  `restore-backup` CLI's `--allow-newer` flag overrides this for disaster recovery).
+- The Synology data directory is no longer created world-writable: the installer now sets
+  `chmod 770` instead of `777`.
 
 ## [1.1.0] - 2026-08-16
 
