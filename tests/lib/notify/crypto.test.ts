@@ -11,6 +11,7 @@ import {
   scrubSecrets,
 } from '@/lib/notify/crypto';
 import { deriveSimplefinKey } from '@/lib/simplefin/crypto';
+import { deriveTotpKey } from '@/lib/auth/totp';
 
 const SECRET_A = 'a'.repeat(48);
 const SECRET_B = 'b'.repeat(48);
@@ -35,6 +36,11 @@ describe('MUST-5.2: two distinct, pinned info strings', () => {
   it('is a different key stream from the SimpleFIN one', () => {
     expect(deriveNotifyKey(SMTP_HKDF_INFO, SECRET_A).equals(deriveSimplefinKey(SECRET_A))).toBe(false);
     expect(deriveNotifyKey(TELEGRAM_HKDF_INFO, SECRET_A).equals(deriveSimplefinKey(SECRET_A))).toBe(false);
+  });
+
+  it('is a different key stream from the TOTP one', () => {
+    expect(deriveNotifyKey(SMTP_HKDF_INFO, SECRET_A).equals(deriveTotpKey(SECRET_A))).toBe(false);
+    expect(deriveNotifyKey(TELEGRAM_HKDF_INFO, SECRET_A).equals(deriveTotpKey(SECRET_A))).toBe(false);
   });
 });
 
@@ -118,5 +124,14 @@ describe('MUST-5.5: scrubSecrets is load-bearing, not defensive', () => {
   it('handles regex metacharacters in a secret literally', () => {
     expect(scrubSecrets('key is a.b*c', ['a.b*c'])).toBe('key is [redacted]');
     expect(scrubSecrets('key is axbyc', ['a.b*c'])).toBe('key is axbyc');
+  });
+
+  it('fully redacts both secrets when one is a substring of the other', () => {
+    const short = PASSWORD;
+    const long = `${PASSWORD}-extra-suffix`;
+    const scrubbed = scrubSecrets(`short: ${short} long: ${long}`, [short, long]);
+    expect(scrubbed).toBe('short: [redacted] long: [redacted]');
+    expect(scrubbed).not.toContain(PASSWORD);
+    expect(scrubbed).not.toContain('extra-suffix');
   });
 });

@@ -86,7 +86,8 @@ function escapeRegExp(value: string): string {
  */
 export function scrubSecrets(text: string, secrets: string[]): string {
   let out = text;
-  for (const secret of secrets) {
+  const sorted = [...secrets].sort((a, b) => b.length - a.length);
+  for (const secret of sorted) {
     if (typeof secret !== 'string') continue;
     const trimmed = secret.trim();
     if (trimmed.length === 0) continue;
