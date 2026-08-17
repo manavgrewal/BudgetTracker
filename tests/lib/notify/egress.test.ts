@@ -35,4 +35,13 @@ describe('MUST-9.2: assertTelegramUrl', () => {
   it('rejects a string that is not a URL at all', () => {
     expect(() => assertTelegramUrl('not a url')).toThrowError(/telegram/i);
   });
+
+  it('rejects the two-endpoint restriction being loosened', () => {
+    for (const url of [
+      `${TELEGRAM_API_ORIGIN}/bot123:abc/deleteWebhook`,
+      `${TELEGRAM_API_ORIGIN}/bot123:abc/sendMessage/extra`,
+    ]) {
+      expect(() => assertTelegramUrl(url)).toThrowError(/telegram/i);
+    }
+  });
 });

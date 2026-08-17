@@ -758,10 +758,10 @@ export function fetchTelegramChats(botToken: string): Promise<TelegramChat[]>;
 
 ```ts
 export const TELEGRAM_API_ORIGIN = 'https://api.telegram.org';
-export function assertTelegramUrl(url: string): void; // throws unless new URL(url).origin === TELEGRAM_API_ORIGIN
+export function assertTelegramUrl(url: string): void; // throws unless origin === TELEGRAM_API_ORIGIN AND no userinfo AND pathname matches ^/bot[^/]+/(sendMessage|getUpdates)$
 ```
 
-`send/telegram.ts` calls `assertTelegramUrl()` on the URL it is about to fetch, immediately before the `fetch`. The bot token is interpolated into the **path**, so this guard also catches a malformed token that manages to inject a host.
+`send/telegram.ts` calls `assertTelegramUrl()` on the URL it is about to fetch, immediately before the `fetch`. The bot token is interpolated into the **path**, so this guard also catches a malformed token that manages to inject a host. The check requires all three conditions — origin equality, an empty userinfo, and the pathname pinned to exactly one of the two Bot API methods this feature calls — because `URL` normalizes dot-segments before the check ever runs, so a token like `123:abc/../../@evil.com` collapses to a different host while `origin` still reads `api.telegram.org`; an origin-only check would wave that through.
 
 **MUST-9.3** No redirect following: `fetch(..., { redirect: 'error' })`. A 3xx from `api.telegram.org` is a failure, not a hop to somewhere else.
 

@@ -1049,6 +1049,10 @@ credential, the token in a Telegram URL path, and the base64 AUTH PLAIN form
   export function assertTelegramUrl(url: string): void;   // throws unless origin matches exactly
   ```
 
+  > AMENDED during build (Task 3 review): shipped guard also rejects userinfo and pins pathname to
+  > `^/bot[^/]+/(sendMessage|getUpdates)$` — see `src/lib/notify/egress.ts`; MUST-9.2 amended to
+  > match. Do not reconcile back to origin-only.
+
 ### Steps
 
 - [ ] **Write the failing test `tests/lib/notify/events.test.ts`.**
@@ -1437,6 +1441,10 @@ credential, the token in a Telegram URL path, and the base64 AUTH PLAIN form
     }
   }
   ```
+
+  > AMENDED during build (Task 3 review): shipped guard also rejects userinfo and pins pathname to
+  > `^/bot[^/]+/(sendMessage|getUpdates)$` — see `src/lib/notify/egress.ts`; MUST-9.2 amended to
+  > match. Do not reconcile back to origin-only.
 
 - [ ] **Run both tests and confirm they pass.**
   ```powershell
