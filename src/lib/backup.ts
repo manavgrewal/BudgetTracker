@@ -19,6 +19,7 @@ import {
 } from '@/lib/backup/archive';
 import { listStoredFilenames } from '@/lib/warranty/items';
 import { purgeOrphanReceipts } from '@/lib/warranty/receipts';
+import { purgePreRestoreCopies } from '@/lib/backup/restore';
 
 export const DEFAULT_BACKUP_RETENTION = 14;
 
@@ -127,6 +128,7 @@ export interface SweepResult {
   loginAttemptsPurged: number;
   stagedFilesPurged: number;
   receiptOrphansPurged: number;
+  preRestoreCopiesPurged: number;
 }
 
 export function runMaintenanceSweep(at: Date = new Date()): SweepResult {
@@ -137,6 +139,9 @@ export function runMaintenanceSweep(at: Date = new Date()): SweepResult {
     // MUST-4.9: files in receipts/ with no matching stored_filename row AND an mtime older
     // than 24 h. The age guard prevents a race with an in-flight upload.
     receiptOrphansPurged: purgeOrphanReceipts(new Set(listStoredFilenames()), undefined, at),
+    // MUST-20.33: budget.pre-restore-*.db (+ -wal/-shm), receipts.pre-restore-*/ and
+    // restore-failed-*/ older than 30 days, except the most recent of each kind.
+    preRestoreCopiesPurged: purgePreRestoreCopies(at),
   };
 }
 

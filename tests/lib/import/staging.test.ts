@@ -115,6 +115,30 @@ describe('staging', () => {
     expect(fs.existsSync(freshDir)).toBe(true);
   });
 
+  it('recursively removes an aged-out "-restore" directory left by a killed stage (MUST-20.32)', () => {
+    // src/lib/backup/restore.ts's stageRestore() builds one of these while validating and
+    // staging a restore, holding a hard-linked (or copied) backup payload. Same argument,
+    // same age constant, as the existing "-archive" rule above.
+    const staleDir = path.join(stagingDir(), 'deadbeef-0000-4000-8000-000000000000-restore');
+    fs.mkdirSync(staleDir, { recursive: true });
+    fs.writeFileSync(path.join(staleDir, 'payload'), 'a full backup payload');
+    fs.writeFileSync(path.join(staleDir, 'restore-request.json'), '{}');
+    const longAgo = new Date(Date.now() - 48 * 60 * 60 * 1000);
+    fs.utimesSync(staleDir, longAgo, longAgo);
+
+    expect(purgeStagedFiles(24 * 60 * 60 * 1000)).toBe(1);
+    expect(fs.existsSync(staleDir)).toBe(false);
+  });
+
+  it('leaves a fresh "-restore" directory alone — a stage still in progress must not be swept mid-flight', () => {
+    const freshDir = path.join(stagingDir(), 'deadbeef-0000-4000-8000-000000000000-restore');
+    fs.mkdirSync(freshDir, { recursive: true });
+    fs.writeFileSync(path.join(freshDir, 'payload'), 'in progress');
+
+    expect(purgeStagedFiles(24 * 60 * 60 * 1000)).toBe(0);
+    expect(fs.existsSync(freshDir)).toBe(true);
+  });
+
   it('leaves an aged-out directory alone when its name does not end in "-archive"', () => {
     // This sweep only removes things it can positively identify as its own leftovers.
     const otherDir = path.join(stagingDir(), 'some-other-directory');

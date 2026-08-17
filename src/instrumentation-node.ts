@@ -6,10 +6,18 @@
  * Edge compilation of that file stays trivially side-effect free.
  */
 import { getDb } from '@/db/client';
+import { applyStagedRestoreOnBoot } from '@/lib/backup/restore';
 import { startScheduler } from '@/lib/scheduler';
 import { assertOcrAssets, resolveOcrAssets } from '@/lib/warranty/ocr/assets';
 
-// Opening the database here also applies the pragmas and runs migrations on boot.
+// MUST-20.26: FIRST, before anything can open the database. This ordering is load-bearing
+// and tests/ops/restore-seams.test.ts pins it: src/db/client.ts builds its singleton lazily
+// inside ensureInstance(), so the import above is inert, and Next awaits register() before
+// the server accepts a request — so no route module can beat this to the database either.
+applyStagedRestoreOnBoot();
+
+// Opening the database here also applies the pragmas and runs migrations on boot — which is
+// how a restored older backup migrates forward (MUST-20.24).
 getDb();
 
 // MUST-7.6: one line, either way. Missing assets DO NOT crash the app — receipts still

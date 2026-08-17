@@ -12,6 +12,11 @@
     "moduleResolution": "bundler",
     "resolveJsonModule": true,
     "isolatedModules": true,
+    // MUST-20.4: scripts/restore-core.ts is imported with an explicit '.ts' extension by
+    // both the CLI (which node --experimental-strip-types requires) and by src/lib/backup/
+    // restore.ts, so one specifier works for node, Vitest and webpack alike. Safe only
+    // because noEmit is already true above — tsc never tries to emit these paths.
+    "allowImportingTsExtensions": true,
     "jsx": "preserve",
     "incremental": true,
     "types": ["node"],

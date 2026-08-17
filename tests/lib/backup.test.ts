@@ -179,9 +179,45 @@ describe('maintenance sweep', () => {
     fs.utimesSync(stagedFilePath(stale), longAgo, longAgo);
 
     const result = runMaintenanceSweep(at);
-    expect(result).toEqual({ sessionsPurged: 1, loginAttemptsPurged: 1, stagedFilesPurged: 1, receiptOrphansPurged: 0 });
+    expect(result).toEqual({
+      sessionsPurged: 1,
+      loginAttemptsPurged: 1,
+      stagedFilesPurged: 1,
+      receiptOrphansPurged: 0,
+      preRestoreCopiesPurged: 0,
+    });
     expect((current!.sqlite.prepare('select count(*) as c from sessions').get() as { c: number }).c).toBe(1);
     expect((current!.sqlite.prepare('select count(*) as c from login_attempts').get() as { c: number }).c).toBe(1);
+  });
+
+  it('purges 31-day-old .pre-restore-* copies and restore-failed-*/, keeping the most recent of each (MUST-20.33)', () => {
+    function fakeDated(name: string, isDir: boolean, daysAgo: number): void {
+      const target = path.join(dataDir, name);
+      if (isDir) fs.mkdirSync(target, { recursive: true });
+      else fs.writeFileSync(target, 'x');
+      const when = new Date(Date.now() - daysAgo * 24 * 60 * 60 * 1000);
+      fs.utimesSync(target, when, when);
+    }
+
+    fakeDated('budget.pre-restore-recent.db', false, 35); // newest of its kind -> kept anyway
+    fakeDated('budget.pre-restore-old.db', false, 400);
+    fakeDated('budget.pre-restore-old.db-wal', false, 400);
+    fakeDated('budget.pre-restore-old.db-shm', false, 400);
+    fakeDated('receipts.pre-restore-recent', true, 35);
+    fakeDated('receipts.pre-restore-old', true, 400);
+    fakeDated('restore-failed-recent', true, 35);
+    fakeDated('restore-failed-old', true, 400);
+
+    const result = runMaintenanceSweep(new Date());
+    expect(result.preRestoreCopiesPurged).toBe(3);
+    expect(fs.existsSync(path.join(dataDir, 'budget.pre-restore-recent.db'))).toBe(true);
+    expect(fs.existsSync(path.join(dataDir, 'budget.pre-restore-old.db'))).toBe(false);
+    expect(fs.existsSync(path.join(dataDir, 'budget.pre-restore-old.db-wal'))).toBe(false);
+    expect(fs.existsSync(path.join(dataDir, 'budget.pre-restore-old.db-shm'))).toBe(false);
+    expect(fs.existsSync(path.join(dataDir, 'receipts.pre-restore-recent'))).toBe(true);
+    expect(fs.existsSync(path.join(dataDir, 'receipts.pre-restore-old'))).toBe(false);
+    expect(fs.existsSync(path.join(dataDir, 'restore-failed-recent'))).toBe(true);
+    expect(fs.existsSync(path.join(dataDir, 'restore-failed-old'))).toBe(false);
   });
 });
 

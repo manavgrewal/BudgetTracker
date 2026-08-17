@@ -67,8 +67,14 @@ export function purgeStagedFiles(olderThanMs: number = DEFAULT_TTL_MS, now: Date
     // safe, and necessary, to remove it recursively. Any other directory shape is left
     // completely untouched: this sweep only ever removes things it can positively identify
     // as its own leftovers.
+    //
+    // MUST-20.32: `<uuid>-restore` is the same argument, for the same reason, one entry
+    // point later — src/lib/backup/restore.ts's stageRestore() builds one of these under
+    // this same DATA_DIR/tmp while validating and staging a restore, and a container killed
+    // mid-stage leaves it behind holding a hard-linked (or copied) backup payload. Same age
+    // constant, same "only removed once nothing could still be writing it" reasoning.
     if (stats.isDirectory()) {
-      if (aged && entry.endsWith('-archive')) {
+      if (aged && (entry.endsWith('-archive') || entry.endsWith('-restore'))) {
         fs.rmSync(file, { recursive: true, force: true });
         removed += 1;
       }

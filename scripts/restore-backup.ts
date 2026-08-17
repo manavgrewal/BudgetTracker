@@ -2,8 +2,10 @@
 /**
  * Rescue tool: restore a Budget Tracker backup artifact into a data directory.
  *
- * Run it with the container STOPPED (MUST-12.4). There is deliberately no in-app restore
- * button: restoring under a live SQLite connection is how you corrupt a database.
+ * As of v1.2.0 this is a thin CLI shell over scripts/restore-core.ts, which holds every piece
+ * of restore logic shared with the app-side boot hook (src/lib/backup/restore.ts). It remains
+ * the disaster fallback for the one case the GUI cannot serve: the app does not boot at all,
+ * so there is no Settings page to click.
  *
  *   docker compose down
  *   docker compose run --rm --entrypoint node budget-tracker \
@@ -14,268 +16,29 @@
  *
  * This script is DELIBERATELY self-contained, exactly like scripts/reset-admin-password.ts:
  * the runtime image ships Next's standalone output, which does not include the project's
- * src/ tree, so the "@/..." import alias cannot resolve in the container. It therefore talks
- * to node-tar and better-sqlite3 directly — both are already present in the image.
+ * src/ tree, so the "@/..." import alias cannot resolve in the container. scripts/restore-
+ * core.ts (and therefore this file) talks to node-tar and better-sqlite3 directly — both are
+ * already present in the image.
  *
  * tests/scripts/restore-backup.test.ts pins RESTORE_STORED_NAME_RE against
- * src/lib/warranty/receipts.ts so the two can never drift apart unnoticed.
+ * src/lib/warranty/receipts.ts so the two can never drift apart unnoticed, and must keep
+ * passing unmodified — it is the regression net for the security properties restore-core.ts
+ * now holds.
  */
-import fs from 'node:fs';
-import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import Database from 'better-sqlite3';
-import * as tar from 'tar';
+import {
+  RESTORE_STORED_NAME_RE,
+  RestoreError,
+  detectArtifactKind,
+  restoreFromArtifact,
+  type ArtifactKind,
+  type RestoreResult,
+} from './restore-core.ts';
 
-/** Must stay identical to STORED_NAME_RE in src/lib/warranty/receipts.ts. */
-export const RESTORE_STORED_NAME_RE =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(jpg|png|webp|pdf)$/;
-
-export type ArtifactKind = 'archive' | 'sqlite' | 'unknown';
-
-export class RestoreError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'RestoreError';
-  }
-}
-
-export interface RestoreResult {
-  kind: ArtifactKind;
-  databaseRestored: boolean;
-  receiptsRestored: number;
-  /** The directory the previous receipts/ was renamed to, or null when there was none. */
-  receiptsMovedAside: string | null;
-  missingReceiptRows: number;
-  /**
-   * Fix report BLOCKER 1a: how many pre-existing receipt files had their mtime re-armed to
-   * "now" after a v1.0.0 DB-only restore. Always 0 for an archive restore, which restores
-   * receipts/ itself and needs no re-arming.
-   */
-  receiptsTouched: number;
-}
-
-const SQLITE_MAGIC = 'SQLite format 3\0';
-
-/** MUST-12.5: format detection is by magic bytes, NEVER by file extension. */
-export function detectArtifactKind(filePath: string): ArtifactKind {
-  const head = Buffer.alloc(16);
-  const fd = fs.openSync(filePath, 'r');
-  let read = 0;
-  try {
-    read = fs.readSync(fd, head, 0, 16, 0);
-  } finally {
-    fs.closeSync(fd);
-  }
-  if (read >= 2 && head[0] === 0x1f && head[1] === 0x8b) return 'archive';
-  if (read >= 16 && head.toString('binary') === SQLITE_MAGIC) return 'sqlite';
-  return 'unknown';
-}
-
-/**
- * MUST-12.6, tar-slip defence: extraction accepts ONLY the entry `budget.db` (a File),
- * `receipts` (a Directory), and entries matching `receipts/<STORED_NAME_RE>` (each a File).
- * Absolute paths, `..` segments, symlinks, hardlinks, device nodes, a `budget.db` that is
- * itself a directory, a `receipts` that is itself a plain file, and anything else abort the
- * whole restore. This runs as a FIRST PASS over the archive listing, before a single byte is
- * written, so "reject" really does mean "abort" and not "skip". node-tar's own protections
- * are relied on IN ADDITION TO this allow-list.
- *
- * Fix report M10: the original allow-list checked entry NAMES only, so an archive whose
- * top-level `receipts` entry was itself a plain file (rather than a directory) — or whose
- * `budget.db` was a directory — passed the name check and only failed later, deeper in
- * extraction, in a less predictable way. Every accepted name now also pins the expected
- * entry TYPE.
- */
-function assertArchiveEntriesAreSafe(artifactPath: string): void {
-  const problems: string[] = [];
-  tar.list({
-    file: artifactPath,
-    sync: true,
-    onReadEntry: (entry) => {
-      const name = entry.path.replace(/\/+$/, '');
-      if (entry.type !== 'File' && entry.type !== 'Directory') {
-        problems.push(`${entry.path} (${entry.type})`);
-        return;
-      }
-      if (path.isAbsolute(name) || name.split('/').includes('..')) {
-        problems.push(entry.path);
-        return;
-      }
-      if (name === 'budget.db') {
-        if (entry.type !== 'File') problems.push(`${entry.path} (expected a file)`);
-        return;
-      }
-      if (name === 'receipts') {
-        if (entry.type !== 'Directory') problems.push(`${entry.path} (expected a directory)`);
-        return;
-      }
-      const match = /^receipts\/(.+)$/.exec(name);
-      if (match === null || !RESTORE_STORED_NAME_RE.test(match[1]) || entry.type !== 'File') {
-        problems.push(entry.path);
-      }
-    },
-  });
-  if (problems.length > 0) {
-    throw new RestoreError(`Refusing to extract unexpected archive entries: ${problems.join(', ')}`);
-  }
-}
-
-/** MUST-12.9: how many warranty_receipts rows point at a file that is not on disk. */
-function countMissingReceiptRows(databasePath: string, receiptsPath: string): number {
-  const db = new Database(databasePath, { readonly: true });
-  try {
-    const table = db
-      .prepare("select name from sqlite_master where type = 'table' and name = 'warranty_receipts'")
-      .get();
-    if (!table) return 0; // a genuine v1.0.0 artifact has no such table
-    const rows = db.prepare('select stored_filename from warranty_receipts').all() as {
-      stored_filename: string;
-    }[];
-    return rows.filter((row) => !fs.existsSync(path.join(receiptsPath, row.stored_filename))).length;
-  } finally {
-    db.close();
-  }
-}
-
-/**
- * Fix report BLOCKER 1a: re-arms purgeOrphanReceipts' 24 h grace window (MUST-4.9,
- * src/lib/warranty/receipts.ts) for every file already sitting in receipts/, by stamping
- * its mtime to `now`.
- *
- * Without this, a v1.0.0 DB-only restore (the `kind === 'sqlite'` branch below) replaces
- * budget.db with a snapshot that references few or zero receipt files — by design (MUST-12.9)
- * receipts/ itself is left completely untouched — while every file already in that directory
- * keeps whatever mtime it had before the restore, which after any real amount of uptime is
- * well past 24 h old. The very next nightly runMaintenanceSweep() then calls
- * purgeOrphanReceipts() with that freshly-restored (near-empty) known set, and every one of
- * those "too old" files reads as an orphan: the sweep would delete every receipt the restore
- * was supposed to leave alone. Stamping every file's mtime to "now" buys the operator a full
- * day to reconcile the DB-only restore (e.g. by also restoring receipts/ from an archive
- * backup, or re-linking transactions) before the sweep looks at these files again.
- *
- * Re-review fix: `fs.utimesSync` is wrapped per-file in its own try/catch. Without this, one
- * EPERM/read-only file in receipts/ would throw AFTER replaceDatabase() had already
- * succeeded — the CLI would print an error and exit 1 for a restore that in fact completed
- * (the database is live; only the best-effort mtime housekeeping failed on one file). Instead,
- * `receiptsTouched` counts only the files actually touched, and every skipped file is logged
- * by name so the operator knows which one(s) may still need a manual `touch` before the next
- * nightly sweep.
- */
-function touchReceiptFiles(receiptsPath: string, now: Date): number {
-  if (!fs.existsSync(receiptsPath)) return 0;
-  let touched = 0;
-  for (const entry of fs.readdirSync(receiptsPath)) {
-    const file = path.join(receiptsPath, entry);
-    try {
-      if (!fs.statSync(file).isFile()) continue;
-      fs.utimesSync(file, now, now);
-      touched += 1;
-    } catch (error) {
-      console.warn(`[restore] could not refresh mtime on ${entry}, skipping:`, error);
-    }
-  }
-  return touched;
-}
-
-function replaceDatabase(source: string, dataDir: string): void {
-  const target = path.join(dataDir, 'budget.db');
-  fs.mkdirSync(dataDir, { recursive: true });
-  fs.copyFileSync(source, target);
-  // MUST-12.7: SQLite runs in WAL mode and would otherwise replay the OLD write-ahead log
-  // over the database you just restored.
-  fs.rmSync(`${target}-wal`, { force: true });
-  fs.rmSync(`${target}-shm`, { force: true });
-}
-
-export function restoreFromArtifact(
-  artifactPath: string,
-  opts: { dataDir: string; now?: Date },
-): RestoreResult {
-  if (!fs.existsSync(artifactPath)) throw new RestoreError(`No such artifact: ${artifactPath}`);
-  const kind = detectArtifactKind(artifactPath);
-  const dataDir = path.resolve(opts.dataDir);
-  const receiptsPath = path.join(dataDir, 'receipts');
-  const now = opts.now ?? new Date();
-
-  if (kind === 'unknown') {
-    throw new RestoreError(
-      'That file is neither a v1.1 .tar.gz archive nor a v1.0 SQLite backup. Nothing was changed.',
-    );
-  }
-
-  if (kind === 'sqlite') {
-    // MUST-12.9: a DB-only artifact says nothing about receipts. Do NOT delete, empty or
-    // modify data/receipts/ — treating silence as "delete them" would destroy files the
-    // backup was never responsible for.
-    replaceDatabase(artifactPath, dataDir);
-    // Fix report BLOCKER 1a: see touchReceiptFiles' docblock.
-    const receiptsTouched = touchReceiptFiles(receiptsPath, now);
-    return {
-      kind,
-      databaseRestored: true,
-      receiptsRestored: 0,
-      receiptsMovedAside: null,
-      missingReceiptRows: countMissingReceiptRows(path.join(dataDir, 'budget.db'), receiptsPath),
-      receiptsTouched,
-    };
-  }
-
-  assertArchiveEntriesAreSafe(artifactPath);
-
-  const stamp = now.toISOString().replace(/[:.]/g, '-');
-  const stage = path.join(dataDir, `.restore-${stamp}`);
-  fs.mkdirSync(stage, { recursive: true });
-  let movedAside: string | null = null;
-
-  try {
-    tar.extract({ file: artifactPath, cwd: stage, sync: true, preservePaths: false, strip: 0 });
-
-    const extractedDb = path.join(stage, 'budget.db');
-    if (!fs.existsSync(extractedDb)) throw new RestoreError('The archive contains no budget.db.');
-    // Fix report IMPORTANT 4, MUST-12.5 continued: the tar-slip allow-list only constrains
-    // entry NAMES and TYPES, not file CONTENT — an archive can be a perfectly well-formed
-    // gzip+tar with a `budget.db` entry that is a File but not actually a SQLite database
-    // (garbage bytes, a text file, anything). Verify it by the same magic-byte check used
-    // for the whole artifact BEFORE touching the live database: "refuse and touch nothing"
-    // must hold for the inside of the archive too, not just its outer envelope. This check
-    // runs before replaceDatabase() and before the receipts/ rename-aside below — nothing in
-    // dataDir has been modified yet at this point, so throwing here truly leaves the live
-    // install untouched.
-    if (detectArtifactKind(extractedDb) !== 'sqlite') {
-      throw new RestoreError("The archive's budget.db is not a valid SQLite database. Nothing was changed.");
-    }
-    replaceDatabase(extractedDb, dataDir);
-
-    const extractedReceipts = path.join(stage, 'receipts');
-    // MUST-12.8: non-destructive. The existing directory is RENAMED aside, never deleted —
-    // recovering from a mistaken restore is a rename.
-    if (fs.existsSync(receiptsPath)) {
-      movedAside = `receipts.pre-restore-${stamp}`;
-      fs.renameSync(receiptsPath, path.join(dataDir, movedAside));
-    }
-    fs.mkdirSync(receiptsPath, { recursive: true });
-    let restored = 0;
-    if (fs.existsSync(extractedReceipts)) {
-      for (const entry of fs.readdirSync(extractedReceipts)) {
-        if (!RESTORE_STORED_NAME_RE.test(entry)) continue;
-        fs.renameSync(path.join(extractedReceipts, entry), path.join(receiptsPath, entry));
-        restored += 1;
-      }
-    }
-
-    return {
-      kind,
-      databaseRestored: true,
-      receiptsRestored: restored,
-      receiptsMovedAside: movedAside,
-      missingReceiptRows: countMissingReceiptRows(path.join(dataDir, 'budget.db'), receiptsPath),
-      // An archive restore repopulates receipts/ itself, so there is nothing to re-arm.
-      receiptsTouched: 0,
-    };
-  } finally {
-    fs.rmSync(stage, { recursive: true, force: true });
-  }
-}
+// Re-exported so tests/scripts/restore-backup.test.ts — the regression net for the tar-slip
+// defence and the cross-version rules — keeps importing them from here, unmodified.
+export { RESTORE_STORED_NAME_RE, RestoreError, detectArtifactKind, restoreFromArtifact };
+export type { ArtifactKind, RestoreResult };
 
 function resolveDataDir(argv: string[], env: NodeJS.ProcessEnv = process.env): string {
   const flag = argv.indexOf('--data-dir');
