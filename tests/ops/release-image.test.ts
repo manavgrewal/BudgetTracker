@@ -136,7 +136,16 @@ describe('install/synology-compose-pull.yml', () => {
     expect(pullCompose).not.toContain('${SECRET_KEY');
   });
 
-  it('keeps every hardening setting from the main compose file (read_only, cap_drop, no-new-privileges, tmpfs, healthcheck)', () => {
+  // v1.2.3 added a watchtower service after budget-tracker, so hardening assertions must be
+  // scoped to the budget-tracker service block only — watchtower deliberately does not carry
+  // any of this (it needs the Docker socket, and its upstream image is minimal already).
+  const budgetTrackerService = pullCompose.slice(
+    pullCompose.indexOf('  budget-tracker:'),
+    pullCompose.indexOf('  watchtower:'),
+  );
+  const watchtowerService = pullCompose.slice(pullCompose.indexOf('  watchtower:'));
+
+  it('keeps every hardening setting from the main compose file on the budget-tracker service (read_only, cap_drop, no-new-privileges, tmpfs, healthcheck)', () => {
     for (const needle of [
       'read_only: true',
       'tmpfs:',
@@ -146,7 +155,7 @@ describe('install/synology-compose-pull.yml', () => {
       'healthcheck:',
       '/api/health',
     ]) {
-      expect(pullCompose, `missing hardening needle: ${needle}`).toContain(needle);
+      expect(budgetTrackerService, `missing hardening needle on budget-tracker: ${needle}`).toContain(needle);
       expect(buildCompose, `sanity: build compose missing ${needle}`).toContain(needle);
     }
   });
@@ -158,5 +167,31 @@ describe('install/synology-compose-pull.yml', () => {
 
   it('mounts /data the same relative way as the build compose', () => {
     expect(pullCompose).toContain('./data:/data');
+  });
+
+  it('labels the budget-tracker service so watchtower only ever acts on it', () => {
+    expect(budgetTrackerService).toMatch(/labels:\s*\n\s*com\.centurylinklabs\.watchtower\.enable:\s*"true"/);
+  });
+
+  it('ships a label-scoped watchtower companion for automatic updates', () => {
+    expect(watchtowerService).toContain('image: containrrr/watchtower:latest');
+    expect(watchtowerService).toContain('container_name: budget-tracker-watchtower');
+    expect(watchtowerService).toMatch(/restart:\s*unless-stopped/);
+    expect(watchtowerService).toContain('/var/run/docker.sock:/var/run/docker.sock');
+    expect(watchtowerService).toMatch(/WATCHTOWER_LABEL_ENABLE:\s*"true"/);
+    expect(watchtowerService).toMatch(/WATCHTOWER_CLEANUP:\s*"true"/);
+    expect(watchtowerService).toMatch(/WATCHTOWER_POLL_INTERVAL:\s*"86400"/);
+  });
+
+  it('does not give watchtower the app-container hardening (it needs the Docker socket, not a locked-down filesystem)', () => {
+    expect(watchtowerService).not.toContain('read_only: true');
+    expect(watchtowerService).not.toContain('cap_drop:');
+  });
+
+  it('documents auto-updates as the default and explains the Watchtower security trade-off in plain English', () => {
+    expect(pullCompose).toMatch(/automatic/i);
+    expect(pullCompose).toMatch(/opts? out of auto-updates|opting out/i);
+    expect(pullCompose).toMatch(/docker\.sock/);
+    expect(pullCompose).toMatch(/label/i);
   });
 });

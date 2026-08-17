@@ -18,10 +18,32 @@
 # Uncomment the SECRET_KEY line below and set it to a random string of at least 32 bytes
 # (`openssl rand -base64 48` works).
 #
-# PINNING A VERSION: this file tracks ":latest", the newest published image. To stay on a
-# known-good release instead of always taking the newest one, change
-# "ghcr.io/manavgrewal/budgettracker:latest" below to a specific version tag, e.g.
-# "ghcr.io/manavgrewal/budgettracker:1.2.0".
+# UPDATES ARE AUTOMATIC BY DEFAULT: this file tracks ":latest", and the second service below
+# (watchtower) polls GHCR once a day, pulls a newer image the moment one is published, and
+# recreates the budget-tracker container against it — you do nothing. Database migrations
+# already run automatically on boot, so unattended container replacement is safe by design.
+# The app's current version is always visible at Settings -> About after it restarts.
+# This exists because Synology Container Manager cannot detect updates for GHCR images (its
+# Image tab "Update" button only works for Docker Hub) and never re-pulls an existing tag on
+# its own — without Watchtower, an install pinned to ":latest" would in practice never update.
+#
+# PINNING A VERSION (opts OUT of auto-updates): to stay on a known-good release instead of
+# always taking the newest one, change "ghcr.io/manavgrewal/budgettracker:latest" below to a specific version tag, e.g. "ghcr.io/manavgrewal/budgettracker:1.2.0".
+# Watchtower only ever replaces a container when a *new* image lands for the tag that container is running, so a
+# pinned numeric tag never changes underneath you — Watchtower stays running but has nothing
+# to do for this service. If you would rather it not run at all in that case, delete the
+# watchtower service block below (or its container_name budget-tracker-watchtower) too; either
+# way, remember you are now responsible for coming back here and bumping the tag by hand.
+#
+# SECURITY NOTE ON WATCHTOWER, IN PLAIN ENGLISH: to replace a running container with a newer
+# image, Watchtower needs access to Docker's own control socket (/var/run/docker.sock) — that
+# is Docker-level control of the whole host, not just this app, because that is what "restart
+# a container" requires under the hood. This compose file scopes it down as far as Docker
+# allows: WATCHTOWER_LABEL_ENABLE means it only ever acts on containers explicitly labelled
+# for it, and only budget-tracker carries that label, so in normal operation it only ever
+# touches this one app. If granting any container that socket is more trust than you want to
+# extend, delete the watchtower service below and update manually by editing the image tag
+# above and restarting the project — see docs/INSTALL-SYNOLOGY.md for the click-by-click steps.
 services:
   budget-tracker:
     image: ghcr.io/manavgrewal/budgettracker:latest
@@ -39,6 +61,8 @@ services:
       # Relative to this compose file's folder (the Container Manager project
       # path) — works on any volume, /volume1 or otherwise.
       - ./data:/data
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
     # Container hardening — identical to the main docker-compose.yml.
     read_only: true
     tmpfs:
@@ -57,3 +81,15 @@ services:
       timeout: 5s
       retries: 3
       start_period: 20s
+
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: budget-tracker-watchtower
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      WATCHTOWER_LABEL_ENABLE: "true"
+      WATCHTOWER_CLEANUP: "true"
+      WATCHTOWER_POLL_INTERVAL: "86400"
+      TZ: "America/Toronto"

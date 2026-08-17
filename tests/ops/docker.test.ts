@@ -101,8 +101,8 @@ describe('version and changelog', () => {
   const pkg = JSON.parse(read('package.json')) as { version: string; dependencies: Record<string, string> };
   const changelog = read('CHANGELOG.md');
 
-  it('declares 1.2.2 as the single source of truth', () => {
-    expect(pkg.version).toBe('1.2.2');
+  it('declares 1.2.3 as the single source of truth', () => {
+    expect(pkg.version).toBe('1.2.3');
   });
 
   it('declares the three new runtime dependencies (§17.27)', () => {
@@ -111,25 +111,29 @@ describe('version and changelog', () => {
     }
   });
 
-  it('has a dated 1.2.2 section and a fresh empty Unreleased above it', () => {
+  it('has a dated 1.2.3 section and a fresh empty Unreleased above it', () => {
+    expect(changelog).toContain('## [1.2.3] - 2026-08-17');
     expect(changelog).toContain('## [1.2.2] - 2026-08-17');
     expect(changelog).toContain('## [1.2.1] - 2026-08-17');
     expect(changelog).toContain('## [1.2.0] - 2026-08-17');
     const unreleased = changelog.indexOf('## Unreleased');
+    const released123 = changelog.indexOf('## [1.2.3]');
     const released122 = changelog.indexOf('## [1.2.2]');
     const released121 = changelog.indexOf('## [1.2.1]');
     const released120 = changelog.indexOf('## [1.2.0]');
     expect(unreleased).toBeGreaterThan(-1);
-    expect(unreleased).toBeLessThan(released122);
+    expect(unreleased).toBeLessThan(released123);
+    expect(released123).toBeLessThan(released122);
     expect(released122).toBeLessThan(released121);
     expect(released121).toBeLessThan(released120);
-    // Unreleased must be empty going into 1.2.2 — nothing this session wrote should still be
+    // Unreleased must be empty going into 1.2.3 — nothing this session wrote should still be
     // sitting above the new dated section.
-    expect(changelog.slice(unreleased, released122)).not.toContain('Contract and loan item kinds');
-    // The previously-unreleased GHCR entry was ABSORBED into 1.2.1 (it was never tagged as a
-    // release — v1.2.0 predates commit 3e86842); still true, checked against the 1.2.1 section.
-    expect(changelog.slice(unreleased, released122)).not.toContain('Prebuilt multi-arch images');
-    // §17.23's original absorption invariant, restored alongside the 1.2.1 one above: whatever
+    expect(changelog.slice(unreleased, released123)).not.toContain('Watchtower auto-update');
+    // The previously-unreleased 1.2.2 entry was ABSORBED into its own dated section, not left
+    // sitting in Unreleased — same invariant carried forward for each prior release in turn.
+    expect(changelog.slice(unreleased, released123)).not.toContain('Contract and loan item kinds');
+    expect(changelog.slice(unreleased, released123)).not.toContain('Prebuilt multi-arch images');
+    // §17.23's original absorption invariant, restored alongside each release added since: whatever
     // was absorbed into 1.2.0 at THAT release must not still be sitting in Unreleased either.
     expect(changelog.slice(unreleased, released120)).not.toContain('Forced password change');
   });

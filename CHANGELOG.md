@@ -21,6 +21,41 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.2.3] - 2026-08-17
+
+### Added
+
+- **Automatic updates for the prebuilt-image install.** `install/synology-compose-pull.yml`
+  now ships a Watchtower companion service alongside `budget-tracker`. Watchtower polls GHCR
+  once a day, pulls a newer `:latest` image the moment one is published, and recreates the
+  container against it — no manual re-pull, no Container Manager "Update" click needed.
+  Database migrations already run automatically on boot, so unattended container replacement
+  is safe by design. Scoped to this app only via
+  `com.centurylinklabs.watchtower.enable: "true"` on the budget-tracker service and
+  `WATCHTOWER_LABEL_ENABLE` on watchtower, so the socket access it needs never reaches any
+  other container on the host.
+
+### Changed
+
+- Pinning `synology-compose-pull.yml` to a specific version tag now also means opting out of
+  auto-updates: Watchtower only replaces a container when a newer image lands for the tag it
+  is already running, so a pinned numeric tag is left alone. The compose file's comments and
+  `docs/INSTALL-SYNOLOGY.md` now document this trade-off and how to remove the watchtower
+  service entirely if you would rather it not run at all.
+- `docs/INSTALL-SYNOLOGY.md`'s update instructions now lead with "nothing to do" for the
+  default auto-updating install, keep the manual tag-edit path for pinned installs, and note
+  that Container Manager's Image tab "Update" button does not work for GHCR images (Docker
+  Hub only) — which is why Watchtower exists in the compose file at all.
+
+### Fixed
+
+- Existing pre-1.2.3 installs of the prebuilt image had no update mechanism at all: Container
+  Manager cannot detect GHCR updates and never re-pulls an already-present `:latest` tag, so
+  those installs were effectively stuck on whatever image they first pulled. Documented the
+  one-time YAML-replace step to adopt the new compose file and gain auto-updates.
+
+No app-code changes in this release.
+
 ## [1.2.2] - 2026-08-17
 
 ### Added

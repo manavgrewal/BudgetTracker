@@ -22,8 +22,15 @@ Next.js build. Docker pulls a ready-to-run multi-arch image (linux/amd64 + linux
    generates its own SECRET_KEY at first boot (see the note under Prerequisites). Want to
    manage the key yourself instead? Uncomment the `SECRET_KEY:` line in the compose file first.
 
+**Updates are automatic with this path.** `install/synology-compose-pull.yml` includes a
+Watchtower companion container that checks GHCR daily and recreates `budget-tracker` when a
+newer `:latest` image is published — nothing to run by hand. See "Updating" below for the
+pinned-version alternative.
+
 Pin a specific release instead of always tracking the newest image by changing `:latest` to a
 version tag in the compose file's `image:` line, e.g. `ghcr.io/manavgrewal/budgettracker:1.2.0`.
+Doing so also opts out of the automatic updates described above — Watchtower only replaces a
+container when a newer image lands for the tag it is already running.
 
 > **First image lands with the v1.2.0 tag.** The image is published by
 > `.github/workflows/release-image.yml` once the `v1.2.0` tag is pushed — before that, GHCR has
@@ -187,6 +194,11 @@ something valid on your system, and start it — no SECRET_KEY to set.
 ---
 
 ## Updating
+
+**This section covers the build-from-source path** (`docker-compose.yml`, the install scripts,
+and `update.sh`/`update.ps1`). If you installed with the prebuilt-image quick start above, skip
+this — updates there are automatic via the Watchtower companion in
+`install/synology-compose-pull.yml`.
 
 **Updates are manual.** Nothing schedules them, nothing auto-updates, and the app never nags you
 with an "update available" banner. You run this when you decide to:
