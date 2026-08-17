@@ -592,7 +592,7 @@ So a container booting at 09:30 after missing its 08:00 slot **does** fire (1.5 
 
 Only rows with a resolved `limitCents !== null` participate. Parents and children are independent rows (`budgetProgress` already applies the §3 rollup rule to the parent's `spentCents`), so a parent and one of its children may each cross and each gets its own message.
 
-**MUST-6.16** `budget_exceeded` fires when `spentCents > limitCents`. `budget_threshold` fires when `pct >= budget_threshold_pct` and `pct < 100`. Both use the `pct` already computed by `budgetProgress()` — including its `$0`-limit branch — so the notification can never disagree with the progress bar the user is looking at.
+**MUST-6.16** `budget_exceeded` fires when `spentCents > limitCents`. `budget_threshold` fires when `pct >= budget_threshold_pct`. (Struck: an earlier draft additionally required `pct < 100`, but that made MUST-6.17 unsatisfiable — a single import that jumps straight past 100% would never get its threshold message — and the 1–99 CHECK on `budget_threshold_pct` already keeps a threshold key from colliding with the exceeded key, which is pinned at 100.) Both use the `pct` already computed by `budgetProgress()` — including its `$0`-limit branch — so the notification can never disagree with the progress bar the user is looking at.
 
 **MUST-6.17** Both may fire in the same evaluation, in the rare case of a single import taking a category from under the threshold to over 100%. Two messages there is informative, and suppression logic would have to fabricate a dedup row for a message it never sent.
 
@@ -802,7 +802,7 @@ Telegram sends `subject + '\n\n' + body`; email sends `subject` as the Subject h
 
 Covers the **7 days ending the day before the slot date** — `from = addDaysIso(slotDate, -7)`, `to = addDaysIso(slotDate, -1)`. A fixed 7-day trailing window rather than a fixed Monday–Sunday week, so any chosen `digest_weekday` yields a complete week with no stale tail.
 
-Composed from existing helpers only — `categoryBreakdown()` and `topMerchants()` in `src/lib/reports.ts`, `budgetProgress()` in `src/lib/budgets.ts`, `listReviewQueue()` in `src/lib/transactions.ts`:
+Composed from existing helpers only — `categoryBreakdown()` and `topMerchants()` in `src/lib/reports.ts`, `budgetProgress()` in `src/lib/budgets.ts`, `reviewQueueCount()` in `src/lib/categorize/engine.ts` (a count, not `listReviewQueue()`'s hydrated rows — accurate above 1000 and avoids hydrating rows for a number the message never displays):
 
 ```
 Household spend: $1,284.55

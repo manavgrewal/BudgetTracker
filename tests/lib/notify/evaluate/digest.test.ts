@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { categoryIdByName, createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../../../helpers/db';
+import { normalizeMerchant } from '@/lib/categorize/normalize';
 import { saveEmailTarget, saveSmtp, setPref } from '@/lib/notify/config';
 import { resetOutboxPumpForTests } from '@/lib/notify/outbox';
 import { resetNotifySenderForTests, setNotifySenderForTests } from '@/lib/notify/send';
@@ -50,7 +51,7 @@ function spend(categoryId: number, cents: number, date: string, attributedUserId
     sql`insert into transactions
           (account_id, date, amount_cents, raw_description, normalized_merchant, category_id,
            attributed_user_id, is_transfer, dedup_hash, created_by, created_at, updated_at)
-        values (${accountId}, ${date}, ${-cents}, ${merchant}, ${merchant.toLowerCase()}, ${categoryId},
+        values (${accountId}, ${date}, ${-cents}, ${merchant}, ${normalizeMerchant(merchant)}, ${categoryId},
                 ${attributedUserId}, 0, ${`h${Math.random()}`}, ${creatorId}, ${'2026-08-05T00:00:00.000Z'}, ${'2026-08-05T00:00:00.000Z'})`,
   );
 }
@@ -93,9 +94,9 @@ describe('§10.2: the window is [slot − 7, slot − 1]', () => {
     expect(body()).toContain('Top categories (household)');
     expect(body()).toContain('Groceries');
     expect(body()).toContain('Top merchants (household)');
-    // topMerchants() reports normalizedMerchant, which is stored lowercase — the
-    // rendered body reflects the stored form, not the raw uppercase description.
-    expect(body()).toContain('loblaws');
+    // topMerchants() reports normalizedMerchant, which normalizeMerchant() UPPERCASES —
+    // production digests show 'LOBLAWS', matching the raw description here.
+    expect(body()).toContain('LOBLAWS');
   });
 });
 

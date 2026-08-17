@@ -69,6 +69,20 @@ describe('§10.1: budget events', () => {
     expect(body).toBe('Household Groceries budget for August 2026 is at 82% — $410.00 of $500.00, $90.00 left.');
   });
 
+  it('omits the "left" clause when a single jump takes pct past 100% (MUST-6.17)', () => {
+    const { body } = renderEvent({
+      event: 'budget_threshold',
+      scope: 'household',
+      categoryName: 'Gas',
+      month: '2026-08',
+      pct: 200,
+      spentCents: 20000,
+      limitCents: 10000,
+    });
+    expect(body).toBe('Household Gas budget for August 2026 is at 200% — $200.00 of $100.00.');
+    expect(body).not.toContain('left');
+  });
+
   it('says "Your" for the personal scope', () => {
     const { body } = renderEvent({
       event: 'budget_threshold',

@@ -129,14 +129,15 @@ describe('MUST-6.15: household and personal scopes are independent facts', () =>
   it('the same category can fire once for each scope', () => {
     const userId = emailUser();
     const coffee = categoryIdByName(t.db, 'Coffee');
-    // Household budget is deliberately below the spend too, so BOTH scopes cross their
-    // threshold AND their limit independently — the point of this test.
-    upsertBudget({ scope: 'household', userId: null, categoryId: coffee, month: '2026-08', amountCents: 8000 });
+    // Deliberately decoupled from the MUST-6.17 jump case: household (9000/10000 = 90%)
+    // only crosses its threshold, never its limit; personal (9000/5000 = 180%) crosses
+    // both. The point here is scope independence, not the same-tick double-fire.
+    upsertBudget({ scope: 'household', userId: null, categoryId: coffee, month: '2026-08', amountCents: 10000 });
     upsertBudget({ scope: 'personal', userId, categoryId: coffee, month: '2026-08', amountCents: 5000 });
     spend(coffee, 9000, userId);
     evaluateBudgets({ now: NOW, tz: TZ });
     expect(keys().sort()).toEqual(
-      [`budget:h:${coffee}:2026-08:100`, `budget:h:${coffee}:2026-08:80`, `budget:p:${coffee}:2026-08:100`, `budget:p:${coffee}:2026-08:80`].sort(),
+      [`budget:h:${coffee}:2026-08:80`, `budget:p:${coffee}:2026-08:100`, `budget:p:${coffee}:2026-08:80`].sort(),
     );
   });
 
@@ -211,5 +212,19 @@ describe('MUST-6.18: the fingerprint guard', () => {
     expect(evaluateBudgets({ now: NOW, tz: TZ })).toBe(0); // 85% is below the new 90
     saveUserSettings(userId, { ...DEFAULT_USER_SETTINGS, budgetThresholdPct: 84 });
     expect(evaluateBudgets({ now: NOW, tz: TZ })).toBe(1);
+  });
+
+  it('does NOT skip after a budget is set mid-month, with the SAME transactions and no fingerprint reset', () => {
+    emailUser();
+    const gas = categoryIdByName(t.db, 'Gas');
+    // No budget yet — the row has limitCents === null and cannot fire, regardless of spend.
+    spend(gas, 9000);
+    expect(evaluateBudgets({ now: NOW, tz: TZ })).toBe(0);
+    // Setting the budget is the ONLY change between these two ticks — no new/updated
+    // transaction. The fingerprint must fold in the budgets table (count + max id) for this
+    // to be seen on the very next tick rather than waiting for the next import.
+    upsertBudget({ scope: 'household', userId: null, categoryId: gas, month: '2026-08', amountCents: 10000 }); // 9000/10000 = 90%
+    expect(evaluateBudgets({ now: NOW, tz: TZ })).toBe(1);
+    expect(keys()).toEqual([`budget:h:${gas}:2026-08:80`]);
   });
 });

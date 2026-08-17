@@ -149,11 +149,17 @@ export function renderEvent(input: RenderInput): { subject: string; body: string
     case 'budget_threshold': {
       const category = truncateText(input.categoryName, NAME_MAX);
       const label = monthLabel(input.month);
+      const remainingCents = input.limitCents - input.spentCents;
+      // MUST-6.17: a single import can jump straight past 100%, firing this message
+      // alongside budget_exceeded. When that happens remainingCents is negative — "$X
+      // left" would read as still having room, so the remaining clause is omitted here
+      // entirely; budget_exceeded is the message that talks about being over.
+      const remainingClause = remainingCents >= 0 ? `, ${money(remainingCents)} left` : '';
       return {
         subject: `Budget ${input.pct}%: ${category} (${label})`,
         body:
           `${scopeWord(input.scope)} ${category} budget for ${label} is at ${input.pct}% — ` +
-          `${money(input.spentCents)} of ${money(input.limitCents)}, ${money(input.limitCents - input.spentCents)} left.`,
+          `${money(input.spentCents)} of ${money(input.limitCents)}${remainingClause}.`,
       };
     }
     case 'budget_exceeded': {

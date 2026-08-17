@@ -1,6 +1,6 @@
 import { and, gte, lte, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
-import { transactions } from '@/db/schema';
+import { budgets, transactions } from '@/db/schema';
 import { budgetProgress, type BudgetRow } from '@/lib/budgets';
 import { currentMonth, monthEnd, monthStart } from '@/lib/dates';
 import { getUserSettings, isEventEnabled, notifiableUsers } from '@/lib/notify/config';
@@ -47,6 +47,16 @@ function fingerprint(month: string, participants: Participant[]): string {
     .where(and(gte(transactions.date, monthStart(month)), lte(transactions.date, monthEnd(month))))
     .get();
 
+  // The budgets table has no updated_at column (schema.ts), so — unlike transactions above —
+  // an in-place amount UPDATE to an already-existing (scope, user, category, month) row is
+  // not distinguishable from no change here; count(*) + max(id) does catch a NEW budget row
+  // (an insert), which is the case that matters for "set a budget mid-month" firing on the
+  // same tick rather than waiting for the next transaction.
+  const budgetRow = getDb()
+    .select({ n: sql<number>`count(*)`, maxId: sql<number>`coalesce(max(${budgets.id}), 0)` })
+    .from(budgets)
+    .get();
+
   // max(updated_at) is in the fingerprint so that RE-CATEGORISING an existing transaction —
   // which changes neither the count nor the max id — still triggers re-evaluation. The
   // participant/threshold part is in it so a user who has just enabled the event or moved
@@ -56,16 +66,31 @@ function fingerprint(month: string, participants: Participant[]): string {
     .sort((a, b) => a.userId - b.userId)
     .map((p) => `${p.userId}:${p.thresholdPct}`)
     .join(',');
-  return `${month}|${row?.n ?? 0}|${row?.maxId ?? 0}|${row?.maxUpdated ?? ''}|${people}`;
+  return (
+    `${month}|${row?.n ?? 0}|${row?.maxId ?? 0}|${row?.maxUpdated ?? ''}` +
+    `|${budgetRow?.n ?? 0}|${budgetRow?.maxId ?? 0}|${people}`
+  );
 }
 
-function participantsFor(eventId: string): Participant[] {
-  const out: Participant[] = [];
+/**
+ * The participant set is the union of both budget events — the threshold value only
+ * matters for budget_threshold, but a user who has only budget_exceeded on still has to
+ * appear in the fingerprint so enabling it re-evaluates on the next tick.
+ *
+ * Single pass over notifiableUsers(): the original two-loop version (once per event id)
+ * called notifiableUsers() twice and, for a user enabled on both events, getUserSettings()
+ * twice — this walks the list once and resolves both events' enabled-ness per user before
+ * deciding whether to include them, so neither is ever queried more than once per user.
+ */
+function computeParticipants(): Map<number, Participant> {
+  const everyone = new Map<number, Participant>();
   for (const user of notifiableUsers()) {
-    if (!CHANNELS.some((channel) => isEventEnabled(user.id, eventId, channel))) continue;
-    out.push({ userId: user.id, thresholdPct: getUserSettings(user.id).budgetThresholdPct });
+    const thresholdEnabled = CHANNELS.some((channel) => isEventEnabled(user.id, 'budget_threshold', channel));
+    const exceededEnabled = CHANNELS.some((channel) => isEventEnabled(user.id, 'budget_exceeded', channel));
+    if (!thresholdEnabled && !exceededEnabled) continue;
+    everyone.set(user.id, { userId: user.id, thresholdPct: getUserSettings(user.id).budgetThresholdPct });
   }
-  return out;
+  return everyone;
 }
 
 function fireFor(input: {
@@ -142,15 +167,7 @@ function fireFor(input: {
 export function evaluateBudgets(input: { now: Date; tz: string }): number {
   const month = currentMonth(input.now, input.tz);
 
-  // The participant set is the union of both budget events — the threshold value only
-  // matters for budget_threshold, but a user who has only budget_exceeded on still has to
-  // appear in the fingerprint so enabling it re-evaluates on the next tick.
-  const thresholdPeople = participantsFor('budget_threshold');
-  const exceededPeople = participantsFor('budget_exceeded');
-  const everyone = new Map<number, Participant>();
-  for (const person of [...thresholdPeople, ...exceededPeople]) {
-    everyone.set(person.userId, person);
-  }
+  const everyone = computeParticipants();
   if (everyone.size === 0) {
     lastBudgetKey = null;
     return 0;

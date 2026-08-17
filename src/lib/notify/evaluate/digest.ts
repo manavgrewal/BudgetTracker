@@ -1,7 +1,7 @@
 import { budgetProgress, type BudgetRow } from '@/lib/budgets';
+import { reviewQueueCount } from '@/lib/categorize/engine';
 import { addDaysIso, currentMonth } from '@/lib/dates';
 import { categoryBreakdown, topMerchants } from '@/lib/reports';
-import { listReviewQueue } from '@/lib/transactions';
 import { weeklyDigestKey } from '@/lib/notify/events';
 import { enqueue } from '@/lib/notify/outbox';
 import { renderEvent, type DigestLine } from '@/lib/notify/render';
@@ -24,7 +24,9 @@ function overBudgetNames(rows: BudgetRow[], acc: string[] = []): string[] {
  * week with no stale tail (decision 8).
  *
  * Composed from EXISTING helpers only — categoryBreakdown() and topMerchants() in
- * reports.ts, budgetProgress() in budgets.ts, listReviewQueue() in transactions.ts.
+ * reports.ts, budgetProgress() in budgets.ts, reviewQueueCount() in categorize/engine.ts
+ * (a count, not listReviewQueue()'s hydrated rows — accurate above 1000 and no row
+ * hydration for a number nothing else in this message needs).
  * Transfers and income are excluded by the report helpers themselves.
  *
  * A week with no transactions still sends: silence would be indistinguishable from a
@@ -46,7 +48,8 @@ export function evaluateWeeklyDigest(input: { userId: number; slotDate: string; 
     .map((row) => ({ name: row.categoryName, cents: row.spentCents }));
 
   // TopMerchantRow's field is `normalizedMerchant` (src/lib/reports.ts) — the merchant name
-  // as stored (lowercased by normalizeMerchant()), not the raw uppercase description.
+  // as stored, which normalizeMerchant() UPPERCASES (src/lib/categorize/normalize.ts), so
+  // production digests show e.g. "LOBLAWS", not a title-cased or lowercase variant.
   const topMerchantLines: DigestLine[] = topMerchants({ from, to, limit: TOP_MERCHANTS }).map((row) => ({
     name: row.normalizedMerchant,
     cents: row.spentCents,
@@ -60,7 +63,7 @@ export function evaluateWeeklyDigest(input: { userId: number; slotDate: string; 
     personalSpentCents: sum(personalCategories),
     topCategories,
     topMerchants: topMerchantLines,
-    reviewCount: listReviewQueue(1000).length,
+    reviewCount: reviewQueueCount(),
     overBudget: overBudgetNames(budgetProgress(currentMonth(input.now), 'household', null)),
   });
 
