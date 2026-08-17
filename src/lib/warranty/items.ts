@@ -16,6 +16,7 @@ import {
 } from '@/lib/warranty/receipts';
 import { sniffReceiptType, type ReceiptMime } from '@/lib/warranty/sniff';
 import { deleteSidecar, findStagedReceipt, readSidecar } from '@/lib/warranty/staging';
+import type { ItemKind } from '@/lib/warranty/constants';
 
 export const MAX_NAME_CHARS = 200;
 export const MAX_TEXT_CHARS = 200;
@@ -49,6 +50,13 @@ export interface WarrantyItemRow {
   typeId: number | null;
   typeName: string | null;
   isSubscription: boolean;
+  /**
+   * v1.2.2: warranty / subscription / contract / loan, from the LEFT JOIN onto
+   * warranty_item_types. An untyped item (or one whose type predates 0004) normalises to
+   * 'warranty', the same default the column itself carries -- never null, matching
+   * isSubscription's own null-to-false normalisation just above.
+   */
+  kind: ItemKind;
   notes: string | null;
   createdAt: string;
   updatedAt: string;
@@ -172,6 +180,7 @@ const ITEM_COLUMNS = {
   typeId: warrantyItems.typeId,
   typeName: warrantyItemTypes.name,
   isSubscription: warrantyItemTypes.isSubscription,
+  kind: warrantyItemTypes.kind,
   notes: warrantyItems.notes,
   createdAt: warrantyItems.createdAt,
   updatedAt: warrantyItems.updatedAt,
@@ -180,12 +189,13 @@ const ITEM_COLUMNS = {
 /**
  * Delta T6: the LEFT JOIN onto warrantyItemTypes means isSubscription comes back `null`
  * for an untyped item (no matching type row) rather than `false` -- normalise it here so
- * every caller sees a plain boolean, never a three-state value.
+ * every caller sees a plain boolean, never a three-state value. v1.2.2: `kind` gets the same
+ * treatment, normalising to 'warranty' instead of null.
  */
-function toItemRow<T extends { isSubscription: boolean | null }>(
+function toItemRow<T extends { isSubscription: boolean | null; kind: ItemKind | null }>(
   row: T,
-): Omit<T, 'isSubscription'> & { isSubscription: boolean } {
-  return { ...row, isSubscription: row.isSubscription ?? false };
+): Omit<T, 'isSubscription' | 'kind'> & { isSubscription: boolean; kind: ItemKind } {
+  return { ...row, isSubscription: row.isSubscription ?? false, kind: row.kind ?? 'warranty' };
 }
 
 export function getWarrantyItem(id: number): WarrantyItemRow | null {

@@ -13,7 +13,7 @@ function item(over: Partial<WarrantyListItem> = {}): WarrantyListItem {
     id: 1, name: 'Fridge', vendor: 'Home Depot', model: 'GDT645SYNFS', serial: null,
     purchaseDate: '2026-08-16', warrantyMonths: 24, isLifetime: false, expiryDate: '2028-08-16',
     priceCents: 129999, ownerUserId: 7, ownerName: 'Alice', transactionId: null,
-    typeId: null, typeName: null, isSubscription: false, notes: null,
+    typeId: null, typeName: null, isSubscription: false, kind: 'warranty', notes: null,
     createdAt: '2026-08-16T00:00:00.000Z', updatedAt: '2026-08-16T00:00:00.000Z',
     status: 'active', receiptCount: 1,
     ...over,

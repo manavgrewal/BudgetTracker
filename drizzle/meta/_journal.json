@@ -29,6 +29,13 @@
       "when": 1755475200000,
       "tag": "0003_warranty_item_types",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1755561600000,
+      "tag": "0004_item_type_kinds",
+      "breakpoints": true
     }
   ]
 }

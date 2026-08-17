@@ -8,7 +8,7 @@ import {
   listItemTypes,
   listItemTypesWithUsage,
   renameItemType,
-  setItemTypeSubscription,
+  setItemTypeKind,
   typeUsageCount,
 } from '@/lib/warranty/types';
 
@@ -44,11 +44,19 @@ function idOf(name: string): number {
 }
 
 describe('listItemTypes', () => {
-  it('returns the seeded types ordered case-insensitively by name', () => {
+  it('returns the seeded types (including v1.2.2 Contract/Loan) ordered case-insensitively by name', () => {
     setup();
-    createItemType('zebra', false);
-    createItemType('Anvil', false);
-    expect(listItemTypes().map((t) => t.name)).toEqual(['Anvil', 'Appliance', 'Laptop', 'Subscription', 'zebra']);
+    createItemType('zebra', 'warranty');
+    createItemType('Anvil', 'warranty');
+    expect(listItemTypes().map((t) => t.name)).toEqual([
+      'Anvil',
+      'Appliance',
+      'Contract',
+      'Laptop',
+      'Loan',
+      'Subscription',
+      'zebra',
+    ]);
   });
 
   it('maps is_subscription to a boolean', () => {
@@ -56,33 +64,62 @@ describe('listItemTypes', () => {
     expect(listItemTypes().find((t) => t.name === 'Subscription')!.isSubscription).toBe(true);
     expect(listItemTypes().find((t) => t.name === 'Laptop')!.isSubscription).toBe(false);
   });
+
+  it('returns kind for every seeded type, including the v1.2.2 backfill and additions', () => {
+    setup();
+    const byName = Object.fromEntries(listItemTypes().map((t) => [t.name, t.kind]));
+    expect(byName).toEqual({
+      Laptop: 'warranty',
+      Appliance: 'warranty',
+      Subscription: 'subscription',
+      Contract: 'contract',
+      Loan: 'loan',
+    });
+  });
 });
 
 describe('createItemType', () => {
-  it('trims the name and stores the flag', () => {
+  it('trims the name and stores the kind, keeping is_subscription in lockstep', () => {
     setup();
-    const created = createItemType('  Streaming service  ', true);
+    const created = createItemType('  Streaming service  ', 'subscription');
     expect(created.name).toBe('Streaming service');
+    expect(created.kind).toBe('subscription');
     expect(created.isSubscription).toBe(true);
-    expect(findItemType(created.id)).toMatchObject({ name: 'Streaming service', isSubscription: true });
+    expect(findItemType(created.id)).toMatchObject({ name: 'Streaming service', kind: 'subscription', isSubscription: true });
+  });
+
+  it('stores a contract and a loan with is_subscription false', () => {
+    setup();
+    const contract = createItemType('Gym membership', 'contract');
+    expect(contract.kind).toBe('contract');
+    expect(contract.isSubscription).toBe(false);
+    const loan = createItemType('Car loan', 'loan');
+    expect(loan.kind).toBe('loan');
+    expect(loan.isSubscription).toBe(false);
   });
 
   it('rejects an empty name and one over 60 characters', () => {
     setup();
-    expect(() => createItemType('   ', false)).toThrowError(/name is required/i);
-    expect(() => createItemType('x'.repeat(61), false)).toThrowError(/60/);
-    expect(createItemType('x'.repeat(60), false).name).toHaveLength(60);
+    expect(() => createItemType('   ', 'warranty')).toThrowError(/name is required/i);
+    expect(() => createItemType('x'.repeat(61), 'warranty')).toThrowError(/60/);
+    expect(createItemType('x'.repeat(60), 'warranty').name).toHaveLength(60);
+  });
+
+  it('rejects an unknown kind (zod backstop behind the CHECK constraint)', () => {
+    setup();
+    const invalidKind = 'lease' as unknown as Parameters<typeof createItemType>[1];
+    expect(() => createItemType('Whatever', invalidKind)).toThrow();
   });
 
   it('rejects a duplicate that differs only in case, with a readable message', () => {
     setup();
-    expect(() => createItemType('laptop', false)).toThrowError(/already exists/i);
-    expect(() => createItemType('LAPTOP', false)).toThrowError(/Laptop/);
-    expect(listItemTypes()).toHaveLength(3);
+    expect(() => createItemType('laptop', 'warranty')).toThrowError(/already exists/i);
+    expect(() => createItemType('LAPTOP', 'warranty')).toThrowError(/Laptop/);
+    expect(listItemTypes()).toHaveLength(5);
   });
 });
 
-describe('renameItemType / setItemTypeSubscription', () => {
+describe('renameItemType / setItemTypeKind', () => {
   it('renames, including while the type is in use', () => {
     const { userId } = setup();
     const laptop = idOf('Laptop');
@@ -102,12 +139,14 @@ describe('renameItemType / setItemTypeSubscription', () => {
     expect(() => renameItemType(laptop, 'appliance')).toThrowError(/already exists/i);
   });
 
-  it('toggles is_subscription both ways', () => {
+  it('changes kind across all four values, keeping is_subscription in lockstep', () => {
     setup();
     const laptop = idOf('Laptop');
-    expect(setItemTypeSubscription(laptop, true).isSubscription).toBe(true);
-    expect(findItemType(laptop)!.isSubscription).toBe(true);
-    expect(setItemTypeSubscription(laptop, false).isSubscription).toBe(false);
+    expect(setItemTypeKind(laptop, 'subscription')).toMatchObject({ kind: 'subscription', isSubscription: true });
+    expect(findItemType(laptop)).toMatchObject({ kind: 'subscription', isSubscription: true });
+    expect(setItemTypeKind(laptop, 'contract')).toMatchObject({ kind: 'contract', isSubscription: false });
+    expect(setItemTypeKind(laptop, 'loan')).toMatchObject({ kind: 'loan', isSubscription: false });
+    expect(setItemTypeKind(laptop, 'warranty')).toMatchObject({ kind: 'warranty', isSubscription: false });
   });
 
   it('throws a readable error for an unknown id', () => {
@@ -129,14 +168,14 @@ describe('typeUsageCount / listItemTypesWithUsage', () => {
     expect(typeUsageCount(laptop)).toBe(2);
     expect(typeUsageCount(appliance)).toBe(1);
     const usage = Object.fromEntries(listItemTypesWithUsage().map((t) => [t.name, t.usageCount]));
-    expect(usage).toEqual({ Appliance: 1, Laptop: 2, Subscription: 0 });
+    expect(usage).toEqual({ Appliance: 1, Contract: 0, Laptop: 2, Loan: 0, Subscription: 0 });
   });
 });
 
 describe('deleteItemType', () => {
   it('deletes an unused type', () => {
     setup();
-    const spare = createItemType('Spare', false);
+    const spare = createItemType('Spare', 'warranty');
     deleteItemType(spare.id);
     expect(findItemType(spare.id)).toBeNull();
   });

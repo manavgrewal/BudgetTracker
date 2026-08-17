@@ -10,9 +10,10 @@ import {
   ItemTypeError,
   createItemType,
   deleteItemType,
+  itemKindSchema,
   itemTypeNameSchema,
   renameItemType,
-  setItemTypeSubscription,
+  setItemTypeKind,
 } from '@/lib/warranty/types';
 
 export interface ItemTypesFormState {
@@ -22,7 +23,6 @@ export interface ItemTypesFormState {
 
 const PATH = '/settings/item-types';
 
-const flagSchema = z.enum(['0', '1']).transform((v) => v === '1');
 const typeIdSchema = z.coerce.number().int().positive();
 
 function failure(error: unknown, fallback: string): ItemTypesFormState {
@@ -48,11 +48,11 @@ export async function createItemTypeAction(
 
   await requireAdmin();
   const parsed = z
-    .object({ name: itemTypeNameSchema, isSubscription: flagSchema })
-    .safeParse({ name: formData.get('name') ?? '', isSubscription: formData.get('isSubscription') ?? '0' });
+    .object({ name: itemTypeNameSchema, kind: itemKindSchema })
+    .safeParse({ name: formData.get('name') ?? '', kind: formData.get('kind') ?? 'warranty' });
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Please check the form.' };
   try {
-    const created = createItemType(parsed.data.name, parsed.data.isSubscription);
+    const created = createItemType(parsed.data.name, parsed.data.kind);
     revalidatePath(PATH);
     return { message: `Added ${created.name}.` };
   } catch (error) {
@@ -80,7 +80,8 @@ export async function renameItemTypeAction(
   }
 }
 
-export async function setSubscriptionAction(
+/** Supersedes setSubscriptionAction (v1.2.2): the row control is now a kind <select>. */
+export async function setKindAction(
   _prev: ItemTypesFormState,
   formData: FormData,
 ): Promise<ItemTypesFormState> {
@@ -88,18 +89,14 @@ export async function setSubscriptionAction(
 
   await requireAdmin();
   const parsed = z
-    .object({ typeId: typeIdSchema, isSubscription: flagSchema })
-    .safeParse({ typeId: formData.get('typeId'), isSubscription: formData.get('isSubscription') ?? '0' });
+    .object({ typeId: typeIdSchema, kind: itemKindSchema })
+    .safeParse({ typeId: formData.get('typeId'), kind: formData.get('kind') });
   if (!parsed.success) return { error: 'Invalid request.' };
   try {
-    const updated = setItemTypeSubscription(parsed.data.typeId, parsed.data.isSubscription);
+    const updated = setItemTypeKind(parsed.data.typeId, parsed.data.kind);
     revalidatePath(PATH);
     // Every item of this type changes wording immediately -- say so.
-    return {
-      message: updated.isSubscription
-        ? `${updated.name} items now show a cancel-by date.`
-        : `${updated.name} items now show a warranty expiry date.`,
-    };
+    return { message: `${updated.name} is now a ${updated.kind}.` };
   } catch (error) {
     return failure(error, 'Could not update that type.');
   }

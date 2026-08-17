@@ -163,7 +163,7 @@ describe('createWarrantyItem', () => {
 
 describe('item types (delta T6)', () => {
   it('writes type_id and surfaces typeName/isSubscription true for a subscription type', () => {
-    const sub = createItemType('Streaming Items', true);
+    const sub = createItemType('Streaming Items', 'subscription');
     const id = createWarrantyItem(input({ typeId: sub.id }));
     const row = getWarrantyItem(id)!;
     expect(row.typeId).toBe(sub.id);
@@ -179,8 +179,16 @@ describe('item types (delta T6)', () => {
     expect(row.isSubscription).toBe(false);
   });
 
+  it('v1.2.2: surfaces the type\'s kind, defaulting to warranty when untyped', () => {
+    const loan = createItemType('Car Loan Items', 'loan');
+    const typedId = createWarrantyItem(input({ typeId: loan.id }));
+    const untypedId = createWarrantyItem(input({ typeId: null }));
+    expect(getWarrantyItem(typedId)!.kind).toBe('loan');
+    expect(getWarrantyItem(untypedId)!.kind).toBe('warranty');
+  });
+
   it('updateWarrantyItem writes a new type_id', () => {
-    const type = createItemType('Laptop Items', false);
+    const type = createItemType('Laptop Items', 'warranty');
     const id = createWarrantyItem(input({ typeId: null }));
     updateWarrantyItem(id, input({ typeId: type.id }));
     const row = getWarrantyItem(id)!;
@@ -190,7 +198,7 @@ describe('item types (delta T6)', () => {
   });
 
   it('renaming a type changes typeName on the next read with no FTS row change', () => {
-    const type = createItemType('Gadget Items', false);
+    const type = createItemType('Gadget Items', 'warranty');
     const id = createWarrantyItem(input({ typeId: type.id, name: 'Rename Probe Item' }));
     const before = current!.db.get<{ c: number }>(
       sql`select count(*) as c from warranty_search where warranty_search match ${'"Probe"'}`,

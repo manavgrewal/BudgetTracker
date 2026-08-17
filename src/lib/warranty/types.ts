@@ -3,11 +3,13 @@ import { z } from 'zod';
 import { getDb } from '@/db/client';
 import { warrantyItemTypes, warrantyItems } from '@/db/schema';
 import { nowIso } from '@/lib/clock';
+import { ITEM_KINDS, type ItemKind } from '@/lib/warranty/constants';
 
 export interface ItemType {
   id: number;
   name: string;
   isSubscription: boolean;
+  kind: ItemKind;
   createdAt: string;
 }
 
@@ -21,6 +23,9 @@ export const itemTypeNameSchema = z
   .trim()
   .min(1, 'Name is required')
   .max(60, 'Name must be at most 60 characters');
+
+/** v1.2.2: warranty / subscription / contract / loan. The CHECK in 0004 is the backstop. */
+export const itemKindSchema = z.enum(ITEM_KINDS);
 
 const idSchema = z.number().int().positive();
 
@@ -55,6 +60,7 @@ const COLUMNS = {
   id: warrantyItemTypes.id,
   name: warrantyItemTypes.name,
   isSubscription: warrantyItemTypes.isSubscription,
+  kind: warrantyItemTypes.kind,
   createdAt: warrantyItemTypes.createdAt,
 } as const;
 
@@ -110,13 +116,16 @@ function requireType(id: number): ItemType {
   return found;
 }
 
-export function createItemType(name: string, isSubscription: boolean): ItemType {
+export function createItemType(name: string, kind: ItemKind): ItemType {
   const clean = itemTypeNameSchema.parse(name);
+  const cleanKind = itemKindSchema.parse(kind);
   const clash = findByNameCaseInsensitive(clean);
   if (clash) throw new ItemTypeError(`A type called "${clash.name}" already exists.`);
   return getDb()
     .insert(warrantyItemTypes)
-    .values({ name: clean, isSubscription, createdAt: nowIso() })
+    // is_subscription is derived from kind and kept in lockstep on every write (v1.2.2) --
+    // see the docblock on warrantyItemTypes in src/db/schema.ts.
+    .values({ name: clean, kind: cleanKind, isSubscription: cleanKind === 'subscription', createdAt: nowIso() })
     .returning(COLUMNS)
     .get();
 }
@@ -136,13 +145,18 @@ export function renameItemType(id: number, name: string): ItemType {
     .get();
 }
 
-/** MUST-19.7: takes effect immediately on every item of this type -- that is the point. */
-export function setItemTypeSubscription(id: number, isSubscription: boolean): ItemType {
+/**
+ * MUST-19.7: takes effect immediately on every item of this type -- that is the point.
+ * Supersedes setItemTypeSubscription (v1.2.2): `isSubscription` is derived from `kind` and
+ * written in the same statement, so it never drifts out of sync with it.
+ */
+export function setItemTypeKind(id: number, kind: ItemKind): ItemType {
   const typeId = idSchema.parse(id);
   requireType(typeId);
+  const cleanKind = itemKindSchema.parse(kind);
   return getDb()
     .update(warrantyItemTypes)
-    .set({ isSubscription })
+    .set({ kind: cleanKind, isSubscription: cleanKind === 'subscription' })
     .where(eq(warrantyItemTypes.id, typeId))
     .returning(COLUMNS)
     .get();

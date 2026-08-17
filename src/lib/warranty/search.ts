@@ -6,7 +6,7 @@ import {
   type WarrantyStatus,
 } from '@/lib/warranty/expiry';
 import type { WarrantyItemRow } from '@/lib/warranty/items';
-import { WARRANTY_SORTS, isWarrantySort, type WarrantySort } from '@/lib/warranty/constants';
+import { WARRANTY_SORTS, isWarrantySort, type ItemKind, type WarrantySort } from '@/lib/warranty/constants';
 
 /** §17.22 */
 export const WARRANTY_PAGE_SIZE = 50;
@@ -133,6 +133,7 @@ interface RawRow {
   type_id: number | null;
   type_name: string | null;
   is_subscription: number | null;
+  kind: ItemKind | null;
   notes: string | null;
   created_at: string;
   updated_at: string;
@@ -160,6 +161,8 @@ function toListItem(row: RawRow): WarrantyListItem {
     // Delta T6: the LEFT JOIN yields NULL for an untyped item -- normalise to false, same
     // as items.ts's toItemRow(), so callers never see a three-state value.
     isSubscription: row.is_subscription === 1,
+    // v1.2.2: same normalisation, to 'warranty' instead of false (items.ts's toItemRow()).
+    kind: row.kind ?? 'warranty',
     notes: row.notes,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -215,6 +218,7 @@ export function searchWarrantyItems(filter: WarrantySearchFilter = {}): Warranty
 
   const from = `from warranty_items i ${joins.join(' ')} ${whereSql}`;
   const selectSql = `select i.*, u.name as owner_name, t.name as type_name, t.is_subscription as is_subscription,
+      t.kind as kind,
       ${STATUS_CASE_SQL} as status,
       (select count(*) from warranty_receipts r where r.warranty_item_id = i.id) as receipt_count
     ${from}

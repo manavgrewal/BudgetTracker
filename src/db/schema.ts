@@ -396,16 +396,23 @@ export const warrantyReceipts = sqliteTable(
 );
 
 /**
- * Admin-maintained item types (spec section 19.2). Mirrors drizzle/0003_warranty_item_types.sql.
+ * Admin-maintained item types (spec section 19.2, amended v1.2.2 section 19 -- kinds).
+ * Mirrors drizzle/0003_warranty_item_types.sql and drizzle/0004_item_type_kinds.sql.
  *
- * NOT represented here -- these exist ONLY in that raw SQL file (MUST-3.4 / MUST-19.3):
- *   - CHECK (is_subscription IN (0,1)) and CHECK (length(trim(name)) BETWEEN 1 AND 60),
+ * NOT represented here -- these exist ONLY in those raw SQL files (MUST-3.4 / MUST-19.3):
+ *   - CHECK (is_subscription IN (0,1)) and CHECK (length(trim(name)) BETWEEN 1 AND 60)  (0003)
  *   - the COLLATE NOCASE collation on warranty_item_types_name_uq, which is what makes
- *     'Laptop' and 'laptop' the same type (ASCII-only folding -- accepted, section 19.2).
+ *     'Laptop' and 'laptop' the same type (ASCII-only folding -- accepted, section 19.2) (0003)
+ *   - CHECK (kind IN ('warranty','subscription','contract','loan'))                     (0004)
  *
- * `is_subscription` is the ONLY thing that makes an item a subscription: the period start,
- * length and end are warranty_items.purchase_date / warranty_months / expiry_date reused
- * verbatim (MUST-19.8). The flag changes wording, never derivation (MUST-19.12).
+ * `kind` (0004) is now the classifier: warranty / subscription / contract / loan. It arrives
+ * by ALTER TABLE ADD COLUMN, so -- same convention as users.mustChangePassword and
+ * warrantyItems.typeId -- it is declared LAST here, physically the last column.
+ * `is_subscription` is KEPT for old readers (append-only discipline) and is maintained by
+ * src/lib/warranty/types.ts as `kind === 'subscription'` on every write, so it never drifts
+ * out of sync with `kind`. The period start, length and end are still
+ * warranty_items.purchase_date / warranty_months / expiry_date reused verbatim (MUST-19.8).
+ * The kind changes wording only, never derivation (MUST-19.12).
  */
 export const warrantyItemTypes = sqliteTable(
   'warranty_item_types',
@@ -414,6 +421,7 @@ export const warrantyItemTypes = sqliteTable(
     name: text('name').notNull(),
     isSubscription: integer('is_subscription', { mode: 'boolean' }).notNull().default(false),
     createdAt: text('created_at').notNull(),
+    kind: text('kind', { enum: ['warranty', 'subscription', 'contract', 'loan'] }).notNull().default('warranty'),
   },
   (t) => [uniqueIndex('warranty_item_types_name_uq').on(t.name)],
 );

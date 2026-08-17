@@ -289,7 +289,7 @@ describe('searchWarrantyItems', () => {
 
   describe('item type filter and fields (delta T6)', () => {
     it('surfaces typeName and isSubscription on list rows, and null/false for untyped items', () => {
-      const sub = createItemType('Streaming Search', true);
+      const sub = createItemType('Streaming Search', 'subscription');
       const typedId = seed({ name: 'Spotify', typeId: sub.id });
       const untypedId = seed({ name: 'Untyped Fridge' });
 
@@ -302,9 +302,19 @@ describe('searchWarrantyItems', () => {
       expect(untypedRow.isSubscription).toBe(false);
     });
 
+    it('surfaces kind on list rows, defaulting to warranty for an untyped item (v1.2.2)', () => {
+      const contract = createItemType('Gym Search', 'contract');
+      const typedId = seed({ name: 'Gym membership', typeId: contract.id });
+      const untypedId = seed({ name: 'Untyped Toaster Kind' });
+
+      const result = searchWarrantyItems({ today: TODAY });
+      expect(result.rows.find((r) => r.id === typedId)!.kind).toBe('contract');
+      expect(result.rows.find((r) => r.id === untypedId)!.kind).toBe('warranty');
+    });
+
     it('filters by typeId and composes with q and status', () => {
-      const laptop = createItemType('Laptop Search', false);
-      const streaming = createItemType('Streaming Search 2', true);
+      const laptop = createItemType('Laptop Search', 'warranty');
+      const streaming = createItemType('Streaming Search 2', 'subscription');
       const dell = seed({ name: 'Dell XPS', typeId: laptop.id });
       seed({ name: 'Netflix', typeId: streaming.id, purchaseDate: TODAY, warrantyMonths: 1 });
       seed({ name: 'Untyped Toaster' });

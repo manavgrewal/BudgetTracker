@@ -9,15 +9,16 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { Notice } from '@/components/ui/Notice';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { TableWrap } from '@/components/ui/Table';
-import { Field, inputClass, labelClass } from '@/components/ui/form';
+import { Field, inputClass } from '@/components/ui/form';
 import {
   createItemTypeAction,
   deleteItemTypeAction,
   renameItemTypeAction,
-  setSubscriptionAction,
+  setKindAction,
   type ItemTypesFormState,
 } from './actions';
 import type { ItemTypeWithUsage } from '@/lib/warranty/types';
+import { ITEM_KINDS, ITEM_KIND_LABELS } from '@/lib/warranty/constants';
 
 const initialState: ItemTypesFormState = {};
 
@@ -40,9 +41,9 @@ export function ItemTypesManager({ types }: { types: ItemTypeWithUsage[] }) {
     setActiveSlot('rename');
     return renameItemTypeAction(prev, formData);
   }, initialState);
-  const [flagState, toggle] = useActionState(async (prev: ItemTypesFormState, formData: FormData) => {
+  const [flagState, changeKind] = useActionState(async (prev: ItemTypesFormState, formData: FormData) => {
     setActiveSlot('flag');
-    return setSubscriptionAction(prev, formData);
+    return setKindAction(prev, formData);
   }, initialState);
   const [deleteState, remove] = useActionState(async (prev: ItemTypesFormState, formData: FormData) => {
     setActiveSlot('delete');
@@ -61,9 +62,11 @@ export function ItemTypesManager({ types }: { types: ItemTypeWithUsage[] }) {
         title="Item types"
         description={
           <>
-            The list members choose from when they record a warranty. Marking a type as a subscription changes
-            the wording on those items: they show a <strong className="font-semibold text-ink">cancel by</strong> date instead of an
-            expiry date, and the dashboard reminds you before the period ends.
+            The list members choose from when they record an item. Each type has a{' '}
+            <strong className="font-semibold text-ink">kind</strong> — warranty, subscription, contract or loan —
+            which changes the wording on those items (for example, a subscription shows a{' '}
+            <strong className="font-semibold text-ink">cancel by</strong> date instead of an expiry date), and the
+            dashboard reminds you before the period ends.
           </>
         }
       />
@@ -77,17 +80,21 @@ export function ItemTypesManager({ types }: { types: ItemTypeWithUsage[] }) {
             <Field label="Type name">
               <input name="name" placeholder="Appliance" required maxLength={60} className={inputClass} />
             </Field>
-            <label className="flex items-center gap-2">
+            <Field label="Kind">
               {/*
-                No sibling hidden input here: FormData.get() returns the FIRST value for a
-                repeated key, so a hidden "0" placed before this box would always win over the
-                checkbox's "1" and the admin's choice would be silently discarded. The action's
-                `formData.get('isSubscription') ?? '0'` already covers the unchecked case, since
-                an unticked checkbox submits no entry for its name at all.
+                A plain <select> -- FormData.get() only ever returns one value for this key
+                either way, but a <select> also sidesteps the hidden-input-shadowing bug a
+                checkbox had here (see the create-form regression tests): there is exactly one
+                control and exactly one value, chosen, never inferred from absence.
               */}
-              <input type="checkbox" name="isSubscription" value="1" className="accent-accent" />
-              <span className={labelClass}>This is a subscription (show a cancel-by date)</span>
-            </label>
+              <select name="kind" defaultValue="warranty" className={inputClass}>
+                {ITEM_KINDS.map((kind) => (
+                  <option key={kind} value={kind}>
+                    {ITEM_KIND_LABELS[kind]}
+                  </option>
+                ))}
+              </select>
+            </Field>
             <SubmitButton className="w-fit">Add type</SubmitButton>
           </form>
         </CardBody>
@@ -107,7 +114,7 @@ export function ItemTypesManager({ types }: { types: ItemTypeWithUsage[] }) {
             <thead>
               <tr>
                 <th scope="col">Name</th>
-                <th scope="col">Subscription</th>
+                <th scope="col">Kind</th>
                 <th scope="col" className="text-right">Items using it</th>
                 <th scope="col">Actions</th>
               </tr>
@@ -117,8 +124,8 @@ export function ItemTypesManager({ types }: { types: ItemTypeWithUsage[] }) {
                 <tr key={type.id} className="align-top">
                   <td className="font-medium text-ink">{type.name}</td>
                   <td>
-                    <span className={type.isSubscription ? 'badge badge--accent' : 'badge badge--muted'}>
-                      {type.isSubscription ? 'yes' : 'no'}
+                    <span className={type.kind === 'warranty' ? 'badge badge--muted' : 'badge badge--accent'}>
+                      {ITEM_KIND_LABELS[type.kind]}
                     </span>
                   </td>
                   <td className="tabnum text-right text-muted">{type.usageCount}</td>
@@ -137,11 +144,22 @@ export function ItemTypesManager({ types }: { types: ItemTypeWithUsage[] }) {
                           Rename
                         </button>
                       </form>
-                      <form action={toggle}>
+                      <form action={changeKind} className="flex gap-1">
                         <input type="hidden" name="typeId" value={type.id} />
-                        <input type="hidden" name="isSubscription" value={type.isSubscription ? '0' : '1'} />
+                        <select
+                          name="kind"
+                          defaultValue={type.kind}
+                          aria-label={`Kind of ${type.name}`}
+                          className={rowInput}
+                        >
+                          {ITEM_KINDS.map((kind) => (
+                            <option key={kind} value={kind}>
+                              {ITEM_KIND_LABELS[kind]}
+                            </option>
+                          ))}
+                        </select>
                         <button type="submit" className={rowButton}>
-                          {type.isSubscription ? 'Not a subscription' : 'Mark as subscription'}
+                          Update kind
                         </button>
                       </form>
                       <form action={remove}>

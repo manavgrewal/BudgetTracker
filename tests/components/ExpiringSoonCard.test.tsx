@@ -14,8 +14,9 @@ function item(over: Partial<WarrantyListItem> = {}): WarrantyListItem {
     purchaseDate: '2026-07-16', warrantyMonths: 1, isLifetime: false, expiryDate: '2026-08-26',
     priceCents: 4999, ownerUserId: 7, ownerName: 'Alice', transactionId: null,
     // type-deltas.md T6: WarrantyItemRow (and therefore WarrantyListItem) now requires these
-    // three fields unconditionally -- null/false is the "untyped item" shape.
-    typeId: null, typeName: null, isSubscription: false,
+    // fields unconditionally -- null/false/'warranty' is the "untyped item" shape (v1.2.2
+    // adds `kind`, defaulting the same way isSubscription already did).
+    typeId: null, typeName: null, isSubscription: false, kind: 'warranty',
     notes: null,
     createdAt: '2026-07-16T00:00:00.000Z', updatedAt: '2026-07-16T00:00:00.000Z',
     status: 'expiring', receiptCount: 0,

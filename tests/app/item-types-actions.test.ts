@@ -19,12 +19,17 @@ import {
   createItemTypeAction,
   deleteItemTypeAction,
   renameItemTypeAction,
-  setSubscriptionAction,
+  setKindAction,
 } from '@/app/(app)/settings/item-types/actions';
 import { listItemTypes } from '@/lib/warranty/types';
 
 const SAME_ORIGIN = new Headers({ origin: 'http://nas.local:3000', host: 'nas.local:3000' });
 const CROSS_ORIGIN = new Headers({ origin: 'http://evil.local', host: 'nas.local:3000' });
+
+// v1.2.2: the seed now inserts five types (Laptop/Appliance/Subscription from 0003, plus
+// Contract/Loan added by 0004) -- see tests/db/warranty-item-type-kinds.test.ts for the
+// migration-level assertion of this exact set.
+const SEEDED_NAMES = ['Appliance', 'Contract', 'Laptop', 'Loan', 'Subscription'];
 
 let current: TestDb | null = null;
 afterEach(() => {
@@ -50,14 +55,14 @@ describe('cross-origin rejection (MUST-13.1)', () => {
     mockHeaders = CROSS_ORIGIN;
     const laptop = idOf('Laptop');
     for (const result of [
-      await createItemTypeAction({}, formData({ name: 'Router', isSubscription: '0' })),
+      await createItemTypeAction({}, formData({ name: 'Router', kind: 'warranty' })),
       await renameItemTypeAction({}, formData({ typeId: String(laptop), name: 'Notebook' })),
-      await setSubscriptionAction({}, formData({ typeId: String(laptop), isSubscription: '1' })),
+      await setKindAction({}, formData({ typeId: String(laptop), kind: 'subscription' })),
       await deleteItemTypeAction({}, formData({ typeId: String(laptop) })),
     ]) {
       expect(result.error).toMatch(/cross-origin/i);
     }
-    expect(listItemTypes().map((t) => t.name)).toEqual(['Appliance', 'Laptop', 'Subscription']);
+    expect(listItemTypes().map((t) => t.name)).toEqual(SEEDED_NAMES);
   });
 });
 
@@ -65,63 +70,63 @@ describe('admin gate', () => {
   it('refuses a non-admin caller', async () => {
     current = createTestDb();
     adminAllowed = false;
-    await expect(createItemTypeAction({}, formData({ name: 'Router', isSubscription: '0' }))).rejects.toThrow(
+    await expect(createItemTypeAction({}, formData({ name: 'Router', kind: 'warranty' }))).rejects.toThrow(
       /FORBIDDEN/,
     );
   });
 });
 
-describe('subscription flag FormData shape (regression: hidden-input shadowing)', () => {
-  // The create form used to render `<input type="hidden" name="isSubscription" value="0">`
-  // as a sibling BEFORE `<input type="checkbox" name="isSubscription" value="1">`.
-  // FormData.get() returns the FIRST value for a repeated key, so a checked box still
-  // produced formData.get('isSubscription') === '0' -- the admin's choice was silently
-  // discarded. The hidden input was deleted; these tests lock in the two real shapes an
-  // HTML form can actually submit for a checkbox, plus (for documentation) the duplicate-
-  // key shape the old broken form used to produce.
-
-  it('is a subscription when the checkbox key is present with value "1" (box checked)', async () => {
+describe('kind field (v1.2.2: supersedes the isSubscription checkbox)', () => {
+  it('persists the chosen kind, keeping is_subscription in lockstep, for every one of the four kinds', async () => {
     current = createTestDb();
-    await createItemTypeAction({}, formData({ name: 'Streaming service', isSubscription: '1' }));
-    expect(listItemTypes().find((t) => t.name === 'Streaming service')).toMatchObject({ isSubscription: true });
+    for (const kind of ['warranty', 'subscription', 'contract', 'loan'] as const) {
+      const name = `Kind test ${kind}`;
+      await createItemTypeAction({}, formData({ name, kind }));
+      expect(listItemTypes().find((t) => t.name === name)).toMatchObject({
+        kind,
+        isSubscription: kind === 'subscription',
+      });
+    }
   });
 
-  it('is NOT a subscription when the checkbox key is absent entirely (box unchecked)', async () => {
+  it('defaults to warranty when the kind field is absent entirely', async () => {
     current = createTestDb();
-    await createItemTypeAction({}, formData({ name: 'Router' }));
-    expect(listItemTypes().find((t) => t.name === 'Router')).toMatchObject({ isSubscription: false });
+    await createItemTypeAction({}, formData({ name: 'No kind supplied' }));
+    expect(listItemTypes().find((t) => t.name === 'No kind supplied')).toMatchObject({
+      kind: 'warranty',
+      isSubscription: false,
+    });
   });
 
-  it('documents current get()-first semantics for the old duplicate-key shape', async () => {
+  it('rejects an unrecognised kind instead of writing it', async () => {
     current = createTestDb();
-    const fd = new FormData();
-    fd.set('name', 'Legacy shape');
-    fd.append('isSubscription', '0');
-    fd.append('isSubscription', '1');
-    await createItemTypeAction({}, fd);
-    // formData.get('isSubscription') resolves to the FIRST appended value ('0'), exactly
-    // the failure mode the hidden input produced -- documented here, not relied upon.
-    expect(listItemTypes().find((t) => t.name === 'Legacy shape')).toMatchObject({ isSubscription: false });
+    const result = await createItemTypeAction({}, formData({ name: 'Bad kind', kind: 'lease' }));
+    expect(result.error).toBeTruthy();
+    expect(listItemTypes().some((t) => t.name === 'Bad kind')).toBe(false);
   });
 });
 
 describe('happy paths and refusals', () => {
-  it('creates, renames, toggles and deletes', async () => {
+  it('creates, renames, changes kind and deletes', async () => {
     current = createTestDb();
-    expect((await createItemTypeAction({}, formData({ name: ' Router ', isSubscription: '0' }))).message).toBeTruthy();
+    expect((await createItemTypeAction({}, formData({ name: ' Router ', kind: 'warranty' }))).message).toBeTruthy();
     const router = idOf('Router');
     expect((await renameItemTypeAction({}, formData({ typeId: String(router), name: 'Modem' }))).message).toBeTruthy();
     expect(
-      (await setSubscriptionAction({}, formData({ typeId: String(router), isSubscription: '1' }))).message,
+      (await setKindAction({}, formData({ typeId: String(router), kind: 'subscription' }))).message,
     ).toBeTruthy();
-    expect(listItemTypes().find((t) => t.id === router)).toMatchObject({ name: 'Modem', isSubscription: true });
+    expect(listItemTypes().find((t) => t.id === router)).toMatchObject({
+      name: 'Modem',
+      kind: 'subscription',
+      isSubscription: true,
+    });
     expect((await deleteItemTypeAction({}, formData({ typeId: String(router) }))).message).toBeTruthy();
     expect(listItemTypes().some((t) => t.id === router)).toBe(false);
   });
 
   it('surfaces the duplicate-name message instead of throwing', async () => {
     current = createTestDb();
-    const result = await createItemTypeAction({}, formData({ name: 'laptop', isSubscription: '0' }));
+    const result = await createItemTypeAction({}, formData({ name: 'laptop', kind: 'warranty' }));
     expect(result.error).toMatch(/already exists/i);
   });
 

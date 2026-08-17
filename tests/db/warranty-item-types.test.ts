@@ -87,12 +87,16 @@ describe('migration 0003 — objects and seeds', () => {
     expect(names.has('warranty_items_type_idx')).toBe(true);
   });
 
-  it('seeds exactly Laptop(0), Appliance(0), Subscription(1) — and nothing else', () => {
+  it('seeds exactly Laptop(0), Appliance(0), Subscription(1) at 0003, and nothing else at that point', () => {
+    // createTestDb() always applies the full migration chain, so 0004's Contract/Loan rows
+    // are present too by the time this runs -- see tests/db/warranty-item-type-kinds.test.ts
+    // for that migration's own seed assertion. This test still pins 0003's OWN three rows
+    // (name/is_subscription), which 0004 never touches by name or by is_subscription value.
     current = createTestDb();
     const rows = current.sqlite
       .prepare('select name, is_subscription from warranty_item_types order by id')
       .all() as { name: string; is_subscription: number }[];
-    expect(rows).toEqual([
+    expect(rows.slice(0, 3)).toEqual([
       { name: 'Laptop', is_subscription: 0 },
       { name: 'Appliance', is_subscription: 0 },
       { name: 'Subscription', is_subscription: 1 },
@@ -165,7 +169,9 @@ describe('migration 0003 — constraints', () => {
     current = createTestDb();
     const id = insertType(current, 'Unused');
     current.sqlite.prepare('delete from warranty_item_types where id = ?').run(id);
-    expect(current.sqlite.prepare('select count(*) as c from warranty_item_types').get()).toEqual({ c: 3 });
+    // 5, not 3: the full migration chain (0003 + 0004) seeds Laptop/Appliance/Subscription
+    // AND Contract/Loan -- see tests/db/warranty-item-type-kinds.test.ts.
+    expect(current.sqlite.prepare('select count(*) as c from warranty_item_types').get()).toEqual({ c: 5 });
   });
 
   it('does NOT re-tokenize the FTS row when only type_id changes', () => {

@@ -776,6 +776,7 @@ Defaults chosen while writing this spec. Each is a single constant or a one-para
 26. **`price_cents` is a positive magnitude**, unlike `transactions.amount_cents`; §11 converts with `Math.abs`.
 27. **Three new runtime dependencies** (`tesseract.js`, `pdfjs-dist`, `tar`) and no base-image change.
 28. **`tessdata_fast` chosen over `tessdata_best`/standard (~15MB): 8x smaller image, faster cold OCR on Pi/NAS; accuracy trade accepted for receipt-search use. (recorded at final review)**
+29. **Loans are dates and documents only — no balance, no payment schedule, no interest math.** A loan item type (v1.2.2, §19.12) reuses the exact same purchase/term/expiry triple as every other kind: start date, term in months, a computed "paid off by" date. Tracking a running balance or amortization would be a different feature (a lending tracker), not a generalization of the warranty/coverage tracker this spec builds. Deliberate scope cut, taken on the owner's behalf when the kind was requested.
 
 ---
 
@@ -944,6 +945,31 @@ Extending §17, same rules — each is one constant or one paragraph if the owne
 30. **Three seeded types only** (Laptop, Appliance, Subscription), created and deletable like any other row; the seed exists so the first dropdown is not empty, not to be a taxonomy.
 31. **`NOCASE` uniqueness is ASCII-only** — accepted (§19.2).
 32. **The wording rule is a helper, not a column** — `expiryNoun()` in the client-safe `src/lib/warranty/constants.ts`; no denormalised "is_subscription" copy on `warranty_items`, so toggling the flag on a type is instantly correct everywhere.
+
+### 19.12 Amendment (v1.2.2) — the tracker generalizes to "Contracts & Coverage": kinds
+
+**Status of this amendment.** Requested by the owner on 2026-08-17, after v1.2.0/v1.2.1 shipped. Everything here is **additive** on top of §19: the boolean `is_subscription` flag from §19.2 is **not removed** — it is kept for old readers and is now *derived from* the new `kind` column below, maintained in lockstep on every write. No rule in §1–§19.11 is withdrawn.
+
+**The change.** A type's single boolean (subscription / not-subscription) becomes a four-value **`kind`**: `warranty`, `subscription`, `contract`, `loan`. The household's use case grew from "warranties and subscriptions" to "anything with a start date and a term that eventually needs attention" — a phone contract, a car loan — and all three already fit the existing purchase/term/expiry triple (§19.5) without a new column.
+
+**Migration `drizzle/0004_item_type_kinds.sql`** (journal idx 4, `when` 1755561600000): adds `kind TEXT NOT NULL DEFAULT 'warranty' CHECK (kind IN ('warranty','subscription','contract','loan'))` to `warranty_item_types` by `ALTER TABLE ADD COLUMN` (same legality argument as §19.3's `type_id`); backfills `kind = 'subscription'` for every row where `is_subscription = 1`; seeds `Contract` (`kind = 'contract'`) and `Loan` (`kind = 'loan'`), each guarded by `INSERT ... SELECT ... WHERE NOT EXISTS (... COLLATE NOCASE)` so a household that already created its own type named "Contract" or "Loan" before upgrading never gets a silent duplicate. `created_at` for both is the literal `'2026-08-17T00:00:00.000Z'`, same discipline as §19.2's three original seeds.
+
+**The wording matrix (`src/lib/warranty/constants.ts`)**, per kind — start-date label / term-length label / expiry verb / open-ended label:
+
+| Kind | Start date label | Term label | Expiry verb | Open-ended label |
+|---|---|---|---|---|
+| `warranty` | Purchase date | Warranty (months) | expires | Lifetime warranty |
+| `subscription` | Start date | Duration (months) | cancel by | Ongoing (no end date) |
+| `contract` | Start date | Term (months) | ends on | Open-ended |
+| `loan` | Start date | Term (months) | paid off by | Ongoing (no end date) |
+
+Helpers: `formStartLabel(kind)`, `formTermLabel(kind)`, `formOpenEndedLabel(kind)`, `expiryNounForKind(kind)`, `expiryPhraseForKind(kind, date)`, `expiringSoonLabelForKind(kind, days)`. The pre-existing boolean helpers (`expiryNoun`, `expiryPhrase`, `expiringSoonLabel`) become thin wrappers over these (`isSubscription ? 'subscription' : 'warranty'`), producing byte-identical output to before — every existing warranty/subscription surface keeps compiling and keeps showing the same words with zero visible change. Wiring the contract/loan wording into the add/edit form, the list, the detail page and the dashboard widget is a follow-up task; this amendment builds the library foundation only (`ItemKind` type, the wording matrix, `createItemType`/`setItemTypeKind` taking a `kind`, `listItemTypes`/`findItemType`/list-row/`expiringSoonItems` rows all carrying a `kind` field) so that follow-up is page wiring, not schema or library work.
+
+**`setItemTypeSubscription(id, isSubscription)` is superseded by `setItemTypeKind(id, kind)`** — same MUST-19.7 rule (always allowed, takes effect immediately on every item of that type), now writing `kind` and the derived `is_subscription` in the same statement so they can never drift apart.
+
+**Admin page** (`/settings/item-types`): the subscription checkbox becomes a `kind` `<select>` with four human-labelled options, on both the "add a type" form and each row's kind control. MUST-19.14's other guarantees (admin-only, cross-origin check first, zod validation, `revalidatePath`) are unchanged.
+
+**Loans carry no balance.** See §17 item 29: a loan type is dates and documents only, exactly like every other kind — no payment schedule, no running balance, no interest math. That is a deliberate scope cut, not a deferred feature.
 
 ---
 
@@ -1381,3 +1407,4 @@ Extending §17 and §19.11, same rules — each is one constant or one paragraph
 - **v1.0** (2026-08-16): initial approved design for the warranty tracker, targeting Budget Tracker v1.1.0.
 - **v1.1** (2026-08-16): §19 addendum — warranty item types (admin-maintained list, migration `0003`) and subscriptions tracked through the existing purchase/term/expiry fields with `is_subscription`-keyed wording. User-requested mid-build, after Tasks 1–3 had landed; §1–§18 unchanged.
 - **v1.2** (2026-08-16): §20 addendum — GUI restore-on-next-start, targeting Budget Tracker v1.2.0. Adds an admin-only Restore control to Settings → Backups that validates and stages an artifact and restarts the process; the restore is applied by the boot hook before any database connection opens. Amends §12.2/§17.11's "no in-app restore button" while preserving the invariant behind it; extracts the restore logic into `scripts/restore-core.ts` shared by the CLI and the app; no schema change. §1–§19 otherwise unchanged.
+- **v1.2.2** (2026-08-17): §19.12 amendment — the warranty tracker generalizes to "Contracts & Coverage": item types gain a four-value `kind` (warranty/subscription/contract/loan), migration `0004_item_type_kinds.sql`, superseding `setItemTypeSubscription` with `setItemTypeKind` and adding the per-kind wording matrix to `src/lib/warranty/constants.ts`. `is_subscription` is kept, derived from `kind`. §17 item 29 records the loan scope cut (dates and documents only, no balance math). This task builds the library/migration/admin-page foundation; wiring the new wording into the warranty item pages themselves is a follow-up task. §1–§19.11 and §20 otherwise unchanged.
