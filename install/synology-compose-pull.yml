@@ -1,0 +1,56 @@
+# Budget Tracker — prebuilt image, paste this into Container Manager -> Project -> Create.
+#
+# WHAT THIS IS: the pull-only compose file. Docker pulls a ready-to-run multi-arch image
+# (linux/amd64 + linux/arm64) from GHCR — ghcr.io/manavgrewal/budgettracker — instead of
+# building one from source. No Dockerfile, no source checkout, no build wait. It works the
+# same way on Synology Container Manager, QNAP, Unraid, TrueNAS, or any other Docker host;
+# nothing in this file is Synology-specific except this comment block.
+#
+# BEFORE STARTING:
+#   1. Replace PASTE-YOUR-GENERATED-KEY-HERE below with a random string of at least 32
+#      bytes — see docs/INSTALL-SYNOLOGY.md step 4, or run `openssl rand -base64 48`.
+#   2. Create the data folder and give it Read/Write permission BEFORE the first start —
+#      see docs/INSTALL-SYNOLOGY.md steps 1-2 (File Station -> right-click the data folder
+#      -> Properties -> Permission -> Create -> grant Read/Write to Everyone, or your
+#      `docker` group user). Skipping this leaves the container crash-looping on an
+#      unwritable /data.
+#
+# PINNING A VERSION: this file tracks ":latest", the newest published image. To stay on a
+# known-good release instead of always taking the newest one, change
+# "ghcr.io/manavgrewal/budgettracker:latest" below to a specific version tag, e.g.
+# "ghcr.io/manavgrewal/budgettracker:1.2.0".
+services:
+  budget-tracker:
+    image: ghcr.io/manavgrewal/budgettracker:latest
+    container_name: budget-tracker
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      SECRET_KEY: "PASTE-YOUR-GENERATED-KEY-HERE"
+      TRUST_PROXY: "0"
+      TZ: "America/Toronto"
+      PORT: "3000"
+      DATA_DIR: /data
+    volumes:
+      # Relative to this compose file's folder (the Container Manager project
+      # path) — works on any volume, /volume1 or otherwise.
+      - ./data:/data
+    # Container hardening — identical to the main docker-compose.yml.
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s

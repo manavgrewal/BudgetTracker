@@ -66,6 +66,11 @@ else is affected: transactions, budgets, goals and passwords are untouched.
 
 ## 2. Install
 
+**Fastest path: no build at all.** Pull a prebuilt multi-arch image from GHCR with
+[`install/synology-compose-pull.yml`](install/synology-compose-pull.yml) — see
+[INSTALL.md's quick start](INSTALL.md#quick-start--prebuilt-image-any-docker-host-no-build) for
+the four steps. Everything below is the build-from-source alternative.
+
 ### Primary path: build on a PC, transfer the image
 
 `next build` can exceed the RAM of entry-level NAS models, so build where you have memory to

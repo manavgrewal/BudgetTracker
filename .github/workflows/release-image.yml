@@ -1,0 +1,119 @@
+# Publishes a prebuilt multi-arch image to GHCR. This is deliberately NOT triggered on every
+# push to main — image releases are a manual, tag-driven event, matching the app's own
+# manual-update philosophy (see install/update.sh: "no auto-update, no in-app banner").
+#
+# Two ways to run it:
+#   - push a version tag, e.g. `git tag v1.2.0 && git push origin v1.2.0`
+#   - Actions -> Release image -> Run workflow (manual dispatch, uses package.json's version)
+#
+# After the first successful run, one manual step remains outside this workflow: GHCR
+# packages are private by default. Go to the package's Settings -> Change visibility -> Public,
+# or `docker pull` will fail for everyone except the repo owner. See INSTALL.md.
+name: Release image
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch: {}
+
+# GITHUB_TOKEN needs to push to GHCR; nothing else in this workflow needs write access.
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_NAME: ghcr.io/manavgrewal/budgettracker
+
+jobs:
+  guard:
+    name: Guard (version + OCR assets)
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # MUST-7.9 / acceptance A3: a tracing miss (better-sqlite3, drizzle/, the OCR/PDF
+      # assets) must fail loudly here, not silently degrade to tesseract.js's CDN fallback
+      # in someone's LAN-only install. Same guard the Dockerfile itself runs at build time.
+      - name: Check OCR assets are present
+        run: node scripts/check-ocr-assets.mjs
+
+      # A GHCR tag with no matching package.json bump is exactly the "bumped the version in
+      # one place and not the other" class of bug this catches at the door, before any
+      # image is built or pushed. workflow_dispatch has no tag to check against, so it just
+      # reports package.json's version and proceeds.
+      - name: Resolve and verify release version
+        id: version
+        env:
+          GITHUB_REF: ${{ github.ref }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            VERSION="$(node -e "console.log(require('./package.json').version)")"
+            echo "Manual dispatch: using package.json version ${VERSION} (no tag to verify against)."
+          else
+            TAG="${GITHUB_REF#refs/tags/}"
+            VERSION="${TAG#v}"
+            node -e "
+              const tagVersion = process.argv[1];
+              const pkgVersion = require('./package.json').version;
+              if (tagVersion !== pkgVersion) {
+                console.error(
+                  'Tag v' + tagVersion + ' does not match package.json version ' + pkgVersion +
+                  '. Bump package.json (and CHANGELOG.md) and retag before releasing an image.'
+                );
+                process.exit(1);
+              }
+              console.log('Tag v' + tagVersion + ' matches package.json version ' + pkgVersion + '.');
+            " "$VERSION"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
+  build:
+    name: Build and push multi-arch image
+    needs: guard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # better-sqlite3's native addon is compiled inside each target platform's image (the
+      # deps stage already does this on amd64 and arm64 alike), and the tesseract.js OCR
+      # WASM/language data copied into the runtime stage is architecture-neutral — no
+      # Dockerfile changes needed for arm64, only the platform list below.
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ env.IMAGE_NAME }}:${{ needs.guard.outputs.version }}
+            ${{ env.IMAGE_NAME }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

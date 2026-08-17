@@ -21,6 +21,15 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+### Added
+
+- **Prebuilt multi-arch images on GHCR.** Tagging a release (`v*`) or running the new
+  `Release image` workflow by hand builds and pushes `ghcr.io/manavgrewal/budgettracker`
+  for linux/amd64 and linux/arm64, tagged with both the version and `latest`. Paired with a
+  new pull-only compose file, `install/synology-compose-pull.yml`, installing no longer
+  requires a source checkout or a `docker build` — Immich-style paste-and-go, on Synology,
+  QNAP, Unraid, or any other Docker host.
+
 ## [1.2.0] - 2026-08-17
 
 **Verify after updating:** restore a backup once via Settings → Backups → Restore — the app

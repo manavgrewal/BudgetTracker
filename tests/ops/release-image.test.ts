@@ -1,0 +1,156 @@
+import { describe, it, expect } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+
+const root = process.cwd();
+const read = (name: string) => fs.readFileSync(path.join(root, name), 'utf8');
+
+const WORKFLOW_PATH = '.github/workflows/release-image.yml';
+
+/**
+ * No YAML parser is a dependency of this project (checked package.json's devDependencies), so
+ * these are careful text assertions rather than a real parse — the same approach the sibling
+ * ops tests already use for the Dockerfile and compose files. As a lightweight parseability
+ * smoke test, YAML forbids tabs for indentation, so a tab anywhere is a real red flag.
+ */
+describe('.github/workflows/release-image.yml', () => {
+  const workflow = read(WORKFLOW_PATH);
+
+  it('contains no tab-indented lines (a common YAML parse-breaker)', () => {
+    const lines = workflow.split(/\r?\n/);
+    for (const line of lines) {
+      const leading = line.match(/^[ \t]*/)?.[0] ?? '';
+      expect(leading, `tab indentation found: ${JSON.stringify(line)}`).not.toContain('\t');
+    }
+  });
+
+  it('has balanced braces and no obviously truncated flow mappings', () => {
+    const opens = (workflow.match(/\{/g) ?? []).length;
+    const closes = (workflow.match(/\}/g) ?? []).length;
+    expect(opens).toBe(closes);
+  });
+
+  it('triggers on version tags and manual dispatch, and NOT on every push to a branch', () => {
+    const onBlock = workflow.slice(workflow.indexOf('\non:'), workflow.indexOf('permissions:'));
+    expect(onBlock).toMatch(/push:/);
+    expect(onBlock).toMatch(/tags:\s*\n\s*-\s*'v\*'/);
+    expect(onBlock).toMatch(/workflow_dispatch:/);
+    // The whole point: image releases are deliberate/tag-driven, not a side effect of
+    // merging to main. A "branches:" trigger here would defeat that.
+    expect(onBlock).not.toMatch(/branches:/);
+  });
+
+  it('declares packages: write and contents: read at the workflow level', () => {
+    const beforeJobs = workflow.slice(0, workflow.indexOf('\njobs:'));
+    expect(beforeJobs).toMatch(/^permissions:\s*$/m);
+    const permissionsBlock = beforeJobs.slice(beforeJobs.indexOf('permissions:'));
+    expect(permissionsBlock).toMatch(/contents:\s*read/);
+    expect(permissionsBlock).toMatch(/packages:\s*write/);
+  });
+
+  it('targets the GHCR image name', () => {
+    expect(workflow).toContain('ghcr.io/manavgrewal/budgettracker');
+  });
+
+  it('pins every third-party action to a major version, not a floating branch or SHA-less latest', () => {
+    const usesLines = workflow.match(/uses:\s*\S+/g) ?? [];
+    expect(usesLines.length).toBeGreaterThan(0);
+    for (const line of usesLines) {
+      expect(line, `unpinned or non-major-version action: ${line}`).toMatch(/@v\d+$/);
+    }
+    for (const action of [
+      'actions/checkout@v',
+      'actions/setup-node@v',
+      'docker/setup-qemu-action@v',
+      'docker/setup-buildx-action@v',
+      'docker/login-action@v',
+      'docker/build-push-action@v',
+    ]) {
+      expect(workflow).toContain(action);
+    }
+  });
+
+  it('builds both linux/amd64 and linux/arm64', () => {
+    expect(workflow).toContain('linux/amd64,linux/arm64');
+  });
+
+  it('tags the pushed image with both the version and latest', () => {
+    const buildJob = workflow.slice(workflow.indexOf('build:'));
+    expect(buildJob).toMatch(/\$\{\{\s*env\.IMAGE_NAME\s*\}\}:\$\{\{\s*needs\.guard\.outputs\.version\s*\}\}/);
+    expect(buildJob).toMatch(/\$\{\{\s*env\.IMAGE_NAME\s*\}\}:latest/);
+  });
+
+  it('logs in with GITHUB_TOKEN, not a hand-rolled PAT secret', () => {
+    expect(workflow).toContain('password: ${{ secrets.GITHUB_TOKEN }}');
+  });
+
+  it('uses the GitHub Actions cache for build layers', () => {
+    expect(workflow).toContain('cache-from: type=gha');
+    expect(workflow).toContain('cache-to: type=gha');
+  });
+
+  it('runs the repo OCR-assets guard before any image is built', () => {
+    expect(workflow).toContain('node scripts/check-ocr-assets.mjs');
+    expect(workflow.indexOf('node scripts/check-ocr-assets.mjs')).toBeLessThan(workflow.indexOf('build-push-action'));
+  });
+
+  it('fails loudly when the pushed tag does not match package.json version', () => {
+    const guardJob = workflow.slice(workflow.indexOf('guard:'), workflow.indexOf('build:'));
+    expect(guardJob).toContain("require('./package.json').version");
+    expect(guardJob).toMatch(/tagVersion !== pkgVersion/);
+    expect(guardJob).toContain('process.exit(1)');
+    expect(guardJob).toMatch(/does not match package\.json version/);
+  });
+
+  it('the build job depends on the guard job, so a bad version never reaches a push', () => {
+    const buildJob = workflow.slice(workflow.indexOf('\n  build:'));
+    expect(buildJob).toMatch(/needs:\s*guard/);
+  });
+});
+
+describe('install/synology-compose-pull.yml', () => {
+  const pullCompose = read('install/synology-compose-pull.yml');
+  const buildCompose = read('install/synology-compose.yml');
+
+  it('pulls the GHCR image and has no build line', () => {
+    expect(pullCompose).toContain('image: ghcr.io/manavgrewal/budgettracker:latest');
+    expect(pullCompose).not.toMatch(/^\s*build:\s*\./m);
+    expect(pullCompose).not.toContain('build: .');
+  });
+
+  it('explains what it is, the SECRET_KEY placeholder, the data-folder permission step, and how to pin a version', () => {
+    expect(pullCompose).toMatch(/PASTE-YOUR-GENERATED-KEY-HERE/);
+    expect(pullCompose).toMatch(/docs\/INSTALL-SYNOLOGY\.md steps? 1-2/);
+    expect(pullCompose).toMatch(/Read\/Write/);
+    expect(pullCompose).toMatch(/:latest.*to a specific version tag|change.*:latest.*to.*:1\.2\.0|1\.2\.0/i);
+  });
+
+  it('carries the same literal SECRET_KEY placeholder pattern as the build compose (no .env here either)', () => {
+    expect(pullCompose).toContain('PASTE-YOUR-GENERATED-KEY-HERE');
+    expect(pullCompose).not.toContain('${SECRET_KEY');
+  });
+
+  it('keeps every hardening setting from the main compose file (read_only, cap_drop, no-new-privileges, tmpfs, healthcheck)', () => {
+    for (const needle of [
+      'read_only: true',
+      'tmpfs:',
+      '/tmp',
+      'cap_drop:',
+      'no-new-privileges:true',
+      'healthcheck:',
+      '/api/health',
+    ]) {
+      expect(pullCompose, `missing hardening needle: ${needle}`).toContain(needle);
+      expect(buildCompose, `sanity: build compose missing ${needle}`).toContain(needle);
+    }
+  });
+
+  it('uses the same service and container name as the build-from-source compose', () => {
+    expect(pullCompose).toContain('container_name: budget-tracker');
+    expect(pullCompose).toContain('services:\n  budget-tracker:');
+  });
+
+  it('mounts /data the same relative way as the build compose', () => {
+    expect(pullCompose).toContain('./data:/data');
+  });
+});

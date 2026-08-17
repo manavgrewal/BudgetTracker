@@ -557,9 +557,13 @@ describe('INSTALL.md', () => {
     expect(readme).toContain('X-Forwarded-Host');
   });
 
-  it('states that local build is the default and GHCR is deferred', () => {
-    expect(install).toMatch(/built locally|local (image )?build/i);
+  it('leads with the prebuilt GHCR image and still documents building from source', () => {
     expect(install).toContain('GHCR');
+    expect(install).toContain('synology-compose-pull.yml');
+    expect(install.indexOf('Quick start — prebuilt image')).toBeLessThan(
+      install.indexOf('## Prerequisites'),
+    );
+    expect(install).toMatch(/build from source/i);
   });
 
   it('has a manual QA checklist', () => {

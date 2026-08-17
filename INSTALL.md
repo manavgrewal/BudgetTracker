@@ -4,9 +4,37 @@ Budget Tracker runs as one Docker container with one SQLite file. There is no cl
 sign-up, and no network traffic at runtime. Pick your platform below; each path ends with a URL
 you can open.
 
-**The image is built locally on your own machine.** Publishing prebuilt multi-arch images to
-**GHCR** (so installs become pull-only with no build wait) is an explicitly deferred enhancement
-— it needs a public repository decision first.
+---
+
+## Quick start — prebuilt image (any Docker host, no build)
+
+The fastest way in: no source checkout, no `docker build`, no compiler, no RAM headroom for a
+Next.js build. Docker pulls a ready-to-run multi-arch image (linux/amd64 + linux/arm64) from
+**GHCR** and starts it — the same pull-only pattern projects like Immich use.
+
+1. Make a project folder (e.g. `budget-tracker`) with a `data` subfolder inside it that the
+   container can write to.
+2. Save [`install/synology-compose-pull.yml`](install/synology-compose-pull.yml) into that
+   folder as `docker-compose.yml`. It works unchanged on Synology Container Manager, QNAP,
+   Unraid, TrueNAS SCALE, or any plain Linux/Windows/macOS Docker host — nothing in it is
+   Synology-specific.
+3. Open it and replace `PASTE-YOUR-GENERATED-KEY-HERE` with a random string of at least 32
+   bytes (`openssl rand -base64 48` works, or see the SECRET_KEY note under Prerequisites).
+4. `docker compose up -d`, then open `http://<host>:3000`.
+
+Pin a specific release instead of always tracking the newest image by changing `:latest` to a
+version tag in the compose file's `image:` line, e.g. `ghcr.io/manavgrewal/budgettracker:1.2.0`.
+
+> **First image lands with the v1.2.0 tag.** The image is published by
+> `.github/workflows/release-image.yml` once the `v1.2.0` tag is pushed — before that, GHCR has
+> nothing to pull. Use the build-from-source paths below until then.
+>
+> **Maintainer note (one-time, manual):** after the workflow's first successful run, GHCR
+> packages default to **private**. Go to the package on GitHub → **Package settings** →
+> **Change visibility** → **Public**, or `docker pull` fails for everyone but the repo owner.
+
+Prefer to build from source, or want to audit the image yourself first? Every path below still
+works exactly as it did before.
 
 ---
 

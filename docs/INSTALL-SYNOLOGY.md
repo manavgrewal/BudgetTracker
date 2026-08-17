@@ -16,6 +16,24 @@ You will need about 20 minutes, most of it waiting for the image to build.
 
 ---
 
+## Option A: prebuilt image (fastest)
+
+Skip the build entirely. GHCR hosts a ready-to-run multi-arch image, so Container Manager only
+has to pull and start it — no 5–20 minute build wait, and no need to upload the source at all.
+
+- Create the `data` folder and give it Read/Write permission first — that's steps 1–2 below,
+  and it matters just as much here: skip it and the container crash-loops until you fix it.
+- Use [`install/synology-compose-pull.yml`](../install/synology-compose-pull.yml) instead of
+  `install/synology-compose.yml` when you get to **Create the Project** (step 6): paste its
+  contents there instead, with your SECRET_KEY filled in the same way (step 4 below).
+- Skip step 3 (uploading the source) entirely — the pull compose has no `build:` line, so
+  Container Manager never needs the project files.
+
+Prefer to build from source instead (for example, to audit the code yourself first)? Continue
+with the walkthrough below.
+
+## Option B: build from source
+
 1. **Create the folder.** Open **File Station**. If there is no `docker` shared folder, create
    one (Control Panel → Shared Folder → Create → name it `docker`). Inside `docker`, create a
    folder called `budget-tracker`, and inside that one, a folder called `data`.
