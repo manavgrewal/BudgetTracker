@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, cleanup, screen, fireEvent } from '@testing-library/react';
+import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/react';
 import { WarrantyDetailClient } from '@/app/(app)/warranties/[id]/warranty-detail-client';
+import { updateWarrantyAction } from '@/app/(app)/warranties/actions';
 import type { WarrantyItemRow, WarrantyReceiptRow } from '@/lib/warranty/items';
 
 vi.mock('@/app/(app)/warranties/actions', () => ({
@@ -68,6 +69,41 @@ describe('WarrantyDetailClient', () => {
     expect(screen.getByText('SN-1')).toBeTruthy();
     expect(screen.getByText('Alice')).toBeTruthy();
     expect(screen.getByText('Active')).toBeTruthy();
+  });
+
+  // --- Bug fix (v1.2.4): edit replaces the view, kind-aware success message ---
+
+  it('hides the read-only detail view while editing and restores it via Cancel edit', () => {
+    renderDetail();
+    // 'Home Depot' (the item's vendor) only ever appears as read-only TEXT in the detail
+    // view -- the edit form shows the same value as an <input defaultValue>, which
+    // getByText/queryByText do not match.
+    expect(screen.getByText('Home Depot')).toBeTruthy();
+    expect(screen.queryByText('Edit this item')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    expect(screen.queryByText('Home Depot')).toBeNull();
+    expect(screen.getByText('Edit this item')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /cancel edit/i }));
+    expect(screen.getByText('Home Depot')).toBeTruthy();
+    expect(screen.queryByText('Edit this item')).toBeNull();
+  });
+
+  it('closes the edit form and restores the view after a successful save, showing the kind-aware message', async () => {
+    vi.mocked(updateWarrantyAction).mockResolvedValueOnce({ message: 'Subscription updated.' });
+    renderDetail();
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    expect(screen.getByText('Edit this item')).toBeTruthy();
+
+    const saveButton = screen.getByRole('button', { name: /save changes/i });
+    fireEvent.submit(saveButton.closest('form')!);
+
+    await waitFor(() => {
+      expect(screen.getByText('Subscription updated.')).toBeTruthy();
+      expect(screen.queryByText('Edit this item')).toBeNull();
+      expect(screen.getByText('Home Depot')).toBeTruthy();
+    });
   });
 
   it('renders an image receipt inline through the authenticated route', () => {

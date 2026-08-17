@@ -21,6 +21,23 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.2.4] - 2026-08-17
+
+### Fixed
+
+- **Edit no longer opens below the item detail view.** On a Contracts & Coverage item's
+  detail page, clicking Edit used to render the edit form BELOW the still-visible read-only
+  view, so a scrolled-down member saw no change and assumed the click did nothing. The edit
+  form now replaces the read-only view in place; Cancel edit — or a successful save — restores
+  the view.
+- **Success message now names the item's actual kind.** Saving an edit used to always say
+  "Warranty updated.", even for a subscription, contract, or loan. The confirmation now reads
+  "Subscription updated.", "Contract updated.", "Loan updated.", or "Warranty updated." to
+  match the item's own type, reusing the existing per-kind noun matrix in
+  `src/lib/warranty/constants.ts`. A handful of generic error strings in `actions.ts` that
+  hard-coded "warranty" regardless of kind (e.g. "That warranty no longer exists.") were swept
+  to the neutral "item" wording at the same time.
+
 ## [1.2.3] - 2026-08-17
 
 ### Added

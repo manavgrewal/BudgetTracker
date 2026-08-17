@@ -25,7 +25,7 @@ import {
 import { MAX_FILES_PER_UPLOAD } from '@/lib/warranty/receipts';
 import { STAGING_ID_RE } from '@/lib/warranty/staging';
 import { findItemType } from '@/lib/warranty/types';
-import { isBillingCycle, type BillingCycle } from '@/lib/warranty/constants';
+import { ITEM_KIND_LABELS, isBillingCycle, type BillingCycle, type ItemKind } from '@/lib/warranty/constants';
 
 export interface WarrantyActionState {
   error?: string;
@@ -176,6 +176,16 @@ function typeExistsOrNull(typeId: number | null): boolean {
   return typeId === null || findItemType(typeId) !== null;
 }
 
+/**
+ * MUST-19.11, generalized to success copy: an untyped item (or one whose type lookup somehow
+ * misses) reads as a plain warranty, matching the same `?? 'warranty'` fallback the client
+ * components use when following the selected/saved type's kind (see the note in
+ * warranty-detail-client.tsx and new-warranty-client.tsx).
+ */
+function kindForTypeId(typeId: number | null): ItemKind {
+  return (typeId !== null ? findItemType(typeId)?.kind : undefined) ?? 'warranty';
+}
+
 const ITEM_TYPE_MISSING_ERROR = 'That item type no longer exists.';
 
 function messageOf(error: unknown, fallback: string): string {
@@ -216,11 +226,14 @@ export async function createWarrantyAction(
   try {
     const staged = readStaged(formData);
     const parsed = readItemInput(formData, user.id);
-    if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Could not save that warranty.' };
+    // Kind-neutral fallback (MUST-19.11): nothing here has resolved a kind yet at the point a
+    // shape-validation error fires, so "item" (not "warranty") is the generic noun -- same
+    // reasoning as readMonths()'s "The term" above.
+    if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Could not save that item.' };
     if (!typeExistsOrNull(parsed.data.typeId)) return { error: ITEM_TYPE_MISSING_ERROR };
     itemId = createWarrantyItem(parsed.data, staged);
   } catch (error) {
-    return failure(error, 'Could not save that warranty.');
+    return failure(error, 'Could not save that item.');
   }
 
   revalidateAll(itemId);
@@ -238,17 +251,22 @@ export async function updateWarrantyAction(
   const id = idField.safeParse(formData.get('itemId'));
   if (!id.success) return { error: 'Invalid request.' };
 
+  let savedKind: ItemKind = 'warranty';
   try {
     const parsed = readItemInput(formData, 0);
-    if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Could not save that warranty.' };
+    if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Could not save that item.' };
     if (!typeExistsOrNull(parsed.data.typeId)) return { error: ITEM_TYPE_MISSING_ERROR };
-    if (!updateWarrantyItem(id.data, parsed.data)) return { error: 'That warranty no longer exists.' };
+    if (!updateWarrantyItem(id.data, parsed.data)) return { error: 'That item no longer exists.' };
+    // Bug fix (v1.2.4): this used to say "Warranty updated." unconditionally -- wrong for a
+    // subscription/contract/loan. The saved type's kind decides the noun, the same fallback
+    // the client components use for an untyped item (MUST-19.11, one place per wording rule).
+    savedKind = kindForTypeId(parsed.data.typeId);
   } catch (error) {
-    return failure(error, 'Could not save that warranty.');
+    return failure(error, 'Could not save that item.');
   }
 
   revalidateAll(id.data);
-  return { message: 'Warranty updated.' };
+  return { message: `${ITEM_KIND_LABELS[savedKind]} updated.` };
 }
 
 export async function deleteWarrantyAction(
@@ -264,9 +282,9 @@ export async function deleteWarrantyAction(
   // M5: errors as return values, never thrown to the client — same contract as every other
   // action, even though deleteWarrantyItem's own failure modes are narrow today.
   try {
-    if (!deleteWarrantyItem(id.data)) return { error: 'That warranty no longer exists.' };
+    if (!deleteWarrantyItem(id.data)) return { error: 'That item no longer exists.' };
   } catch (error) {
-    return failure(error, 'Could not delete that warranty.');
+    return failure(error, 'Could not delete that item.');
   }
 
   revalidateAll();
@@ -283,7 +301,7 @@ export async function attachReceiptsAction(
 
   const id = idField.safeParse(formData.get('itemId'));
   if (!id.success) return { error: 'Invalid request.' };
-  if (getWarrantyItem(id.data) === null) return { error: 'That warranty no longer exists.' };
+  if (getWarrantyItem(id.data) === null) return { error: 'That item no longer exists.' };
 
   let attached: number[];
   let duplicate = false;

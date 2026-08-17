@@ -418,6 +418,30 @@ describe('updateWarrantyAction', () => {
     expect(item.expiryDate).toBe('2027-08-16');
   });
 
+  // Bug fix (v1.2.4): the success message used to say "Warranty updated." unconditionally --
+  // wrong for a subscription/contract/loan. An untyped item (as created by baseFields() above,
+  // which omits typeId) still reads as a plain warranty by the same fallback the client
+  // components use.
+  it('says "Warranty updated." for an untyped item', async () => {
+    const to = await redirectPath(() => createWarrantyAction({}, formData(baseFields())));
+    const id = Number(to.split('/').pop());
+    const result = await updateWarrantyAction({}, formData(baseFields({ itemId: String(id) })));
+    expect(result.message).toBe('Warranty updated.');
+  });
+
+  it('says "Subscription updated." for an item whose saved type is a subscription', async () => {
+    const subscriptionType = listItemTypes().find((t) => t.name === 'Subscription')!;
+    const to = await redirectPath(
+      () => createWarrantyAction({}, formData(baseFields({ typeId: String(subscriptionType.id) }))),
+    );
+    const id = Number(to.split('/').pop());
+    const result = await updateWarrantyAction(
+      {},
+      formData(baseFields({ itemId: String(id), typeId: String(subscriptionType.id) })),
+    );
+    expect(result.message).toBe('Subscription updated.');
+  });
+
   it('errors on an unknown item id', async () => {
     const result = await updateWarrantyAction({}, formData(baseFields({ itemId: '99999' })));
     expect(result.error).toBeTruthy();

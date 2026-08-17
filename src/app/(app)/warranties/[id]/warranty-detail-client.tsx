@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState, useCallback, useEffect, useState } from 'react';
+import { useActionState, useCallback, useEffect, useRef, useState } from 'react';
 import { useFormStatus } from 'react-dom';
 import Link from 'next/link';
 import { FormError } from '@/components/FormError';
@@ -91,6 +91,10 @@ export function WarrantyDetailClient({
 }) {
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  // Bug fix (v1.2.4): the swapped-in section (read-only view OR edit form, never both) lives
+  // at this ref so a fallback scrollIntoView has something to target if it ever renders below
+  // the fold -- the primary fix is REPLACING the view in place, not scrolling to it.
+  const swapSectionRef = useRef<HTMLDivElement>(null);
   const [staged, setStaged] = useState<StagedFile[]>([]);
   // M10: bumped after a successful attach to remount <ReceiptUploader> with a clean slate --
   // otherwise a second click posts the SAME (now-consumed) staging ids and the action fails
@@ -153,6 +157,26 @@ export function WarrantyDetailClient({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [attachState]);
 
+  // Bug fix (v1.2.4): a successful save (a message with no error) closes the edit form and
+  // restores the read-only view -- "leaving edit (cancel/save) restores the view." Keyed on
+  // the editState object itself, same idiom as the attach effect above, so this fires exactly
+  // once per real save rather than on every render while editing is open.
+  useEffect(() => {
+    if (editState.message && !editState.error) {
+      setEditing(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editState]);
+
+  // Bug fix (v1.2.4): the primary fix is REPLACING the read-only view with the edit form in
+  // the same position (below), so scrolling is a fallback only -- guards against the edit
+  // form ever rendering below the fold for some other reason (e.g. a very short viewport).
+  useEffect(() => {
+    // jsdom (the test environment) does not implement scrollIntoView at all -- guarded so
+    // tests exercising `editing` don't crash on a method that simply isn't there.
+    if (editing) swapSectionRef.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [editing]);
+
   // Delta T9 (MUST-19.10), generalized to `kind` in v1.2.2 Task 2: every date label on this
   // page switches on the item's own kind through these helpers -- the only place either
   // wording lives. Supersedes purchaseDateLabel/termLabel/expiryDateLabel (controller ruling,
@@ -202,62 +226,72 @@ export function WarrantyDetailClient({
         </Card>
       ) : null}
 
-      <Card>
-        <CardBody className="pt-5">
-          <dl className="grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
-            <Detail label="Type">{item.typeName ?? '—'}</Detail>
-            <Detail label="Vendor">{item.vendor ?? '—'}</Detail>
-            <Detail label="Model">{item.model ?? '—'}</Detail>
-            <Detail label="Serial number">{item.serial ?? '—'}</Detail>
-            <Detail label={purchaseLabel}>{item.purchaseDate}</Detail>
-            <Detail label={termWordLabel}>
-              {item.isLifetime
-                ? formOpenEndedLabel(item.kind)
-                : item.warrantyMonths === null
-                  ? 'Unknown'
-                  : `${item.warrantyMonths} months`}
-            </Detail>
-            {/* v1.3.0 fix: an open-ended item (isLifetime) has no expiry_date to show -- that
-                used to render as a bare blank/em dash here, which reads as broken. Show the
-                per-kind open-ended word instead; a non-lifetime item with a genuinely unknown
-                term still falls through to the em dash, unchanged. */}
-            <Detail label={expiryLabel}>{item.isLifetime ? openEndedDisplayLabel(item.kind) : (item.expiryDate ?? '—')}</Detail>
-            <Detail label="Price">{item.priceCents === null ? '—' : <Money cents={item.priceCents} plain />}</Detail>
-            {billingAllowedForKind(item.kind) ? (
-              // review fix: cycle and amount are validated as a pair at the schema boundary
-              // (BILLING_PAIR_ERROR) -- render the value only when BOTH are present. Rendering
-              // one alone either lies ("— / month", cycle set but no amount) or silently drops
-              // a value the member entered (amount set but no cycle shown) -- exactly the kind
-              // of blank-reads-as-broken defect task B set out to eliminate for the end date.
-              <Detail label="Billing">
-                {item.billingCycle !== null && item.billingAmountCents !== null ? (
-                  <>
-                    <Money cents={item.billingAmountCents} plain /> {billingCycleSuffix(item.billingCycle)}
-                  </>
-                ) : (
-                  '—'
-                )}
-              </Detail>
-            ) : null}
-            <Detail label="Owner">{item.ownerName}</Detail>
-            <Detail label="Notes">{item.notes ?? '—'}</Detail>
-            <Detail label="Transaction">
-              {linkedTransaction ? (
-                <Link
-                  href={`/transactions?q=${encodeURIComponent(linkedTransaction.description)}`}
-                  className="text-accent-text underline underline-offset-2"
-                >
-                  {linkedTransaction.date} · {linkedTransaction.description}
-                </Link>
-              ) : linkRemoved ? (
-                'The linked transaction was removed by an import undo'
-              ) : (
-                '—'
-              )}
-            </Detail>
-          </dl>
-        </CardBody>
-      </Card>
+      {/* Bug fix (v1.2.4): the read-only view and the edit form now occupy the SAME position
+          -- exactly one of them renders, never both -- so opening Edit replaces the view in
+          place instead of appending a second form below it (and below Receipts) where a
+          scrolled-down user would never see it appear. */}
+      <div ref={swapSectionRef}>
+        {editing ? (
+          <EditForm item={item} people={people} types={types} today={today} action={editAction} />
+        ) : (
+          <Card>
+            <CardBody className="pt-5">
+              <dl className="grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
+                <Detail label="Type">{item.typeName ?? '—'}</Detail>
+                <Detail label="Vendor">{item.vendor ?? '—'}</Detail>
+                <Detail label="Model">{item.model ?? '—'}</Detail>
+                <Detail label="Serial number">{item.serial ?? '—'}</Detail>
+                <Detail label={purchaseLabel}>{item.purchaseDate}</Detail>
+                <Detail label={termWordLabel}>
+                  {item.isLifetime
+                    ? formOpenEndedLabel(item.kind)
+                    : item.warrantyMonths === null
+                      ? 'Unknown'
+                      : `${item.warrantyMonths} months`}
+                </Detail>
+                {/* v1.3.0 fix: an open-ended item (isLifetime) has no expiry_date to show -- that
+                    used to render as a bare blank/em dash here, which reads as broken. Show the
+                    per-kind open-ended word instead; a non-lifetime item with a genuinely unknown
+                    term still falls through to the em dash, unchanged. */}
+                <Detail label={expiryLabel}>{item.isLifetime ? openEndedDisplayLabel(item.kind) : (item.expiryDate ?? '—')}</Detail>
+                <Detail label="Price">{item.priceCents === null ? '—' : <Money cents={item.priceCents} plain />}</Detail>
+                {billingAllowedForKind(item.kind) ? (
+                  // review fix: cycle and amount are validated as a pair at the schema boundary
+                  // (BILLING_PAIR_ERROR) -- render the value only when BOTH are present. Rendering
+                  // one alone either lies ("— / month", cycle set but no amount) or silently drops
+                  // a value the member entered (amount set but no cycle shown) -- exactly the kind
+                  // of blank-reads-as-broken defect task B set out to eliminate for the end date.
+                  <Detail label="Billing">
+                    {item.billingCycle !== null && item.billingAmountCents !== null ? (
+                      <>
+                        <Money cents={item.billingAmountCents} plain /> {billingCycleSuffix(item.billingCycle)}
+                      </>
+                    ) : (
+                      '—'
+                    )}
+                  </Detail>
+                ) : null}
+                <Detail label="Owner">{item.ownerName}</Detail>
+                <Detail label="Notes">{item.notes ?? '—'}</Detail>
+                <Detail label="Transaction">
+                  {linkedTransaction ? (
+                    <Link
+                      href={`/transactions?q=${encodeURIComponent(linkedTransaction.description)}`}
+                      className="text-accent-text underline underline-offset-2"
+                    >
+                      {linkedTransaction.date} · {linkedTransaction.description}
+                    </Link>
+                  ) : linkRemoved ? (
+                    'The linked transaction was removed by an import undo'
+                  ) : (
+                    '—'
+                  )}
+                </Detail>
+              </dl>
+            </CardBody>
+          </Card>
+        )}
+      </div>
 
       <Card>
         <CardHeader
@@ -331,8 +365,6 @@ export function WarrantyDetailClient({
           </form>
         </CardBody>
       </Card>
-
-      {editing ? <EditForm item={item} people={people} types={types} today={today} action={editAction} /> : null}
     </div>
   );
 }
