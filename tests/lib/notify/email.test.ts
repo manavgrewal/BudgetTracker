@@ -71,6 +71,20 @@ describe('MUST-8.12 / MUST-8.13: the transport', () => {
     await expect(sendEmail({ smtp: config(), to: 'a@b.com', subject: 's', text: 't' })).rejects.toThrow();
     expect(close).toHaveBeenCalledTimes(2);
   });
+
+  it('MUST-5.5 / MUST-7.7: a createTransport() rejection (bad options) becomes a scrubbed NotifyError, and no send is even attempted', async () => {
+    createTransport.mockImplementationOnce(() => {
+      throw Object.assign(new Error('Invalid connection options: pass xsmtpsib-secret is not a valid port'), {
+        code: 'EINVALIDOPTIONS',
+      });
+    });
+    const error = await sendEmail({ smtp: config(), to: 'a@b.com', subject: 's', text: 't' }).catch((e) => e as NotifyError);
+    expect(error).toBeInstanceOf(NotifyError);
+    expect((error as NotifyError).message).not.toContain('xsmtpsib-secret');
+    expect((error as NotifyError).message).toContain('[redacted]');
+    expect(sendMail).not.toHaveBeenCalled();
+    expect(close).not.toHaveBeenCalled();
+  });
 });
 
 describe('MUST-8.14: text only, never html', () => {

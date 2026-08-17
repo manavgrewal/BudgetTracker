@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { NotifyError } from '@/lib/notify/send';
 import {
   MAX_DETECTED_CHATS,
   TELEGRAM_NO_MESSAGES,
@@ -166,6 +167,26 @@ describe('MUST-8.10: the three fixed outcomes', () => {
     await expect(fetchTelegramChats(TOKEN)).rejects.toMatchObject({
       message: 'Telegram said: terminated by other getUpdates request',
     });
+  });
+
+  it('a malformed 200 body (response.json() rejects) becomes a scrubbed, transient NotifyError, not a raw SyntaxError', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        urls.push(url);
+        return {
+          ok: true,
+          status: 200,
+          async json() {
+            throw new SyntaxError(`Unexpected token in JSON while calling https://api.telegram.org/bot${TOKEN}/getUpdates`);
+          },
+        } as unknown as Response;
+      }),
+    );
+    const error = await fetchTelegramChats(TOKEN).catch((e) => e as NotifyError);
+    expect(error).toBeInstanceOf(NotifyError);
+    expect((error as NotifyError).permanent).toBe(false);
+    expect((error as NotifyError).message).not.toContain('AAHk3f');
   });
 });
 
