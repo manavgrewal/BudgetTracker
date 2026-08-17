@@ -227,6 +227,28 @@ export function currentMonth(now: Date = new Date(), tz?: string): string {
   return monthOf(todayIso(now, tz));
 }
 
+/**
+ * MUST-6.5: local wall-clock components for the notification slot arithmetic, which is
+ * pure integer maths on these numbers — never Date addition.
+ *
+ * hourCycle 'h23' is load-bearing: the default for en-CA is h12-with-24 ('24' for
+ * midnight), which would make a midnight slot compare as 24 and never fire.
+ */
+export function localHour(now: Date, tz?: string): number {
+  const zone = tz ?? safeTz();
+  const text = new Intl.DateTimeFormat('en-GB', { timeZone: zone, hour: '2-digit', hourCycle: 'h23' }).format(now);
+  return Number(text);
+}
+
+const WEEKDAY_INDEX: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+
+/** 0 = Sunday .. 6 = Saturday, in the given zone (MUST-6.5). */
+export function localWeekday(now: Date, tz?: string): number {
+  const zone = tz ?? safeTz();
+  const text = new Intl.DateTimeFormat('en-US', { timeZone: zone, weekday: 'short' }).format(now);
+  return WEEKDAY_INDEX[text] ?? 0;
+}
+
 const FULL_MONTH_NAMES = [
   'January',
   'February',

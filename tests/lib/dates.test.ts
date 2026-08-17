@@ -11,6 +11,8 @@ import {
   isDateFormat,
   isIsoDate,
   isMonthKey,
+  localHour,
+  localWeekday,
   monthEnd,
   monthLabel,
   monthOf,
@@ -227,5 +229,24 @@ describe('client-graph boundary', () => {
     // regression test for that exact failure mode (see src/lib/env-tz.ts's docblock).
     const source = fs.readFileSync(path.join(process.cwd(), 'src/lib/dates.ts'), 'utf8');
     expect(source).not.toMatch(/from ['"]@\/lib\/env['"]/);
+  });
+});
+
+describe('MUST-6.5: local wall-clock components', () => {
+  it('localHour uses hourCycle h23, so midnight is 0 and not 24', () => {
+    // 2026-08-17T04:30:00Z is 00:30 in Toronto (EDT, UTC-4).
+    expect(localHour(new Date('2026-08-17T04:30:00Z'), 'America/Toronto')).toBe(0);
+    expect(localHour(new Date('2026-08-17T04:30:00Z'), 'UTC')).toBe(4);
+    expect(localHour(new Date('2026-08-17T23:59:00Z'), 'UTC')).toBe(23);
+    expect(localHour(new Date('2026-08-17T12:00:00Z'), 'America/Toronto')).toBe(8);
+  });
+
+  it('localWeekday is 0 = Sunday .. 6 = Saturday, in the given zone', () => {
+    // 2026-08-17 is a Monday.
+    expect(localWeekday(new Date('2026-08-17T12:00:00Z'), 'America/Toronto')).toBe(1);
+    expect(localWeekday(new Date('2026-08-16T12:00:00Z'), 'UTC')).toBe(0);
+    expect(localWeekday(new Date('2026-08-22T12:00:00Z'), 'UTC')).toBe(6);
+    // 2026-08-17T02:00:00Z is still Sunday evening in Toronto.
+    expect(localWeekday(new Date('2026-08-17T02:00:00Z'), 'America/Toronto')).toBe(0);
   });
 });
