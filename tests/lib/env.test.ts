@@ -215,6 +215,32 @@ describe('readEnv — zero-config SECRET_KEY file resolution', () => {
     }
   });
 
+  it('hard-errors, and never adopts, when the EEXIST race winner planted an invalid (too-short) key', () => {
+    // Same race as above, except the process that won the race planted garbage instead of a
+    // real generated key. The loser must hard-error exactly like an ordinary too-short-file
+    // read would — silently adopting it would violate the module's own never-silently-accept
+    // rule just as badly as regenerating over it would.
+    const dataDir = freshDataDir();
+    const keyPath = path.join(dataDir, SECRET_KEY_FILENAME);
+    const garbageWinner = 'too-short'; // 9 bytes, well under MIN_SECRET_KEY_BYTES
+    const realWriteFileSync = fs.writeFileSync.bind(fs);
+
+    const spy = vi.spyOn(fs, 'writeFileSync').mockImplementationOnce(() => {
+      realWriteFileSync(keyPath, garbageWinner, { mode: 0o600 });
+      const err = new Error('EEXIST: file already exists, open') as NodeJS.ErrnoException;
+      err.code = 'EEXIST';
+      throw err;
+    });
+
+    try {
+      expect(() => readEnv({ DATA_DIR: dataDir })).toThrowError(/shorter than 32 bytes/);
+      // Never regenerated either: the garbage the "winner" planted is still there afterwards.
+      expect(fs.readFileSync(keyPath, 'utf8')).toBe(garbageWinner);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('rethrows a non-EEXIST error from the generation write instead of swallowing it', () => {
     const dataDir = freshDataDir();
     const spy = vi.spyOn(fs, 'writeFileSync').mockImplementationOnce(() => {

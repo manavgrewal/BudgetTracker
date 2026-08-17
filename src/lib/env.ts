@@ -43,6 +43,25 @@ export function resetSecretKeyCacheForTests(): void {
 }
 
 /**
+ * Shared by both the "file already existed" read and the EEXIST-adopt race path below: a
+ * present-but-invalid key file is a hard error either way — it is NEVER silently accepted or
+ * regenerated, since that would invalidate every enrolled two-factor device. Without this
+ * check on the adopt path too, a racing process that happened to plant a garbage/too-short
+ * `secret.key` between another process's ENOENT check and its own write would have every
+ * other process on that boot silently adopt the invalid key instead of hard-erroring.
+ */
+function validateSecretKeyFileContents(keyPath: string, trimmed: string): void {
+  if (Buffer.byteLength(trimmed, 'utf8') < MIN_SECRET_KEY_BYTES) {
+    throw new Error(
+      `${keyPath} contains a key shorter than ${MIN_SECRET_KEY_BYTES} bytes. It will not be ` +
+        'regenerated automatically — doing so would silently invalidate every enrolled ' +
+        'two-factor device. Restore a valid key, or delete the file to generate a fresh one ' +
+        '(only if you accept re-enrolling two-factor).',
+    );
+  }
+}
+
+/**
  * Resolves SECRET_KEY when no env var is set: read `${dataDir}/secret.key` if present,
  * otherwise generate one. A present-but-invalid file is a hard error — it is NEVER silently
  * regenerated, since that would invalidate every enrolled two-factor device.
@@ -63,14 +82,7 @@ function readOrGenerateSecretKeyFile(dataDir: string): string {
   let value: string;
   if (existing !== null) {
     value = existing.trim();
-    if (Buffer.byteLength(value, 'utf8') < MIN_SECRET_KEY_BYTES) {
-      throw new Error(
-        `${keyPath} contains a key shorter than ${MIN_SECRET_KEY_BYTES} bytes. It will not be ` +
-          'regenerated automatically — doing so would silently invalidate every enrolled ' +
-          'two-factor device. Restore a valid key, or delete the file to generate a fresh one ' +
-          '(only if you accept re-enrolling two-factor).',
-      );
-    }
+    validateSecretKeyFileContents(keyPath, value);
   } else {
     const generated = crypto.randomBytes(GENERATED_SECRET_KEY_BYTES).toString('base64');
     fs.mkdirSync(dataDir, { recursive: true });
@@ -88,6 +100,10 @@ function readOrGenerateSecretKeyFile(dataDir: string): string {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
       value = fs.readFileSync(keyPath, 'utf8').trim();
+      // The winner's key gets exactly the same validation an ordinary file read would — a
+      // racing process that planted a garbage/too-short key must still hard-error here, never
+      // be silently adopted.
+      validateSecretKeyFileContents(keyPath, value);
     }
   }
 
