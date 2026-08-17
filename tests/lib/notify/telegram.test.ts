@@ -69,6 +69,15 @@ describe('MUST-8.1 / MUST-8.2 / MUST-9.3: the request', () => {
     const payload = JSON.parse(String(calls[0]?.init.body)) as { text: string };
     expect(payload.text).toContain('<b>x</b> *y* [z](http://q)');
   });
+
+  it('MUST-9.1/9.2: the egress guard actually runs — a path-traversal token is refused before fetch is ever called', async () => {
+    stubFetch({ status: 200, body: { ok: true } });
+    const evilToken = '123:abc/../../@evil.com';
+    await expect(
+      sendTelegram({ botToken: evilToken, chatId: '1', subject: 'S', body: 'B' }),
+    ).rejects.toThrow();
+    expect(calls).toHaveLength(0);
+  });
 });
 
 describe('MUST-7.7 / MUST-8.4: failure classification', () => {

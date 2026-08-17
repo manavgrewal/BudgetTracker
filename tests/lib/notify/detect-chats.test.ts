@@ -9,12 +9,14 @@ import {
 const TOKEN = '123456789:AAHk3f-EXAMPLE-tokenxxxxxxxxxxxxxxxxxx';
 
 let urls: string[];
+let inits: (RequestInit | undefined)[];
 
 function stubUpdates(status: number, body: unknown): void {
   vi.stubGlobal(
     'fetch',
-    vi.fn(async (url: string) => {
+    vi.fn(async (url: string, init?: RequestInit) => {
       urls.push(url);
+      inits.push(init);
       return {
         ok: status >= 200 && status < 300,
         status,
@@ -32,6 +34,7 @@ function update(id: number, chat: Record<string, unknown>, date: number) {
 
 beforeEach(() => {
   urls = [];
+  inits = [];
 });
 
 afterEach(() => {
@@ -58,6 +61,22 @@ describe('MUST-8.6 / MUST-8.7: the request', () => {
     const second = await fetchTelegramChats(TOKEN);
     expect(second).toEqual(first);
     expect(urls.every((u) => !u.includes('offset'))).toBe(true);
+  });
+
+  it('MUST-9.3: uses GET (or an absent method), redirect: error and a 15s abort — the same request hygiene as sendMessage', async () => {
+    stubUpdates(200, { ok: true, result: [] });
+    await fetchTelegramChats(TOKEN);
+    const init = inits[0];
+    expect(init?.method === undefined || init?.method === 'GET').toBe(true);
+    expect(init?.redirect).toBe('error');
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('MUST-9.1/9.2: the egress guard actually runs — a path-traversal token is refused before fetch is ever called', async () => {
+    stubUpdates(200, { ok: true, result: [] });
+    const evilToken = '123:abc/../../@evil.com';
+    await expect(fetchTelegramChats(evilToken)).rejects.toThrow();
+    expect(urls).toHaveLength(0);
   });
 });
 

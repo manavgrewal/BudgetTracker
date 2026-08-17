@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { localHour } from '@/lib/dates';
 import {
   DAILY_MAX_CATCHUP_HOURS,
   WEEKLY_MAX_CATCHUP_HOURS,
@@ -74,6 +75,49 @@ describe('MUST-6.6 / MUST-6.7: the daily slot at hour 8', () => {
       slotDate: '2026-08-17',
       hoursSince: 0,
       fires: true,
+    });
+  });
+});
+
+describe('MUST-6.8: DST transition days in America/Toronto are deliberately NOT corrected for', () => {
+  // 2026-03-08 is the spring-forward day: clocks jump from 01:59:59 straight to 03:00:00,
+  // skipping the 02:00 hour entirely. The transition instant is 07:00 UTC (02:00 EST /
+  // UTC-5 becomes 03:00 EDT / UTC-4, both of which equal 07:00 UTC).
+  it('spring-forward: local hour 2 never happens — it jumps 1 -> 3 across the instant', () => {
+    expect(localHour(new Date('2026-03-08T06:59:00Z'), 'America/Toronto')).toBe(1);
+    expect(localHour(new Date('2026-03-08T07:00:00Z'), 'America/Toronto')).toBe(3);
+  });
+
+  it('spring-forward: dailySlot at hour 8, evaluated at 07:00 local, still uses the naive 24 + (currentHour - hour) formula', () => {
+    // 07:00 EDT (post-jump) = 11:00 UTC. currentHour(7) < hour(8), so d = 1: yesterday's
+    // slot hasn't been caught up on yet. hoursSince = 24 + (7 - 8) = 23, exactly what a
+    // non-transition day would compute — MUST-6.8 is that this is NOT adjusted for the
+    // skipped hour (the true elapsed wall-clock time is only 22 hours here).
+    expect(dailySlot(new Date('2026-03-08T11:00:00Z'), 8, 'America/Toronto')).toEqual({
+      slotDate: '2026-03-07',
+      hoursSince: 23,
+      fires: false,
+    });
+  });
+
+  // 2026-11-01 is the fall-back day: clocks fall from 01:59:59 EDT back to 01:00:00 EST, so
+  // the local hour 1 (and every minute within it) happens twice. The transition instant is
+  // 06:00 UTC (02:00 EDT / UTC-4 becomes 01:00 EST / UTC-5, both equal 06:00 UTC).
+  it('fall-back: local hour 1 repeats — the same wall-clock hour reads twice, one real hour apart', () => {
+    expect(localHour(new Date('2026-11-01T05:30:00Z'), 'America/Toronto')).toBe(1); // 01:30 EDT, first pass
+    expect(localHour(new Date('2026-11-01T06:30:00Z'), 'America/Toronto')).toBe(1); // 01:30 EST, the repeat
+  });
+
+  it('fall-back: dailySlot at hour 8, evaluated at 07:00 local, computes the identical 23 hours despite an extra real hour having passed', () => {
+    // 07:00 EST (post-fall-back) = 12:00 UTC. Same d = 1, same hoursSince = 24 + (7 - 8) =
+    // 23 as the spring-forward case and as any ordinary day — the formula is pinned as
+    // wall-clock-only, even though the true elapsed wall-clock time is actually 24 hours
+    // here (the repeated hour added one back). Both DST days land on the same number by
+    // construction; that is the documented policy, not a coincidence.
+    expect(dailySlot(new Date('2026-11-01T12:00:00Z'), 8, 'America/Toronto')).toEqual({
+      slotDate: '2026-10-31',
+      hoursSince: 23,
+      fires: false,
     });
   });
 });

@@ -1,4 +1,4 @@
-import { createTransport } from 'nodemailer';
+import { createTransport, type Transporter } from 'nodemailer';
 import { authPlainBase64, scrubSecrets } from '@/lib/notify/crypto';
 import { NotifyError, type SmtpTransportConfig } from '@/lib/notify/send';
 
@@ -38,20 +38,24 @@ export async function sendEmail(input: {
   subject: string;
   text: string;
 }): Promise<void> {
-  const transporter = createTransport({
-    host: input.smtp.host,
-    port: input.smtp.port,
-    secure: input.smtp.security === 'tls',
-    requireTLS: input.smtp.security === 'starttls',
-    auth: { user: input.smtp.username, pass: input.smtp.password },
-    pool: false,
-    connectionTimeout: CONNECTION_TIMEOUT_MS,
-    greetingTimeout: GREETING_TIMEOUT_MS,
-    socketTimeout: SOCKET_TIMEOUT_MS,
-    tls: { minVersion: 'TLSv1.2' },
-  });
-
+  // Created INSIDE the try (Task 13's Send-test action calls sendEmail directly, outside
+  // the pump's own re-scrub net): a rejected option (e.g. an invalid port) must become a
+  // scrubbed, classified NotifyError here too, not a raw thrown error from nodemailer.
+  let transporter: Transporter | undefined;
   try {
+    transporter = createTransport({
+      host: input.smtp.host,
+      port: input.smtp.port,
+      secure: input.smtp.security === 'tls',
+      requireTLS: input.smtp.security === 'starttls',
+      auth: { user: input.smtp.username, pass: input.smtp.password },
+      pool: false,
+      connectionTimeout: CONNECTION_TIMEOUT_MS,
+      greetingTimeout: GREETING_TIMEOUT_MS,
+      socketTimeout: SOCKET_TIMEOUT_MS,
+      tls: { minVersion: 'TLSv1.2' },
+    });
+
     // MUST-8.14: `text` only — no `html`. Same untrusted-input reasoning as MUST-8.2, and
     // it removes the entire HTML-email test surface.
     await transporter.sendMail({
@@ -80,6 +84,6 @@ export async function sendEmail(input: {
 
     throw new NotifyError(message, { permanent, scope });
   } finally {
-    transporter.close();
+    transporter?.close();
   }
 }

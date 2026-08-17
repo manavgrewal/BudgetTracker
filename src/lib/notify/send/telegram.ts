@@ -147,7 +147,19 @@ export async function fetchTelegramChats(botToken: string): Promise<TelegramChat
     throw new Error(clean(`Telegram said: ${description}`, botToken));
   }
 
-  const payload = (await response.json()) as { result?: { message?: { date?: unknown; chat?: RawChat } }[] };
+  let payload: { result?: { message?: { date?: unknown; chat?: RawChat } }[] };
+  try {
+    payload = (await response.json()) as { result?: { message?: { date?: unknown; chat?: RawChat } }[] };
+  } catch (error) {
+    // This helper is also invoked directly by a server action (the Detect chat IDs
+    // button), outside the pump's own re-scrub net, so a malformed 200 body must become a
+    // scrubbed, classified NotifyError here rather than a raw SyntaxError escaping.
+    const message = clean(
+      error instanceof Error ? error.message : 'Telegram returned an unreadable response.',
+      botToken,
+    );
+    throw new NotifyError(message, { permanent: false, scope: 'target' });
+  }
   const updates = Array.isArray(payload.result) ? payload.result : [];
 
   // MUST-8.8: reduce to a unique set of chats keyed by chat.id, keeping the most recent
