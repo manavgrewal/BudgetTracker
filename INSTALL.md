@@ -1,8 +1,10 @@
 # Installing Budget Tracker
 
 Budget Tracker runs as one Docker container with one SQLite file. There is no cloud account, no
-sign-up, and no network traffic at runtime. Pick your platform below; each path ends with a URL
-you can open.
+sign-up, and no network traffic at runtime beyond two opt-in exceptions: the optional SimpleFIN
+bank sync, and notifications, dormant until a channel is configured and then reaching only
+`api.telegram.org` and the SMTP relay you enter. Pick your platform below; each path ends with a
+URL you can open.
 
 ---
 
@@ -351,8 +353,11 @@ history. If you copy them off the NAS, turn on your backup tool's client-side en
 
 **`data/secret.key` is deliberately excluded from every backup archive** — it contains only
 `budget.db` and `receipts/` — precisely so an offsite copy of your backups can never decrypt
-your TOTP secrets on its own. Back up `data/secret.key` separately, once, somewhere safe (a
-password manager entry works well).
+your TOTP secrets, the SMTP password or any Telegram bot token on its own. Those credentials
+live inside `budget.db` in encrypted form, exactly like the SimpleFIN access URL, so the
+archive itself is safe to copy off-site; it is `secret.key` that must never travel with it.
+Back up `data/secret.key` separately, once, somewhere safe (a password manager entry works
+well).
 
 ### Option A — mount the NAS share at `/data/backups`
 
@@ -463,14 +468,17 @@ password**.
 
 ### I forgot / lost my SECRET_KEY
 
-If you forgot your SECRET_KEY — or lost the auto-generated `data/secret.key` — only two-factor
-authentication depends on it. Everything else — transactions, budgets, goals, passwords — is
-unaffected.
+If you forgot your SECRET_KEY — or lost the auto-generated `data/secret.key` — two-factor
+authentication and any configured notification channel depend on it. Everything else —
+transactions, budgets, goals, passwords — is unaffected.
 
-Each user's TOTP secret is encrypted with a key derived from it. Once that key is gone, those
-secrets can never be decrypted again, so **no authenticator app can ever produce a code the app
-will accept** for those accounts. A new password alone does not help — the sign-in still asks
-for the second factor.
+Each user's TOTP secret, the SMTP password and every Telegram bot token are encrypted with a key
+derived from it. Once that key is gone, those secrets can never be decrypted again, so
+**no authenticator app can ever produce a code the app will accept** for those accounts, and
+`Settings → Notifications` reports "Stored credential could not be read. Re-enter it." for both
+channels until they are set up again. A new password alone does not help — the sign-in still
+asks for the second factor, and no notification already in the outbox is lost, because those
+rows are stored as plaintext.
 
 1. Generate a new one: `openssl rand -base64 48`
 2. Put it in `.env` (or the Synology project's environment) and restart.

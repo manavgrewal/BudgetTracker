@@ -21,6 +21,44 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.3.0] - 2026-08-18
+
+### Added
+
+- **Notifications.** A new Settings -> Notifications page tells the household about the
+  things it would otherwise have to remember to check on: something coming due, a budget
+  getting close or blown through, the nightly backup failing, a new sign-in, a restore
+  finishing, or nothing imported in a while. Eight events in total, each switchable per
+  person and per channel.
+- **Two channels.** A personal Telegram bot per user, and a household SMTP relay with a
+  personal destination address per user. Email setup has one-press presets for Brevo,
+  SMTP2GO and Gmail, plus a Custom option for anything else.
+- **Send test** on every channel, so nobody has to trust that setup worked and wait for
+  the real thing to fire.
+- **Built-in setup guides**, written for someone who has never touched SMTP or a Telegram
+  bot before, one for Telegram and one per email preset, shown right beside the form they
+  describe. A **Detect chat ID** button asks Telegram which conversations your bot has
+  heard from and lists them by name, so nobody has to copy a numeric id out of a raw JSON
+  page.
+- **Per-person schedule and threshold controls**: the warning window before something
+  comes due, the budget percentage that counts as close, the staleness period for "nothing
+  imported lately", and the hour the daily and weekly messages go out. Daily and weekly
+  sends catch up on a missed slot after downtime instead of silently skipping it.
+- **Recent deliveries** on the same page, showing what was sent, on which channel, and the
+  provider's own error text when a send failed.
+
+### Security
+
+- The SMTP password and every Telegram bot token are encrypted at rest under keys derived
+  from `SECRET_KEY`, the same way the existing TOTP secrets and the SimpleFIN access URL
+  already are. They are never sent back to the browser, never logged, and shown masked in
+  the form after saving.
+- **A new sign-in alert is on by default**, naming the time, IP address and browser, so a
+  household notices a login it did not expect.
+- **Dormant until configured.** With no channel set up, notifications make no outbound
+  connection at all, and the only two destinations the feature can ever reach, once
+  someone does configure it, are `api.telegram.org` and the SMTP server an admin typed in.
+
 ## [1.2.4] - 2026-08-17
 
 ### Fixed

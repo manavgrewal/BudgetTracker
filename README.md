@@ -6,8 +6,10 @@ column-mapping wizard), the app categorizes spending and learns from corrections
 monthly budgets per category and savings goals.
 
 It runs as a single Docker container on a Synology NAS (or any Docker host), stays on your LAN,
-stores everything in one SQLite file, and makes **no network calls at runtime**. No telemetry, no
-cloud account, no bank API.
+stores everything in one SQLite file, and makes **no network calls at runtime** beyond two opt-in
+exceptions: the optional SimpleFIN bank sync, and notifications, which stays dormant until you
+configure a channel and then reaches only `api.telegram.org` and the SMTP relay you typed in. No
+telemetry, no cloud account, no mandatory bank API.
 
 > **Installing?** Go to **[INSTALL.md](INSTALL.md)** — prerequisites, one command per platform
 > (Linux, Windows, macOS, Raspberry Pi), a no-SSH Synology walkthrough, and update, uninstall,
@@ -62,9 +64,11 @@ TRUST_PROXY=0
 **Keep this value, whichever way it was created.** It is never used directly as a cipher key —
 encryption keys are derived from it with HKDF-SHA256. If you lose or rotate it, every stored TOTP
 secret becomes undecryptable and each user with two-factor authentication has to **re-enroll**
-their authenticator app. Nothing else is affected: transactions, budgets, goals and passwords are
-untouched. `data/secret.key` is deliberately excluded from backup archives, so back it up
-separately once (a password manager entry works well).
+their authenticator app; the same goes for the SMTP password and every Telegram bot token stored
+under Settings → Notifications, which likewise become unreadable and must be re-entered. Nothing
+else is affected and no notification is lost, because the outbox rows themselves are plaintext.
+`data/secret.key` is deliberately excluded from backup archives, so back it up separately once
+(a password manager entry works well).
 
 ---
 

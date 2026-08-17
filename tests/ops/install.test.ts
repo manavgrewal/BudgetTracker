@@ -549,6 +549,22 @@ describe('INSTALL.md', () => {
     expect(install).toMatch(/does not touch two-factor authentication/i);
   });
 
+  it('MUST-5.7: the SECRET_KEY consequence list names the new notification credentials', () => {
+    for (const doc of ['README.md', 'INSTALL.md']) {
+      const source = read(doc);
+      expect(source).toMatch(/SMTP password/i);
+      expect(source).toMatch(/bot token/i);
+    }
+  });
+
+  it('MUST-9.5: the no-runtime-network-calls claim names notifications as a second opt-in exception', () => {
+    for (const doc of ['README.md', 'INSTALL.md']) {
+      const source = read(doc);
+      expect(source).toMatch(/opt-in/i);
+      expect(source).toMatch(/api\.telegram\.org/);
+    }
+  });
+
   it('has a cross-origin FAQ entry naming TRUST_PROXY and X-Forwarded-Host (m4)', () => {
     expect(install).toMatch(/Cross-origin request rejected/);
     expect(install).toContain('TRUST_PROXY');

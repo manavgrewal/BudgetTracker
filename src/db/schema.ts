@@ -360,7 +360,7 @@ export const warrantyItems = sqliteTable(
      */
     typeId: integer('type_id').references(() => warrantyItemTypes.id),
     /**
-     * v1.3.0, added by drizzle/0005_billing_cycle.sql. Declared last -- same
+     * v1.2.4, added by drizzle/0005_billing_cycle.sql. Declared last -- same
      * ALTER-TABLE-ADD-COLUMN convention as typeId above. Both nullable: only an item whose
      * TYPE has kind 'subscription' or 'contract' ever carries a non-NULL value here, and
      * that rule is enforced in the app layer (src/lib/warranty/items.ts), never derived on
