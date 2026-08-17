@@ -22,7 +22,9 @@ services:
       PORT: "3000"
       DATA_DIR: /data
     volumes:
-      - /volume1/docker/budget-tracker/data:/data
+      # Relative to this compose file's folder (the Container Manager project
+      # path) — works on any volume, /volume1 or otherwise.
+      - ./data:/data
     # Container hardening — identical to the main docker-compose.yml.
     read_only: true
     tmpfs:

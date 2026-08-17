@@ -10,7 +10,11 @@ MODE="install"
 PURGE_DATA=0
 DRY_RUN=0
 LOAD_TAR=""
-SYNO_ROOT="/volume1/docker/budget-tracker"
+# Default resolved AFTER argument parsing: the project directory itself.
+# docker-compose.yml mounts ./data relative to the compose file, so data and
+# .env always live inside the project checkout — never assume /volume1 (or any
+# volume): the checkout is wherever the user cloned it.
+SYNO_ROOT=""
 
 # Resolved the same way as install-linux.sh: compose commands must run against
 # THIS script's own project directory, never whatever the caller's CWD happens
@@ -32,9 +36,12 @@ Options:
   --load <image.tar>  docker load a PC-built image instead of building on the NAS.
                       Recommended: "next build" can exceed the RAM of entry-level models.
   --port <n>          Host port (default 3000).
-  --root <path>       Install root (default /volume1/docker/budget-tracker).
-                      Must end in a "budget-tracker" directory; "/" and other
-                      unscoped roots are refused because --purge-data does
+  --root <path>       Install root (default: this project folder — data and
+                      .env live inside the checkout, on whichever volume you
+                      cloned it to). Must equal the project folder, because
+                      docker-compose.yml mounts ./data relative to itself;
+                      the flag exists only to make that explicit. Unscoped
+                      roots like "/" are refused because --purge-data does
                       "rm -rf <root>/data".
   --dry-run           Print every action without doing any of them.
   --help              Show this message.
@@ -68,21 +75,29 @@ run() {
   fi
 }
 
-# --root is fed straight into "rm -rf <root>/data" under --purge-data, so a
-# careless value is catastrophic: --root / would rm -rf //data == /data at the
-# real filesystem root. Refuse anything that isn't a specific, scoped
-# "...budget-tracker" directory — always, dry-run or not, since this is input
-# validation rather than a side effect.
+# The default root is the project checkout itself: docker-compose.yml mounts
+# ./data relative to the compose file, so that is where data actually lands no
+# matter what anyone wishes. An explicit --root that points anywhere else would
+# chown and write .env in a directory Docker never reads — refuse the mismatch
+# instead of silently producing a broken install. --root is also fed into
+# "rm -rf <root>/data" under --purge-data, so "/" and unscoped values are
+# refused — always, dry-run or not, since this is input validation rather than
+# a side effect.
 validate_root() {
-  case "$SYNO_ROOT" in
-    ""|/)
-      die "--root must not be empty or '/' — refusing to operate at the filesystem root." ;;
-  esac
-  local base
-  base="$(basename "$SYNO_ROOT")"
-  if [ "$base" != "budget-tracker" ]; then
-    die "--root must end in a 'budget-tracker' directory (got: ${SYNO_ROOT}). This keeps --purge-data's rm -rf scoped to an install-specific folder, never a shared parent."
+  if [ -z "$SYNO_ROOT" ]; then
+    SYNO_ROOT="$PROJECT_DIR"
+    return 0
   fi
+  case "$SYNO_ROOT" in
+    /)
+      die "--root must not be '/' — refusing to operate at the filesystem root." ;;
+  esac
+  local resolved
+  resolved="$(cd "$SYNO_ROOT" 2>/dev/null && pwd)" || die "--root ${SYNO_ROOT} does not exist."
+  if [ "$resolved" != "$PROJECT_DIR" ]; then
+    die "--root must be this project folder (${PROJECT_DIR}) — docker-compose.yml mounts ./data inside it, so data cannot live anywhere else. To install on a different volume, move or clone the project folder there and rerun."
+  fi
+  SYNO_ROOT="$resolved"
 }
 
 validate_root

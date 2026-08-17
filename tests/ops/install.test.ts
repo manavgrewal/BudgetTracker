@@ -282,10 +282,14 @@ describe('no auto-update anywhere in the codebase', () => {
 });
 
 describe('install-synology.sh --dry-run', () => {
-  it('exits cleanly and uses the Synology default data path', () => {
+  it('exits cleanly and defaults the install root to the project checkout (no /volume1 assumption)', () => {
     const result = bash(['install/install-synology.sh', '--dry-run']);
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain('/volume1/docker/budget-tracker');
+    // The default root is the checkout itself — the only directory
+    // docker-compose.yml's relative ./data mount can actually use — so the
+    // script works on /volume2 (or any volume) exactly as well as /volume1.
+    expect(result.stdout).not.toContain('/volume1/docker/budget-tracker');
+    expect(result.stdout).toMatch(/Synology install root: .*[/\\](Budget Tracker|BudgetTracker|budget-tracker)/);
     expect(result.stdout).toContain('docker compose up -d');
   });
 
@@ -315,19 +319,25 @@ describe('install-synology.sh --dry-run', () => {
     it('refuses "/" as the install root', () => {
       const result = bash(['install/install-synology.sh', '--dry-run', '--root', '/']);
       expect(result.status).not.toBe(0);
-      expect(result.stderr).toMatch(/must not be empty or '\/'/);
+      expect(result.stderr).toMatch(/must not be '\/'/);
     });
 
-    it('refuses an install root that does not end in a "budget-tracker" directory', () => {
-      const result = bash(['install/install-synology.sh', '--dry-run', '--root', '/volume1/docker']);
+    it('refuses an install root that is not the project folder (compose mounts ./data inside it)', () => {
+      const result = bash(['install/install-synology.sh', '--dry-run', '--root', '/tmp']);
       expect(result.status).not.toBe(0);
-      expect(result.stderr).toMatch(/must end in a 'budget-tracker' directory/);
+      expect(result.stderr).toMatch(/must be this project folder/);
     });
 
-    it('accepts any root that ends in a "budget-tracker" directory', () => {
-      const result = bash(['install/install-synology.sh', '--dry-run', '--root', '/volume2/shared/budget-tracker']);
+    it('refuses an install root that does not exist', () => {
+      const result = bash(['install/install-synology.sh', '--dry-run', '--root', '/no/such/dir/budget-tracker']);
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toMatch(/does not exist/);
+    });
+
+    it('accepts an explicit --root equal to the project folder', () => {
+      const result = bash(['install/install-synology.sh', '--dry-run', '--root', root]);
       expect(result.status).toBe(0);
-      expect(result.stdout).toContain('/volume2/shared/budget-tracker');
+      expect(result.stdout).toContain('docker compose up -d');
     });
   });
 });

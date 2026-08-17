@@ -111,11 +111,16 @@ Two paths, pick one:
 - **No terminal:** follow [docs/INSTALL-SYNOLOGY.md](docs/INSTALL-SYNOLOGY.md). It is a
   click-by-click Container Manager walkthrough — upload the folder, create a Project, paste
   `install/synology-compose.yml`, set your SECRET_KEY, start, open the URL.
-- **Over SSH:**
+- **Over SSH:** clone the project onto whichever volume you keep Docker things on (any volume
+  works — the app's data lives inside this folder):
   ```bash
-  cd /volume1/docker/budget-tracker
-  sudo ./install/install-synology.sh
+  cd /volume2/docker        # or /volume1/docker — wherever you cloned/uploaded it
+  git clone https://github.com/manavgrewal/BudgetTracker.git
+  cd BudgetTracker
+  sudo bash install/install-synology.sh
   ```
+  (No git on the NAS? Install "Git Server" from Package Center, or download the GitHub ZIP and
+  upload it via File Station.)
   Add `--load budget-tracker.tar` if the NAS runs out of memory while building — entry-level
   models usually do.
 
@@ -345,8 +350,9 @@ sudo chown -R 1000:1000 ./data
 docker compose restart
 ```
 
-On Synology, make sure the shared folder is not marked read-only and that
-`/volume1/docker/budget-tracker/data` exists before the first start.
+On Synology, make sure the shared folder is not marked read-only and that the `data` folder
+inside your project folder (e.g. `/volume2/docker/BudgetTracker/data` — whichever volume you
+put it on) exists before the first start.
 
 ### I forgot my password
 
