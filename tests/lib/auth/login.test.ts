@@ -5,6 +5,9 @@ import { createUser, findUserByUsername, setUserActive, countUsers } from '@/lib
 import { validateSession } from '@/lib/auth/session';
 import * as ratelimit from '@/lib/auth/ratelimit';
 import { currentTotpToken, enableTotpForUser, generateRecoveryCodes, generateTotpSecret, storeRecoveryCodes, countUnusedRecoveryCodes } from '@/lib/auth/totp';
+import { saveEmailTarget, saveSmtp } from '@/lib/notify/config';
+import * as raiseModule from '@/lib/notify/raise';
+import { resetNotifySenderForTests, setNotifySenderForTests } from '@/lib/notify/send';
 
 let current: TestDb | null = null;
 afterEach(() => {
@@ -17,6 +20,13 @@ const IP = '10.0.0.5';
 
 async function seedAlice() {
   return createUser({ name: 'Alice', username: 'alice', password: PASSWORD, role: 'admin' });
+}
+
+/** This file's existing helper for "create a user with a password", wrapped to hand back
+ * just the id — the shape MUST-14.4's suite below wants. */
+async function createLoginUser(input: { username: string; password: string }): Promise<number> {
+  const user = await createUser({ name: 'Sam', username: input.username, password: input.password, role: 'member' });
+  return user.id;
 }
 
 describe('setup wizard', () => {
@@ -224,5 +234,71 @@ describe('attemptLogin — TOTP', () => {
     await expect(attemptLogin({ username: 'alice', password: PASSWORD, totpCode: '123456', ip: IP })).resolves.toMatchObject({
       status: 'invalid',
     });
+  });
+});
+
+describe('MUST-14.4: a successful login raises new_signin', () => {
+  it('enqueues one row per enabled channel', async () => {
+    current = createTestDb();
+    const userId = await createLoginUser({ username: 'sam', password: 'correct horse battery staple' });
+    saveSmtp({
+      preset: 'brevo',
+      host: 'h',
+      port: 587,
+      security: 'starttls',
+      username: 'u',
+      password: 'p',
+      fromEmail: 'f@e.com',
+      fromName: 'Budget Tracker',
+      enabled: true,
+    });
+    saveEmailTarget({ userId, destination: 'sam@example.com', enabled: true });
+    setNotifySenderForTests(async () => {});
+
+    const result = await attemptLogin({ username: 'sam', password: 'correct horse battery staple', ip: '1.2.3.4' });
+    expect(result.status).toBe('ok');
+    const rows = current.sqlite.prepare(`select event_id from notification_outbox`).all() as { event_id: string }[];
+    expect(rows.map((r) => r.event_id)).toEqual(['new_signin']);
+    resetNotifySenderForTests();
+  });
+
+  it('a FAILED login enqueues nothing', async () => {
+    current = createTestDb();
+    const userId = await createLoginUser({ username: 'sam', password: 'correct horse battery staple' });
+    saveEmailTarget({ userId, destination: 'sam@example.com', enabled: true });
+    await attemptLogin({ username: 'sam', password: 'wrong', ip: '1.2.3.4' });
+    const { n } = current.sqlite.prepare('select count(*) as n from notification_outbox').get() as { n: number };
+    expect(n).toBe(0);
+  });
+
+  it('a login with no configured channel writes no row at all', async () => {
+    current = createTestDb();
+    await createLoginUser({ username: 'sam', password: 'correct horse battery staple' });
+    const result = await attemptLogin({ username: 'sam', password: 'correct horse battery staple', ip: '1.2.3.4' });
+    expect(result.status).toBe('ok');
+    const { n } = current.sqlite.prepare('select count(*) as n from notification_outbox').get() as { n: number };
+    expect(n).toBe(0);
+  });
+});
+
+describe('MUST-14.4: a throwing raiseNewSignin does not fail the login', () => {
+  it('a throwing raiseNewSignin still returns { status: "ok" }', async () => {
+    current = createTestDb();
+    await createLoginUser({ username: 'sam', password: 'correct horse battery staple' });
+    const raise = vi.spyOn(raiseModule, 'raiseNewSignin').mockImplementation(() => {
+      throw new Error('raise exploded');
+    });
+    try {
+      const result = await attemptLogin({ username: 'sam', password: 'correct horse battery staple', ip: '1.2.3.4' });
+      // Vitest's ESM transform makes named imports live bindings against the module
+      // namespace object, so vi.spyOn here DOES intercept attemptLogin's bare
+      // `raiseNewSignin(...)` call — confirmed by the mock's stack trace running through
+      // attemptLogin. MUST-14.4/14.5: attemptLogin's own try/catch around the call is what
+      // makes this "ok" regardless of whether the throw came from the spy or from a real
+      // failure inside raise.ts.
+      expect(result.status).toBe('ok');
+    } finally {
+      raise.mockRestore();
+    }
   });
 });

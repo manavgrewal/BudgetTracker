@@ -7,6 +7,7 @@
  */
 import { getDb } from '@/db/client';
 import { RESTART_EXIT_CODE, applyStagedRestoreOnBoot } from '@/lib/backup/restore';
+import { raiseRestoreOutcome } from '@/lib/notify/raise';
 import { startScheduler } from '@/lib/scheduler';
 import { assertOcrAssets, resolveOcrAssets } from '@/lib/warranty/ocr/assets';
 
@@ -43,6 +44,15 @@ if (ocr.ok) {
   console.log(`[ocr] assets ok (${resolveOcrAssets().langPath})`);
 } else {
   console.error(`[ocr] MISSING: ${ocr.missing.join(', ')}`);
+}
+
+// MUST-14.2: AFTER getDb() (the outcome has to be written into the restored database) and
+// BEFORE the scheduler starts below (whose immediate boot tick then drains the row). The
+// guard is mandatory: a notification failure must never stop the app from booting.
+try {
+  raiseRestoreOutcome();
+} catch (error) {
+  console.error('[notify] restore outcome raise failed', error);
 }
 
 startScheduler();

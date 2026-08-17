@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { getDb } from '@/db/client';
 import { seedDatabase } from '@/db/seed';
+import { raiseNewSignin } from '@/lib/notify/raise';
 import { createSession, type SessionUser } from './session';
 import { hashPassword, verifyPassword } from './password';
 import { checkLockout, recordLoginAttempt } from './ratelimit';
@@ -114,6 +115,25 @@ export async function attemptLogin(input: {
 
   recordLoginAttempt({ username, ip: input.ip, success: true, at });
   const session = createSession(user.id, { userAgent: input.userAgent ?? null, ip: input.ip, at });
+
+  // MUST-14.4: fire-and-forget. The enqueue is a synchronous SQLite insert and the pump
+  // kick is not awaited. A notification failure must NEVER turn a successful login into an
+  // error, so raiseNewSignin is itself internally guarded (MUST-6.19) and wrapped again
+  // here. MUST-14.5: this lives in attemptLogin, not in the login server action, so any
+  // future authentication path inherits it, and the timing-equalisation reasoning of
+  // Ruling (c) stays confined to the failure paths it already governs.
+  try {
+    raiseNewSignin({
+      userId: user.id,
+      at,
+      ip: input.ip,
+      userAgent: input.userAgent ?? null,
+      sessionCreatedAt: session.createdAt,
+    });
+  } catch (error) {
+    console.error('[notify] sign-in raise failed', error);
+  }
+
   return {
     status: 'ok',
     token: session.token,

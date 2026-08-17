@@ -28,23 +28,28 @@ export function hashSessionToken(token: string): string {
 export function createSession(
   userId: number,
   meta: { userAgent?: string | null; ip?: string | null; at?: Date } = {},
-): { token: string; expiresAt: string } {
+): { token: string; expiresAt: string; createdAt: string } {
   const at = meta.at ?? new Date();
   const token = generateSessionToken();
+  const createdAt = nowIso(at);
   const expiresAt = new Date(at.getTime() + SESSION_TTL_MS).toISOString();
   getDb()
     .insert(sessions)
     .values({
       tokenHash: hashSessionToken(token),
       userId,
-      createdAt: nowIso(at),
+      createdAt,
       expiresAt,
-      lastSeenAt: nowIso(at),
+      lastSeenAt: createdAt,
       userAgent: meta.userAgent ?? null,
       ip: meta.ip ?? null,
     })
     .run();
-  return { token, expiresAt };
+  // MUST-3.11: raiseNewSignin's dedup key is `signin:<session created_at ISO>`, so the
+  // caller needs this session's own createdAt rather than substituting a different
+  // timestamp (e.g. expiresAt, which is offset by SESSION_TTL_MS and not unique per sign-in
+  // the same way).
+  return { token, expiresAt, createdAt };
 }
 
 export function validateSession(token: string, at: Date = new Date()): SessionUser | null {

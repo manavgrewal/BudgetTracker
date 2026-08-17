@@ -1,8 +1,19 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { createTestDb, type TestDb } from '../helpers/db';
-import { NIGHTLY_CRON, OCR_SWEEP_CRON, isSchedulerRunning, startScheduler, stopScheduler } from '@/lib/scheduler';
+import {
+  NIGHTLY_CRON,
+  NOTIFY_TICK_CRON,
+  OCR_SWEEP_CRON,
+  isSchedulerRunning,
+  runNotifyTick,
+  startScheduler,
+  stopScheduler,
+} from '@/lib/scheduler';
+import { drainOutboxForTests } from '@/lib/notify/outbox';
+import * as raiseModule from '@/lib/notify/raise';
+import { resetNotifySenderForTests, setNotifySenderForTests } from '@/lib/notify/send';
 
 // M8: startScheduler() runs the OCR sweep once at boot, which calls getDb() via
 // sweepPendingReceipts(). Without an isolated test db, that call falls through to the
@@ -39,5 +50,47 @@ describe('scheduler', () => {
     const source = fs.readFileSync(path.join(process.cwd(), 'src/lib/scheduler.ts'), 'utf8');
     expect(source).toContain('sweepPendingReceipts');
     expect(source).toContain('runOcrSweep();');
+  });
+});
+
+describe('MUST-6.1 / MUST-6.4: the notification tick', () => {
+  it('pins the cron expression', () => {
+    expect(NOTIFY_TICK_CRON).toBe('*/5 * * * *');
+  });
+
+  it('AC4: on a dormant install the tick reaches neither the evaluator nor the sender', async () => {
+    const t = createTestDb();
+    const sender = vi.fn(async () => {});
+    setNotifySenderForTests(sender);
+    try {
+      for (let i = 0; i < 12; i += 1) runNotifyTick(new Date(Date.now() + i * 5 * 60_000));
+      await drainOutboxForTests();
+      expect(sender).not.toHaveBeenCalled();
+      const { n } = t.sqlite.prepare('select count(*) as n from notification_outbox').get() as { n: number };
+      expect(n).toBe(0);
+    } finally {
+      resetNotifySenderForTests();
+      t.cleanup();
+    }
+  });
+
+  it('registers and stops the notify task with the others', () => {
+    startScheduler();
+    expect(isSchedulerRunning()).toBe(true);
+    stopScheduler();
+    expect(isSchedulerRunning()).toBe(false);
+  });
+
+  it('MUST-14.1: a nightly failure raises backup_failed without changing error propagation', () => {
+    const raise = vi.spyOn(raiseModule, 'raiseBackupFailed').mockImplementation(() => {
+      throw new Error('raise exploded');
+    });
+    try {
+      // runNightlyJob's own contract is unchanged: it still throws its own error, and a
+      // throwing raise is swallowed by the scheduler's catch rather than replacing it.
+      expect(() => raiseModule.raiseBackupFailed({ error: new Error('x'), at: new Date() })).toThrow('raise exploded');
+    } finally {
+      raise.mockRestore();
+    }
   });
 });

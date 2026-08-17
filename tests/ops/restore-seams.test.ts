@@ -119,3 +119,26 @@ describe('MUST-20.26: the restore runs before any database connection', () => {
     }
   });
 });
+
+describe('MUST-14.2 / MUST-14.3: the notification raise sits between getDb and startScheduler', () => {
+  const source = read('src/instrumentation-node.ts');
+
+  it('calls raiseRestoreOutcome() after getDb() and before startScheduler()', () => {
+    const getDbAt = source.indexOf('getDb();');
+    const raiseAt = source.indexOf('raiseRestoreOutcome()');
+    const schedulerAt = source.indexOf('startScheduler()');
+    expect(getDbAt).toBeGreaterThan(-1);
+    expect(raiseAt).toBeGreaterThan(getDbAt);
+    expect(schedulerAt).toBeGreaterThan(raiseAt);
+  });
+
+  it('wraps it so a notify failure cannot stop the boot', () => {
+    expect(source).toMatch(/try\s*\{\s*raiseRestoreOutcome\(\);\s*\}\s*catch/);
+  });
+
+  it('leaves applyStagedRestoreOnBoot() as the first statement', () => {
+    const firstStatement = source.indexOf('applyStagedRestoreOnBoot()');
+    expect(firstStatement).toBeGreaterThan(-1);
+    expect(firstStatement).toBeLessThan(source.indexOf('getDb();'));
+  });
+});
