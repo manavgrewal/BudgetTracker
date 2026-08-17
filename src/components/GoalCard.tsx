@@ -1,7 +1,12 @@
 import { formatCents } from '@/lib/money';
 import type { GoalWithProgress } from '@/lib/goals';
 
-export function GoalCard({ goal }: { goal: GoalWithProgress }) {
+/**
+ * `footer` exists so the goals page can hang its per-goal controls (contribute,
+ * archive, the contribution log) inside the same card instead of stacking a
+ * second bordered box underneath every goal.
+ */
+export function GoalCard({ goal, footer }: { goal: GoalWithProgress; footer?: React.ReactNode }) {
   const { pace } = goal;
   const pct = goal.targetCents === 0 ? 100 : Math.round((goal.savedCents / goal.targetCents) * 100);
   const clamped = Math.min(100, Math.max(0, pct));
@@ -57,6 +62,8 @@ export function GoalCard({ goal }: { goal: GoalWithProgress }) {
           </p>
         )}
       </div>
+
+      {footer ? <div className="mt-auto flex flex-col gap-2 border-t border-line pt-3">{footer}</div> : null}
     </article>
   );
 }

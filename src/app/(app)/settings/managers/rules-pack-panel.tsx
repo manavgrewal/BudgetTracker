@@ -1,6 +1,8 @@
 'use client';
 
 import { useState } from 'react';
+import { Notice } from '@/components/ui/Notice';
+import { selectClass } from '@/components/ui/form';
 import type { RulesExportRow } from '@/lib/packs';
 
 interface ImportPreview {
@@ -13,6 +15,9 @@ interface ImportPreview {
   conflicts: { pattern: string; matchType: string; existingCategory: string | null; incomingCategory: string | null }[];
   newCategories: string[];
 }
+
+const fileInputClass =
+  'text-sm text-muted file:mr-3 file:rounded-md file:border-0 file:bg-accent-soft file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-accent-soft-fg';
 
 export function RulesPackPanel({ rows }: { rows: RulesExportRow[] }) {
   const [includeTransfers, setIncludeTransfers] = useState(false);
@@ -58,61 +63,84 @@ export function RulesPackPanel({ rows }: { rows: RulesExportRow[] }) {
   }
 
   return (
-    <section className="flex flex-col gap-3 rounded border border-slate-200 p-3 text-sm dark:border-slate-800">
-      <h3 className="font-medium">Share rules with another install</h3>
-      <p className="text-xs text-slate-500">
-        A rules pack carries only category names and merchant patterns. It never contains transactions, amounts, accounts, users, or the
-        classifier&apos;s learned statistics.
-      </p>
-      {error ? <p role="alert" className="rounded bg-red-50 px-3 py-2 text-red-700 dark:bg-red-950 dark:text-red-300">{error}</p> : null}
-      {notice ? <p className="text-green-700 dark:text-green-400">{notice}</p> : null}
+    <section className="flex flex-col gap-4 rounded-lg border border-line bg-surface-2/50 p-4 text-sm">
+      <div className="flex flex-col gap-1">
+        <h3 className="text-sm font-semibold text-ink">Share rules with another install</h3>
+        <p className="text-xs text-muted">
+          A rules pack carries only category names and merchant patterns. It never contains transactions, amounts, accounts, users, or the
+          classifier&apos;s learned statistics.
+        </p>
+      </div>
+      {error ? <Notice tone="error">{error}</Notice> : null}
+      {notice ? <Notice tone="success">{notice}</Notice> : null}
 
       <div className="flex flex-col gap-2">
-        <h4 className="text-xs font-medium uppercase tracking-wide text-slate-500">Export</h4>
-        <label className="flex items-center gap-2">
-          <input type="checkbox" checked={includeTransfers} onChange={(e) => setIncludeTransfers(e.target.checked)} />
+        <h4 className="eyebrow">Export</h4>
+        <label className="flex items-start gap-2 text-muted">
+          <input
+            type="checkbox"
+            checked={includeTransfers}
+            onChange={(e) => setIncludeTransfers(e.target.checked)}
+            className="mt-0.5 accent-accent"
+          />
           Include transfer rules (they can contain personal names from e-transfer descriptions)
         </label>
-        <p className="text-xs text-slate-500">Everything ticked below will be written into the file. Untick anything you would rather not share.</p>
-        <ul className="max-h-64 overflow-y-auto rounded border border-slate-100 p-2 dark:border-slate-900">
+        <p className="text-xs text-subtle">Everything ticked below will be written into the file. Untick anything you would rather not share.</p>
+        <ul className="max-h-64 overflow-y-auto rounded-md border border-line bg-surface p-2">
           {visible.map((row) => (
             <li key={row.ruleId} className="flex items-center gap-2 py-0.5">
-              <input type="checkbox" checked={!excluded.includes(row.ruleId)} onChange={() => toggle(row.ruleId)} aria-label={`Include ${row.pattern}`} />
-              <code className="text-xs">{row.pattern}</code>
-              <span className="text-xs text-slate-500">
+              <input
+                type="checkbox"
+                checked={!excluded.includes(row.ruleId)}
+                onChange={() => toggle(row.ruleId)}
+                aria-label={`Include ${row.pattern}`}
+                className="accent-accent"
+              />
+              <code className="font-mono text-xs text-ink">{row.pattern}</code>
+              <span className="text-xs text-subtle">
                 {row.matchType}
                 {row.ruleKind === 'transfer' ? ' · transfer' : ` → ${row.categoryLabel ?? 'Uncategorized'}`}
               </span>
             </li>
           ))}
-          {visible.length === 0 ? <li className="text-xs text-slate-500">No rules to export yet.</li> : null}
+          {visible.length === 0 ? <li className="px-1 py-2 text-xs text-subtle">No rules to export yet.</li> : null}
         </ul>
-        <a href={exportHref} className="w-fit rounded bg-slate-900 px-3 py-2 text-white dark:bg-slate-100 dark:text-slate-900">
+        <a href={exportHref} className="btn btn--primary w-fit">
           Download rules pack ({visible.length - excluded.filter((id) => visible.some((row) => row.ruleId === id)).length} rules)
         </a>
       </div>
 
-      <div className="flex flex-col gap-2 border-t border-slate-100 pt-3 dark:border-slate-900">
-        <h4 className="text-xs font-medium uppercase tracking-wide text-slate-500">Import</h4>
-        <input type="file" accept="application/json,.json" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
-        <label className="flex items-center gap-2">
+      <div className="flex flex-col gap-2 border-t border-line pt-4">
+        <h4 className="eyebrow">Import</h4>
+        <input
+          type="file"
+          accept="application/json,.json"
+          aria-label="Rules pack file"
+          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+          className={fileInputClass}
+        />
+        <label className="flex flex-wrap items-center gap-2 text-muted">
           When a pattern already exists with a different category:
-          <select value={onConflict} onChange={(e) => setOnConflict(e.target.value as 'keep' | 'overwrite')} className="rounded border px-2 py-1 dark:bg-slate-900">
+          <select
+            value={onConflict}
+            onChange={(e) => setOnConflict(e.target.value as 'keep' | 'overwrite')}
+            className={`${selectClass} w-auto px-2 py-1 text-xs`}
+          >
             <option value="keep">keep mine</option>
             <option value="overwrite">use theirs</option>
           </select>
         </label>
         <div className="flex gap-2">
-          <button type="button" onClick={() => void send('preview')} className="rounded border px-3 py-2 dark:border-slate-700">Preview</button>
-          <button type="button" onClick={() => void send('apply')} disabled={preview === null} className="rounded bg-slate-900 px-3 py-2 text-white disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900">
+          <button type="button" onClick={() => void send('preview')} className="btn btn--secondary">Preview</button>
+          <button type="button" onClick={() => void send('apply')} disabled={preview === null} className="btn btn--primary">
             Import
           </button>
         </div>
         {preview ? (
-          <div className="rounded bg-slate-50 p-3 text-xs dark:bg-slate-900">
+          <div className="flex flex-col gap-1 rounded-md border border-line bg-surface p-3 text-xs text-muted">
             <p>
-              {preview.totalRules} rules in the file: <strong>{preview.newRules} new</strong>, {preview.conflicts.length} conflicts,{' '}
-              {preview.unchanged} already identical, {preview.transferRules} transfer rules.
+              {preview.totalRules} rules in the file: <strong className="font-semibold text-ink">{preview.newRules} new</strong>,{' '}
+              {preview.conflicts.length} conflicts, {preview.unchanged} already identical, {preview.transferRules} transfer rules.
             </p>
             {preview.skippedRules > 0 ? (
               <p>{preview.skippedRules} rules use a kind this install doesn&apos;t import (e.g. rename) and will be skipped.</p>
@@ -122,7 +150,8 @@ export function RulesPackPanel({ rows }: { rows: RulesExportRow[] }) {
               <ul className="mt-1 list-inside list-disc">
                 {preview.conflicts.map((conflict) => (
                   <li key={`${conflict.pattern}-${conflict.matchType}`}>
-                    <code>{conflict.pattern}</code>: mine {conflict.existingCategory ?? 'none'} · theirs {conflict.incomingCategory ?? 'none'}
+                    <code className="font-mono">{conflict.pattern}</code>: mine {conflict.existingCategory ?? 'none'} · theirs{' '}
+                    {conflict.incomingCategory ?? 'none'}
                   </li>
                 ))}
               </ul>

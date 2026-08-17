@@ -3,6 +3,13 @@
 import { useActionState, useState } from 'react';
 import { FormError } from '@/components/FormError';
 import { SubmitButton } from '@/components/SubmitButton';
+import { WarrantiesIcon } from '@/components/icons';
+import { Card, CardBody, CardHeader } from '@/components/ui/Card';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { Notice } from '@/components/ui/Notice';
+import { PageHeader } from '@/components/ui/PageHeader';
+import { TableWrap } from '@/components/ui/Table';
+import { Field, inputClass, labelClass } from '@/components/ui/form';
 import {
   createItemTypeAction,
   deleteItemTypeAction,
@@ -13,6 +20,9 @@ import {
 import type { ItemTypeWithUsage } from '@/lib/warranty/types';
 
 const initialState: ItemTypesFormState = {};
+
+const rowInput = 'field-control w-auto px-2 py-1 text-xs';
+const rowButton = 'btn btn--secondary btn--sm';
 
 /**
  * Which of the three per-row actions most recently ran. Without this, a stale success
@@ -45,96 +55,114 @@ export function ItemTypesManager({ types }: { types: ItemTypeWithUsage[] }) {
   const rowMessage = rowState?.message;
 
   return (
-    <div className="flex flex-col gap-8">
-      <h1 className="text-xl font-semibold">Item types</h1>
-      <p className="text-sm text-slate-600 dark:text-slate-400">
-        The list members choose from when they record a warranty. Marking a type as a subscription changes
-        the wording on those items: they show a <strong>cancel by</strong> date instead of an expiry date, and
-        the dashboard reminds you before the period ends.
-      </p>
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        eyebrow="Settings"
+        title="Item types"
+        description={
+          <>
+            The list members choose from when they record a warranty. Marking a type as a subscription changes
+            the wording on those items: they show a <strong className="font-semibold text-ink">cancel by</strong> date instead of an
+            expiry date, and the dashboard reminds you before the period ends.
+          </>
+        }
+      />
 
-      <form action={create} className="flex max-w-md flex-col gap-3">
-        <h2 className="text-sm font-medium">Add a type</h2>
-        <FormError message={createState.error} />
-        {createState.message ? <p className="text-sm text-green-700 dark:text-green-400">{createState.message}</p> : null}
-        <input
-          name="name"
-          placeholder="Type name (e.g. Appliance)"
-          required
-          maxLength={60}
-          className="rounded-md border border-slate-300 px-3 py-2 dark:border-slate-700 dark:bg-slate-900"
-        />
-        <label className="flex items-center gap-2 text-sm">
-          {/*
-            No sibling hidden input here: FormData.get() returns the FIRST value for a
-            repeated key, so a hidden "0" placed before this box would always win over the
-            checkbox's "1" and the admin's choice would be silently discarded. The action's
-            `formData.get('isSubscription') ?? '0'` already covers the unchecked case, since
-            an unticked checkbox submits no entry for its name at all.
-          */}
-          <input type="checkbox" name="isSubscription" value="1" />
-          This is a subscription (show a cancel-by date)
-        </label>
-        <SubmitButton>Add type</SubmitButton>
-      </form>
+      <Card className="max-w-md">
+        <CardHeader title="Add a type" />
+        <CardBody>
+          <form action={create} className="flex flex-col gap-4">
+            <FormError message={createState.error} />
+            {createState.message ? <Notice tone="success">{createState.message}</Notice> : null}
+            <Field label="Type name">
+              <input name="name" placeholder="Appliance" required maxLength={60} className={inputClass} />
+            </Field>
+            <label className="flex items-center gap-2">
+              {/*
+                No sibling hidden input here: FormData.get() returns the FIRST value for a
+                repeated key, so a hidden "0" placed before this box would always win over the
+                checkbox's "1" and the admin's choice would be silently discarded. The action's
+                `formData.get('isSubscription') ?? '0'` already covers the unchecked case, since
+                an unticked checkbox submits no entry for its name at all.
+              */}
+              <input type="checkbox" name="isSubscription" value="1" className="accent-accent" />
+              <span className={labelClass}>This is a subscription (show a cancel-by date)</span>
+            </label>
+            <SubmitButton className="w-fit">Add type</SubmitButton>
+          </form>
+        </CardBody>
+      </Card>
 
       <FormError message={rowError} />
-      {rowMessage ? <p className="text-sm text-green-700 dark:text-green-400">{rowMessage}</p> : null}
+      {rowMessage ? <Notice tone="success">{rowMessage}</Notice> : null}
 
-      <table className="w-full text-left text-sm">
-        <thead>
-          <tr className="border-b border-slate-200 dark:border-slate-800">
-            <th className="py-2">Name</th>
-            <th>Subscription</th>
-            <th>Items using it</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {types.map((type) => (
-            <tr key={type.id} className="border-b border-slate-100 align-top dark:border-slate-900">
-              <td className="py-2">{type.name}</td>
-              <td>{type.isSubscription ? 'yes' : 'no'}</td>
-              <td>{type.usageCount}</td>
-              <td className="py-2">
-                <div className="flex flex-wrap gap-2">
-                  <form action={rename} className="flex gap-1">
-                    <input type="hidden" name="typeId" value={type.id} />
-                    <input
-                      name="name"
-                      defaultValue={type.name}
-                      maxLength={60}
-                      aria-label={`Rename ${type.name}`}
-                      className="w-40 rounded border border-slate-300 px-2 py-1 dark:border-slate-700 dark:bg-slate-900"
-                    />
-                    <button type="submit" className="rounded border border-slate-300 px-2 py-1 dark:border-slate-700">
-                      Rename
-                    </button>
-                  </form>
-                  <form action={toggle}>
-                    <input type="hidden" name="typeId" value={type.id} />
-                    <input type="hidden" name="isSubscription" value={type.isSubscription ? '0' : '1'} />
-                    <button type="submit" className="rounded border border-slate-300 px-2 py-1 dark:border-slate-700">
-                      {type.isSubscription ? 'Not a subscription' : 'Mark as subscription'}
-                    </button>
-                  </form>
-                  <form action={remove}>
-                    <input type="hidden" name="typeId" value={type.id} />
-                    <button
-                      type="submit"
-                      disabled={type.usageCount > 0}
-                      title={type.usageCount > 0 ? `${type.usageCount} item(s) use this type` : undefined}
-                      className="rounded border border-slate-300 px-2 py-1 disabled:opacity-50 dark:border-slate-700"
-                    >
-                      Delete
-                    </button>
-                  </form>
-                </div>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <Card>
+        <CardHeader title="Types" description={`${types.length} type${types.length === 1 ? '' : 's'}.`} />
+        {types.length === 0 ? (
+          <EmptyState icon={WarrantiesIcon} title="No item types yet">
+            Add one above — Appliance, Electronics and Subscription are a good start.
+          </EmptyState>
+        ) : (
+          <TableWrap bare>
+            <thead>
+              <tr>
+                <th scope="col">Name</th>
+                <th scope="col">Subscription</th>
+                <th scope="col" className="text-right">Items using it</th>
+                <th scope="col">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {types.map((type) => (
+                <tr key={type.id} className="align-top">
+                  <td className="font-medium text-ink">{type.name}</td>
+                  <td>
+                    <span className={type.isSubscription ? 'badge badge--accent' : 'badge badge--muted'}>
+                      {type.isSubscription ? 'yes' : 'no'}
+                    </span>
+                  </td>
+                  <td className="tabnum text-right text-muted">{type.usageCount}</td>
+                  <td>
+                    <div className="flex flex-wrap gap-2">
+                      <form action={rename} className="flex gap-1">
+                        <input type="hidden" name="typeId" value={type.id} />
+                        <input
+                          name="name"
+                          defaultValue={type.name}
+                          maxLength={60}
+                          aria-label={`Rename ${type.name}`}
+                          className={`w-36 ${rowInput}`}
+                        />
+                        <button type="submit" className={rowButton}>
+                          Rename
+                        </button>
+                      </form>
+                      <form action={toggle}>
+                        <input type="hidden" name="typeId" value={type.id} />
+                        <input type="hidden" name="isSubscription" value={type.isSubscription ? '0' : '1'} />
+                        <button type="submit" className={rowButton}>
+                          {type.isSubscription ? 'Not a subscription' : 'Mark as subscription'}
+                        </button>
+                      </form>
+                      <form action={remove}>
+                        <input type="hidden" name="typeId" value={type.id} />
+                        <button
+                          type="submit"
+                          disabled={type.usageCount > 0}
+                          title={type.usageCount > 0 ? `${type.usageCount} item(s) use this type` : undefined}
+                          className={rowButton}
+                        >
+                          Delete
+                        </button>
+                      </form>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </TableWrap>
+        )}
+      </Card>
     </div>
   );
 }

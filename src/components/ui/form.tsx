@@ -42,26 +42,3 @@ export function Field({
     </Wrapper>
   );
 }
-
-/** A group of related fields with a heading — used by the settings and setup forms. */
-export function Fieldset({
-  legend,
-  description,
-  children,
-  className = '',
-}: {
-  legend: React.ReactNode;
-  description?: React.ReactNode;
-  children: React.ReactNode;
-  className?: string;
-}) {
-  return (
-    <fieldset className={`flex flex-col gap-4 ${className}`}>
-      <legend className="flex flex-col gap-1">
-        <span className="text-sm font-semibold text-ink">{legend}</span>
-        {description ? <span className="text-sm text-muted">{description}</span> : null}
-      </legend>
-      {children}
-    </fieldset>
-  );
-}

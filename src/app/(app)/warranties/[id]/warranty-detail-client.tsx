@@ -7,7 +7,10 @@ import { FormError } from '@/components/FormError';
 import { SubmitButton } from '@/components/SubmitButton';
 import { StatusBadge } from '@/components/warranty/StatusBadge';
 import { ReceiptUploader, type StagedFile } from '@/components/warranty/ReceiptUploader';
-import { formatCents } from '@/lib/money';
+import { Card, CardBody, CardHeader } from '@/components/ui/Card';
+import { Money } from '@/components/ui/Money';
+import { Notice } from '@/components/ui/Notice';
+import { Field, inputClass, labelClass, selectClass, textareaClass } from '@/components/ui/form';
 import { expiryDateLabel, purchaseDateLabel, termLabel } from '@/lib/warranty/constants';
 import type { WarrantyStatus } from '@/lib/warranty/expiry';
 import type { WarrantyItemRow, WarrantyReceiptRow } from '@/lib/warranty/items';
@@ -39,9 +42,19 @@ type TypeOption = { id: number; name: string; isSubscription: boolean };
 function LinkSubmitButton({ children }: { children: React.ReactNode }) {
   const { pending } = useFormStatus();
   return (
-    <button type="submit" disabled={pending} className="underline disabled:opacity-60">
+    <button type="submit" disabled={pending} className="btn btn--ghost btn--sm px-1.5 text-xs">
       {pending ? 'Working…' : children}
     </button>
+  );
+}
+
+/** One label/value pair in the summary grid. */
+function Detail({ label, children }: { label: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-0.5 border-b border-line py-2.5 last:border-b-0 sm:border-b-0 sm:py-0">
+      <dt className="text-xs font-medium text-subtle">{label}</dt>
+      <dd className="text-sm text-ink">{children}</dd>
+    </div>
   );
 }
 
@@ -137,132 +150,152 @@ export function WarrantyDetailClient({
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <h1 className="text-xl font-semibold">{item.name}</h1>
+      <div className="flex flex-wrap items-start justify-between gap-x-6 gap-y-3">
+        <div className="flex min-w-0 flex-wrap items-center gap-3">
+          <h1 className="text-2xl font-semibold tracking-tight text-ink">{item.name}</h1>
           <StatusBadge status={status} expiryDate={item.expiryDate} today={today} isSubscription={item.isSubscription} />
         </div>
-        <Link href="/warranties" className="text-sm underline">Back to warranties</Link>
-      </div>
-
-      <FormError message={error} />
-      {notice ? <p className="text-sm text-green-700 dark:text-green-400">{notice}</p> : null}
-
-      <dl className="grid max-w-2xl grid-cols-2 gap-x-6 gap-y-2 text-sm">
-        <dt className="text-slate-500">Type</dt><dd>{item.typeName ?? '—'}</dd>
-        <dt className="text-slate-500">Vendor</dt><dd>{item.vendor ?? '—'}</dd>
-        <dt className="text-slate-500">Model</dt><dd>{item.model ?? '—'}</dd>
-        <dt className="text-slate-500">Serial number</dt><dd>{item.serial ?? '—'}</dd>
-        <dt className="text-slate-500">{purchaseLabel}</dt><dd>{item.purchaseDate}</dd>
-        <dt className="text-slate-500">{termWordLabel}</dt>
-        <dd>{item.isLifetime ? 'Lifetime' : item.warrantyMonths === null ? 'Unknown' : `${item.warrantyMonths} months`}</dd>
-        <dt className="text-slate-500">{expiryLabel}</dt><dd>{item.expiryDate ?? '—'}</dd>
-        <dt className="text-slate-500">Price</dt><dd>{item.priceCents === null ? '—' : formatCents(item.priceCents)}</dd>
-        <dt className="text-slate-500">Owner</dt><dd>{item.ownerName}</dd>
-        <dt className="text-slate-500">Notes</dt><dd>{item.notes ?? '—'}</dd>
-        <dt className="text-slate-500">Transaction</dt>
-        <dd>
-          {linkedTransaction ? (
-            <Link href={`/transactions?q=${encodeURIComponent(linkedTransaction.description)}`} className="underline">
-              {linkedTransaction.date} · {linkedTransaction.description}
-            </Link>
-          ) : linkRemoved ? (
-            'The linked transaction was removed by an import undo'
-          ) : (
-            '—'
-          )}
-        </dd>
-      </dl>
-
-      <section className="flex flex-col gap-3">
-        <h2 className="font-medium">Receipts ({receipts.length} receipt{receipts.length === 1 ? '' : 's'})</h2>
-        {receipts.length === 0 ? (
-          <p className="text-sm text-slate-600 dark:text-slate-300">No receipts attached yet.</p>
-        ) : (
-          <ul className="flex flex-wrap gap-4">
-            {receipts.map((receipt) => (
-              <li key={receipt.id} className="flex w-48 flex-col gap-1 rounded border p-2 text-xs dark:border-slate-700">
-                {!receipt.fileExists ? (
-                  <span className="text-slate-500">file missing</span>
-                ) : receipt.mime === 'application/pdf' ? (
-                  // MUST-5.3: PDFs are LINKED, never embedded — an inline same-origin PDF
-                  // runs the viewer's JavaScript in our origin.
-                  <a href={`/api/warranties/receipts/${receipt.id}`} className="underline">Download PDF</a>
-                ) : (
-                  <a href={`/api/warranties/receipts/${receipt.id}`}>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      src={`/api/warranties/receipts/${receipt.id}`}
-                      alt={receipt.originalFilename}
-                      className="max-h-32 w-full object-contain"
-                    />
-                  </a>
-                )}
-                {/* MUST-13.3: original_filename and ocr_error are attacker-influenceable and
-                    are rendered as TEXT NODES only, never as HTML. */}
-                <span className="truncate" title={receipt.originalFilename}>{receipt.originalFilename}</span>
-                <span className="text-slate-500">{Math.round(receipt.sizeBytes / 1024)} KB · {OCR_CHIP[receipt.ocrStatus]}</span>
-                {receipt.ocrError ? <span className="text-red-700 dark:text-red-300">{receipt.ocrError}</span> : null}
-                <div className="flex gap-2">
-                  <form action={ocrAction}>
-                    <input type="hidden" name="receiptId" value={receipt.id} />
-                    <LinkSubmitButton>Re-run OCR</LinkSubmitButton>
-                  </form>
-                  <form
-                    action={removeAction}
-                    onSubmit={(event) => {
-                      if (!confirm(`Remove ${receipt.originalFilename}?`)) event.preventDefault();
-                    }}
-                  >
-                    <input type="hidden" name="receiptId" value={receipt.id} />
-                    <LinkSubmitButton>Remove</LinkSubmitButton>
-                  </form>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-
-        <form action={attachAction} className="flex flex-col gap-2">
-          <input type="hidden" name="itemId" value={item.id} />
-          <input
-            type="hidden"
-            name="staged"
-            value={JSON.stringify(staged.map((f) => ({ stagingId: f.stagingId, originalFilename: f.originalFilename })))}
-          />
-          <ReceiptUploader key={uploaderKey} onStagedChange={onStagedChange} label="Add another receipt" />
-          <SubmitButton className="w-fit">Attach receipts</SubmitButton>
-        </form>
-      </section>
-
-      <section className="flex flex-col gap-3">
-        <div className="flex gap-3">
-          <button type="button" onClick={() => setEditing((v) => !v)} className="rounded border px-3 py-1 text-sm dark:border-slate-700">
+        <div className="flex flex-wrap items-center gap-2">
+          <Link href="/warranties" className="btn btn--ghost btn--sm">Back to warranties</Link>
+          <button type="button" onClick={() => setEditing((v) => !v)} className="btn btn--secondary btn--sm">
             {editing ? 'Cancel edit' : 'Edit'}
           </button>
-          <button type="button" onClick={() => setConfirming(true)} className="rounded border px-3 py-1 text-sm text-red-700 dark:border-slate-700 dark:text-red-300">
+          <button type="button" onClick={() => setConfirming(true)} className="btn btn--ghost btn--sm money-neg">
             Delete item
           </button>
         </div>
+      </div>
 
-        {confirming ? (
-          <form action={deleteAction} className="flex flex-col gap-2 rounded border border-red-300 p-3 text-sm dark:border-red-800">
-            <p>
-              Delete <strong>{item.name}</strong> and its {receipts.length} receipt{receipts.length === 1 ? '' : 's'}?
-              This cannot be undone.
+      <FormError message={error} />
+      {notice ? <Notice tone="success">{notice}</Notice> : null}
+
+      {confirming ? (
+        <Card as="div" className="border-negative-soft">
+          <CardBody className="pt-5">
+            <form action={deleteAction} className="flex flex-col gap-3">
+              <p className="text-sm text-ink">
+                Delete <strong className="font-semibold">{item.name}</strong> and its {receipts.length} receipt{receipts.length === 1 ? '' : 's'}?
+                This cannot be undone.
+              </p>
+              <input type="hidden" name="itemId" value={item.id} />
+              <div className="flex gap-2">
+                <SubmitButton variant="danger">Delete permanently</SubmitButton>
+                <button type="button" onClick={() => setConfirming(false)} className="btn btn--secondary">
+                  Cancel
+                </button>
+              </div>
+            </form>
+          </CardBody>
+        </Card>
+      ) : null}
+
+      <Card>
+        <CardBody className="pt-5">
+          <dl className="grid gap-x-8 gap-y-4 sm:grid-cols-2 lg:grid-cols-3">
+            <Detail label="Type">{item.typeName ?? '—'}</Detail>
+            <Detail label="Vendor">{item.vendor ?? '—'}</Detail>
+            <Detail label="Model">{item.model ?? '—'}</Detail>
+            <Detail label="Serial number">{item.serial ?? '—'}</Detail>
+            <Detail label={purchaseLabel}>{item.purchaseDate}</Detail>
+            <Detail label={termWordLabel}>
+              {item.isLifetime ? 'Lifetime' : item.warrantyMonths === null ? 'Unknown' : `${item.warrantyMonths} months`}
+            </Detail>
+            <Detail label={expiryLabel}>{item.expiryDate ?? '—'}</Detail>
+            <Detail label="Price">{item.priceCents === null ? '—' : <Money cents={item.priceCents} plain />}</Detail>
+            <Detail label="Owner">{item.ownerName}</Detail>
+            <Detail label="Notes">{item.notes ?? '—'}</Detail>
+            <Detail label="Transaction">
+              {linkedTransaction ? (
+                <Link
+                  href={`/transactions?q=${encodeURIComponent(linkedTransaction.description)}`}
+                  className="text-accent-text underline underline-offset-2"
+                >
+                  {linkedTransaction.date} · {linkedTransaction.description}
+                </Link>
+              ) : linkRemoved ? (
+                'The linked transaction was removed by an import undo'
+              ) : (
+                '—'
+              )}
+            </Detail>
+          </dl>
+        </CardBody>
+      </Card>
+
+      <Card>
+        <CardHeader
+          title={<>Receipts ({receipts.length} receipt{receipts.length === 1 ? '' : 's'})</>}
+          description="Photos and PDFs are stored on this machine and read offline."
+        />
+        <CardBody className="flex flex-col gap-4">
+          {receipts.length === 0 ? (
+            <p className="rounded-md border border-dashed border-line-strong px-4 py-6 text-center text-sm text-muted">
+              No receipts attached yet.
             </p>
-            <input type="hidden" name="itemId" value={item.id} />
-            <div className="flex gap-2">
-              <SubmitButton>Delete permanently</SubmitButton>
-              <button type="button" onClick={() => setConfirming(false)} className="rounded border px-3 py-2 dark:border-slate-700">
-                Cancel
-              </button>
-            </div>
-          </form>
-        ) : null}
+          ) : (
+            <ul className="flex flex-wrap gap-3">
+              {receipts.map((receipt) => (
+                <li
+                  key={receipt.id}
+                  className="flex w-48 flex-col gap-1.5 rounded-md border border-line bg-surface-2/50 p-2 text-xs"
+                >
+                  <span className="flex h-32 items-center justify-center overflow-hidden rounded-xs bg-surface">
+                    {!receipt.fileExists ? (
+                      <span className="text-subtle">file missing</span>
+                    ) : receipt.mime === 'application/pdf' ? (
+                      // MUST-5.3: PDFs are LINKED, never embedded — an inline same-origin PDF
+                      // runs the viewer's JavaScript in our origin.
+                      <a href={`/api/warranties/receipts/${receipt.id}`} className="text-accent-text underline underline-offset-2">Download PDF</a>
+                    ) : (
+                      <a href={`/api/warranties/receipts/${receipt.id}`}>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={`/api/warranties/receipts/${receipt.id}`}
+                          alt={receipt.originalFilename}
+                          className="max-h-32 w-full object-contain"
+                        />
+                      </a>
+                    )}
+                  </span>
+                  {/* MUST-13.3: original_filename and ocr_error are attacker-influenceable and
+                      are rendered as TEXT NODES only, never as HTML. */}
+                  <span className="truncate font-medium text-ink" title={receipt.originalFilename}>{receipt.originalFilename}</span>
+                  <span className="text-subtle">{Math.round(receipt.sizeBytes / 1024)} KB · {OCR_CHIP[receipt.ocrStatus]}</span>
+                  {receipt.ocrError ? <span className="money-neg">{receipt.ocrError}</span> : null}
+                  <div className="flex gap-1">
+                    <form action={ocrAction}>
+                      <input type="hidden" name="receiptId" value={receipt.id} />
+                      <LinkSubmitButton>Re-run OCR</LinkSubmitButton>
+                    </form>
+                    <form
+                      action={removeAction}
+                      onSubmit={(event) => {
+                        if (!confirm(`Remove ${receipt.originalFilename}?`)) event.preventDefault();
+                      }}
+                    >
+                      <input type="hidden" name="receiptId" value={receipt.id} />
+                      <LinkSubmitButton>Remove</LinkSubmitButton>
+                    </form>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
 
-        {editing ? <EditForm item={item} people={people} types={types} today={today} action={editAction} /> : null}
-      </section>
+          <form action={attachAction} className="flex flex-col gap-3 border-t border-line pt-4">
+            <input type="hidden" name="itemId" value={item.id} />
+            <input
+              type="hidden"
+              name="staged"
+              value={JSON.stringify(staged.map((f) => ({ stagingId: f.stagingId, originalFilename: f.originalFilename })))}
+            />
+            <ReceiptUploader key={uploaderKey} onStagedChange={onStagedChange} label="Add another receipt" />
+            <SubmitButton className="w-fit">Attach receipts</SubmitButton>
+          </form>
+        </CardBody>
+      </Card>
+
+      {editing ? <EditForm item={item} people={people} types={types} today={today} action={editAction} /> : null}
     </div>
   );
 }
@@ -284,81 +317,92 @@ function EditForm({
   const [months, setMonths] = useState(item.warrantyMonths === null ? '' : String(item.warrantyMonths));
 
   return (
-    <form action={action} className="flex max-w-2xl flex-col gap-3 text-sm">
-      <input type="hidden" name="itemId" value={item.id} />
-      <input type="hidden" name="transactionId" value={item.transactionId ?? ''} />
-      <input type="hidden" name="staged" value="[]" />
+    <Card className="max-w-2xl">
+      <CardHeader title="Edit this item" />
+      <CardBody>
+        <form action={action} className="flex flex-col gap-4">
+          <input type="hidden" name="itemId" value={item.id} />
+          <input type="hidden" name="transactionId" value={item.transactionId ?? ''} />
+          <input type="hidden" name="staged" value="[]" />
 
-      <label className="flex flex-col gap-1">
-        Name
-        <input name="name" required maxLength={200} defaultValue={item.name} className="rounded border px-2 py-1 dark:border-slate-700 dark:bg-slate-900" />
-      </label>
-      <label className="flex flex-col gap-1">
-        Type
-        <select name="typeId" defaultValue={item.typeId ?? ''} className="w-56 rounded border px-2 py-1 dark:bg-slate-900">
-          <option value="">— none —</option>
-          {types.map((type) => (
-            <option key={type.id} value={type.id}>{type.name}</option>
-          ))}
-        </select>
-      </label>
-      <label className="flex flex-col gap-1">
-        Vendor
-        <input name="vendor" maxLength={200} defaultValue={item.vendor ?? ''} className="rounded border px-2 py-1 dark:border-slate-700 dark:bg-slate-900" />
-      </label>
-      <label className="flex flex-col gap-1">
-        Model
-        <input name="model" maxLength={200} defaultValue={item.model ?? ''} className="rounded border px-2 py-1 dark:border-slate-700 dark:bg-slate-900" />
-      </label>
-      <label className="flex flex-col gap-1">
-        Serial number
-        <input name="serial" maxLength={200} defaultValue={item.serial ?? ''} className="rounded border px-2 py-1 dark:border-slate-700 dark:bg-slate-900" />
-      </label>
-      <label className="flex flex-col gap-1">
-        Purchase date
-        <input type="date" name="purchaseDate" required max={today} defaultValue={item.purchaseDate} className="rounded border px-2 py-1 dark:border-slate-700 dark:bg-slate-900" />
-      </label>
-      <fieldset className="flex flex-wrap items-center gap-3">
-        <legend>Warranty length</legend>
-        <input
-          type="number"
-          name="warrantyMonths"
-          min={1}
-          value={months}
-          disabled={isLifetime}
-          onChange={(e) => setMonths(e.target.value)}
-          className="w-28 rounded border px-2 py-1 dark:border-slate-700 dark:bg-slate-900"
-        />
-        <label className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            name="isLifetime"
-            checked={isLifetime}
-            onChange={(e) => {
-              setIsLifetime(e.target.checked);
-              if (e.target.checked) setMonths('');
-            }}
-          />
-          Lifetime
-        </label>
-      </fieldset>
-      <label className="flex flex-col gap-1">
-        Price
-        <input name="price" inputMode="decimal" defaultValue={item.priceCents === null ? '' : (item.priceCents / 100).toFixed(2)} className="w-40 rounded border px-2 py-1 dark:border-slate-700 dark:bg-slate-900" />
-      </label>
-      <label className="flex flex-col gap-1">
-        Owner
-        <select name="ownerUserId" defaultValue={String(item.ownerUserId)} className="w-56 rounded border px-2 py-1 dark:bg-slate-900">
-          {people.map((person) => (
-            <option key={person.id} value={person.id}>{person.name}</option>
-          ))}
-        </select>
-      </label>
-      <label className="flex flex-col gap-1">
-        Notes
-        <textarea name="notes" maxLength={2000} rows={3} defaultValue={item.notes ?? ''} className="rounded border px-2 py-1 dark:border-slate-700 dark:bg-slate-900" />
-      </label>
-      <SubmitButton className="w-fit">Save changes</SubmitButton>
-    </form>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Field label="Name" className="sm:col-span-2">
+              <input name="name" required maxLength={200} defaultValue={item.name} className={inputClass} />
+            </Field>
+            <Field label="Type">
+              <select name="typeId" defaultValue={item.typeId ?? ''} className={selectClass}>
+                <option value="">— none —</option>
+                {types.map((type) => (
+                  <option key={type.id} value={type.id}>{type.name}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Vendor">
+              <input name="vendor" maxLength={200} defaultValue={item.vendor ?? ''} className={inputClass} />
+            </Field>
+            <Field label="Model">
+              <input name="model" maxLength={200} defaultValue={item.model ?? ''} className={inputClass} />
+            </Field>
+            <Field label="Serial number">
+              <input name="serial" maxLength={200} defaultValue={item.serial ?? ''} className={inputClass} />
+            </Field>
+            <Field label="Purchase date">
+              <input type="date" name="purchaseDate" required max={today} defaultValue={item.purchaseDate} className={inputClass} />
+            </Field>
+            <Field label="Price">
+              <input
+                name="price"
+                inputMode="decimal"
+                defaultValue={item.priceCents === null ? '' : (item.priceCents / 100).toFixed(2)}
+                className={inputClass}
+              />
+            </Field>
+          </div>
+
+          <fieldset className="flex flex-col gap-2">
+            <legend className={labelClass}>Warranty length</legend>
+            <div className="flex flex-wrap items-center gap-3">
+              <input
+                type="number"
+                name="warrantyMonths"
+                min={1}
+                value={months}
+                disabled={isLifetime}
+                aria-label="Warranty length in months"
+                onChange={(e) => setMonths(e.target.value)}
+                className="field-control w-28"
+              />
+              <label className="flex items-center gap-2 text-sm text-muted">
+                <input
+                  type="checkbox"
+                  name="isLifetime"
+                  checked={isLifetime}
+                  onChange={(e) => {
+                    setIsLifetime(e.target.checked);
+                    if (e.target.checked) setMonths('');
+                  }}
+                  className="accent-accent"
+                />
+                Lifetime
+              </label>
+            </div>
+          </fieldset>
+
+          <Field label="Owner" className="max-w-xs">
+            <select name="ownerUserId" defaultValue={String(item.ownerUserId)} className={selectClass}>
+              {people.map((person) => (
+                <option key={person.id} value={person.id}>{person.name}</option>
+              ))}
+            </select>
+          </Field>
+
+          <Field label="Notes">
+            <textarea name="notes" maxLength={2000} rows={3} defaultValue={item.notes ?? ''} className={textareaClass} />
+          </Field>
+
+          <SubmitButton className="w-fit">Save changes</SubmitButton>
+        </form>
+      </CardBody>
+    </Card>
   );
 }

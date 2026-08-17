@@ -1,7 +1,11 @@
 'use client';
 
 import { useState } from 'react';
+import { Notice } from '@/components/ui/Notice';
 import type { ProfilesExportRow } from '@/lib/packs';
+
+const fileInputClass =
+  'text-sm text-muted file:mr-3 file:rounded-md file:border-0 file:bg-accent-soft file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-accent-soft-fg';
 
 export function ProfilesPackPanel({ rows }: { rows: ProfilesExportRow[] }) {
   const [selected, setSelected] = useState<number[]>(rows.map((row) => row.profileId));
@@ -40,36 +44,57 @@ export function ProfilesPackPanel({ rows }: { rows: ProfilesExportRow[] }) {
   }
 
   return (
-    <section className="flex flex-col gap-3 rounded border border-slate-200 p-3 text-sm dark:border-slate-800">
-      <h3 className="font-medium">Share bank column layouts</h3>
-      <p className="text-xs text-slate-500">
-        A profile pack carries only the name, institution and column mapping — pure layout knowledge, with no personal data by construction.
-      </p>
-      {error ? <p role="alert" className="rounded bg-red-50 px-3 py-2 text-red-700 dark:bg-red-950 dark:text-red-300">{error}</p> : null}
-      {notice ? <p className="text-green-700 dark:text-green-400">{notice}</p> : null}
+    <section className="flex flex-col gap-4 rounded-lg border border-line bg-surface-2/50 p-4 text-sm">
+      <div className="flex flex-col gap-1">
+        <h3 className="text-sm font-semibold text-ink">Share bank column layouts</h3>
+        <p className="text-xs text-muted">
+          A profile pack carries only the name, institution and column mapping — pure layout knowledge, with no personal data by construction.
+        </p>
+      </div>
+      {error ? <Notice tone="error">{error}</Notice> : null}
+      {notice ? <Notice tone="success">{notice}</Notice> : null}
 
-      <ul className="max-h-48 overflow-y-auto rounded border border-slate-100 p-2 dark:border-slate-900">
-        {rows.map((row) => (
-          <li key={row.profileId} className="flex items-center gap-2 py-0.5">
-            <input type="checkbox" checked={selected.includes(row.profileId)} onChange={() => toggle(row.profileId)} aria-label={`Include ${row.name}`} />
-            <span className="text-xs">{row.name} <span className="text-slate-500">{row.institution}{row.isBuiltin ? ' · built-in' : ''}</span></span>
-          </li>
-        ))}
-      </ul>
-      <a href={exportHref} className="w-fit rounded bg-slate-900 px-3 py-2 text-white dark:bg-slate-100 dark:text-slate-900">
-        Download profile pack ({selected.length})
-      </a>
+      <div className="flex flex-col gap-2">
+        <h4 className="eyebrow">Export</h4>
+        <ul className="max-h-48 overflow-y-auto rounded-md border border-line bg-surface p-2">
+          {rows.map((row) => (
+            <li key={row.profileId} className="flex items-center gap-2 py-0.5">
+              <input
+                type="checkbox"
+                checked={selected.includes(row.profileId)}
+                onChange={() => toggle(row.profileId)}
+                aria-label={`Include ${row.name}`}
+                className="accent-accent"
+              />
+              <span className="text-xs text-ink">
+                {row.name} <span className="text-subtle">{row.institution}{row.isBuiltin ? ' · built-in' : ''}</span>
+              </span>
+            </li>
+          ))}
+          {rows.length === 0 ? <li className="px-1 py-2 text-xs text-subtle">No profiles to export yet.</li> : null}
+        </ul>
+        <a href={exportHref} className="btn btn--primary w-fit">
+          Download profile pack ({selected.length})
+        </a>
+      </div>
 
-      <div className="flex flex-col gap-2 border-t border-slate-100 pt-3 dark:border-slate-900">
-        <input type="file" accept="application/json,.json" onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+      <div className="flex flex-col gap-2 border-t border-line pt-4">
+        <h4 className="eyebrow">Import</h4>
+        <input
+          type="file"
+          accept="application/json,.json"
+          aria-label="Profile pack file"
+          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+          className={fileInputClass}
+        />
         <div className="flex gap-2">
-          <button type="button" onClick={() => void send('preview')} className="rounded border px-3 py-2 dark:border-slate-700">Preview</button>
-          <button type="button" onClick={() => void send('apply')} disabled={preview === null} className="rounded bg-slate-900 px-3 py-2 text-white disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900">
+          <button type="button" onClick={() => void send('preview')} className="btn btn--secondary">Preview</button>
+          <button type="button" onClick={() => void send('apply')} disabled={preview === null} className="btn btn--primary">
             Import
           </button>
         </div>
         {preview ? (
-          <p className="text-xs">
+          <p className="rounded-md border border-line bg-surface p-3 text-xs text-muted">
             {preview.totalProfiles} profiles in the file.{' '}
             {preview.willRename.length > 0
               ? `These names are taken and will be renamed: ${preview.willRename.map((r) => `${r.from} → ${r.to}`).join(', ')}.`

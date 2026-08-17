@@ -3,13 +3,46 @@
 import { useState } from 'react';
 import { MappingEditor } from '@/components/MappingEditor';
 import { SubmitButton } from '@/components/SubmitButton';
-import { formatCents } from '@/lib/money';
+import { ImportIcon } from '@/components/icons';
+import { Card, CardBody, CardHeader } from '@/components/ui/Card';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { Money } from '@/components/ui/Money';
+import { Notice } from '@/components/ui/Notice';
+import { PageHeader } from '@/components/ui/PageHeader';
+import { TableWrap } from '@/components/ui/Table';
+import { Field, selectClass } from '@/components/ui/form';
 import type { ImportMapping } from '@/lib/import/mapping';
 import type { PreviewResult } from '@/lib/import/preview';
 import type { ImportHistoryRow } from '@/lib/import/commit';
 
 interface AccountOption { id: number; name: string; importProfileId: number | null }
 interface ProfileOption { id: number; name: string; isBuiltin: boolean; mapping: ImportMapping }
+
+/** Import really is a three-step sequence, so the numbers carry information here. */
+function StepMark({ n, state = 'todo' }: { n: number; state?: 'todo' | 'active' }) {
+  return (
+    <span
+      aria-hidden="true"
+      className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
+        state === 'active' ? 'bg-accent text-accent-fg' : 'bg-surface-2 text-subtle'
+      }`}
+    >
+      {n}
+    </span>
+  );
+}
+
+function StepTitle({ n, state, children }: { n: number; state?: 'todo' | 'active'; children: React.ReactNode }) {
+  return (
+    <span className="flex items-center gap-2.5">
+      <StepMark n={n} state={state} />
+      {children}
+    </span>
+  );
+}
+
+const fileInputClass =
+  'text-sm text-muted file:mr-3 file:rounded-md file:border-0 file:bg-accent-soft file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-accent-soft-fg';
 
 export function ImportClient({
   accounts,
@@ -150,194 +183,238 @@ export function ImportClient({
   }
 
   return (
-    <div className="flex flex-col gap-8">
-      <h1 className="text-xl font-semibold">Import</h1>
-      {error ? <p role="alert" className="rounded bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">{error}</p> : null}
+    <div className="flex flex-col gap-6">
+      <PageHeader
+        title="Import"
+        description="Upload a statement, check what it found, then add it. Nothing is written until you say so."
+        actions={
+          <a href="/import/wizard" className="btn btn--secondary">
+            Add a bank
+          </a>
+        }
+      />
+
+      {error ? <Notice tone="error">{error}</Notice> : null}
       {summary ? (
-        <p className="rounded bg-green-50 px-3 py-2 text-sm text-green-800 dark:bg-green-950 dark:text-green-300">
-          {summary} <a className="underline" href="/review">Go to the review queue</a>
-        </p>
+        <Notice tone="success">
+          {summary}{' '}
+          <a className="font-semibold underline underline-offset-2" href="/review">Go to the review queue</a>
+        </Notice>
       ) : null}
 
       {simplefinManaged.length > 0 ? (
-        <p className="rounded bg-slate-100 px-3 py-2 text-sm dark:bg-slate-900">
+        <Notice tone="info">
           {simplefinManaged.join(', ')} {simplefinManaged.length === 1 ? 'is' : 'are'} synced from SimpleFIN, so CSV import is turned off for{' '}
-          {simplefinManaged.length === 1 ? 'it' : 'them'}. Unlink under <a className="underline" href="/settings/connections">Settings → Connections</a>{' '}
+          {simplefinManaged.length === 1 ? 'it' : 'them'}. Unlink under <a className="underline underline-offset-2" href="/settings/connections">Settings → Connections</a>{' '}
           to switch back to CSV.
-        </p>
+        </Notice>
       ) : null}
 
       {accounts.length === 0 ? (
-        <section className="flex flex-col gap-2 rounded border border-slate-200 p-4 text-sm dark:border-slate-800">
-          <h2 className="font-medium">No accounts to import into yet</h2>
-          <p className="text-slate-600 dark:text-slate-400">
-            {simplefinManaged.length > 0
-              ? 'Every account you have is synced from SimpleFIN, so there is nothing here to upload a CSV for. Add a CSV account to import one.'
-              : 'A CSV has to land somewhere, so add the bank account first — name, type, and whether it is joint or one person’s.'}{' '}
-            <a className="underline" href="/settings/accounts">
-              Add a bank account
-            </a>
-            {' '}(Settings → Bank accounts).
-          </p>
-          <div className="flex flex-wrap items-end gap-3">
-            <input type="file" accept=".csv,text/csv" disabled aria-label="Upload a CSV" className="text-sm" />
-            <button type="button" disabled className="rounded bg-slate-900 px-3 py-2 text-white disabled:opacity-60 dark:bg-slate-100 dark:text-slate-900">
-              Preview
-            </button>
-          </div>
-        </section>
+        <Card>
+          <CardHeader
+            title={<StepTitle n={1} state="active">No accounts to import into yet</StepTitle>}
+            description={
+              <>
+                {simplefinManaged.length > 0
+                  ? 'Every account you have is synced from SimpleFIN, so there is nothing here to upload a CSV for. Add a CSV account to import one.'
+                  : 'A CSV has to land somewhere, so add the bank account first — name, type, and whether it is joint or one person’s.'}{' '}
+                <a className="font-medium text-accent-text underline underline-offset-2" href="/settings/accounts">
+                  Add a bank account
+                </a>
+                {' '}(Settings → Bank accounts).
+              </>
+            }
+          />
+          <CardBody>
+            <div className="flex flex-wrap items-center gap-3">
+              <input type="file" accept=".csv,text/csv" disabled aria-label="Upload a CSV" className={fileInputClass} />
+              <button type="button" disabled className="btn btn--primary">
+                Preview
+              </button>
+            </div>
+          </CardBody>
+        </Card>
       ) : (
-      <form action={upload} className="flex flex-wrap items-end gap-3 text-sm">
-        <label className="flex flex-col gap-1">
-          Account
-          <select
-            value={accountId}
-            onChange={(e) => {
-              const id = Number(e.target.value);
-              setAccountId(id);
-              // Switching accounts switches banks: the previous account's
-              // remembered profile, its column mapping and any preview built
-              // from it all belong to the file that is no longer selected.
-              // Fall back to the first profile when this account has never
-              // been imported into, rather than silently keeping the old one.
-              const remembered = accounts.find((a) => a.id === id)?.importProfileId ?? profiles[0]?.id ?? 0;
-              setProfileId(remembered);
-              setMapping(profiles.find((p) => p.id === remembered)?.mapping ?? null);
-              setPreview(null);
-              setSummary(null);
-              setError(null);
-            }}
-            className="rounded border px-2 py-1 dark:bg-slate-900"
-          >
-            {accounts.map((account) => (
-              <option key={account.id} value={account.id}>
-                {account.name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="flex flex-col gap-1">
-          Import profile
-          <select
-            value={profileId}
-            onChange={(e) => {
-              const id = Number(e.target.value);
-              setProfileId(id);
-              setMapping(profiles.find((p) => p.id === id)?.mapping ?? null);
-            }}
-            className="rounded border px-2 py-1 dark:bg-slate-900"
-          >
-            {profiles.map((profile) => (
-              <option key={profile.id} value={profile.id}>
-                {profile.name}
-                {profile.isBuiltin ? ' (built-in)' : ''}
-              </option>
-            ))}
-          </select>
-        </label>
-        <input type="file" name="file" accept=".csv,text/csv" required className="text-sm" />
-        <SubmitButton className="px-3 py-2">Preview</SubmitButton>
-      </form>
+        <Card>
+          <CardHeader
+            title={<StepTitle n={1} state="active">Choose a file</StepTitle>}
+            description="Pick the account it belongs to and the profile that matches the bank's column layout."
+          />
+          <CardBody>
+            <form action={upload} className="flex flex-wrap items-end gap-4">
+              <Field label="Account">
+                <select
+                  value={accountId}
+                  onChange={(e) => {
+                    const id = Number(e.target.value);
+                    setAccountId(id);
+                    // Switching accounts switches banks: the previous account's
+                    // remembered profile, its column mapping and any preview built
+                    // from it all belong to the file that is no longer selected.
+                    // Fall back to the first profile when this account has never
+                    // been imported into, rather than silently keeping the old one.
+                    const remembered = accounts.find((a) => a.id === id)?.importProfileId ?? profiles[0]?.id ?? 0;
+                    setProfileId(remembered);
+                    setMapping(profiles.find((p) => p.id === remembered)?.mapping ?? null);
+                    setPreview(null);
+                    setSummary(null);
+                    setError(null);
+                  }}
+                  className={selectClass}
+                >
+                  {accounts.map((account) => (
+                    <option key={account.id} value={account.id}>
+                      {account.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Import profile">
+                <select
+                  value={profileId}
+                  onChange={(e) => {
+                    const id = Number(e.target.value);
+                    setProfileId(id);
+                    setMapping(profiles.find((p) => p.id === id)?.mapping ?? null);
+                  }}
+                  className={selectClass}
+                >
+                  {profiles.map((profile) => (
+                    <option key={profile.id} value={profile.id}>
+                      {profile.name}
+                      {profile.isBuiltin ? ' (built-in)' : ''}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <input type="file" name="file" accept=".csv,text/csv" required className={`${fileInputClass} py-2`} />
+              <SubmitButton>Preview</SubmitButton>
+            </form>
+          </CardBody>
+        </Card>
       )}
 
       {preview && mapping ? (
-        <section className="flex flex-col gap-3">
-          <h2 className="font-medium">
-            Preview — {preview.totalRows} rows, {preview.duplicateCount} duplicates, {preview.errorCount} errors,
-            {/* Rows dropped by the profile's skipRules never appear in the table below and
-                were counted nowhere on screen, so a mis-typed skip rule that swallowed half
-                the file looked exactly like a short file. */}
-            {preview.skipped > 0 ? ` ${preview.skipped} skipped by profile rules,` : ''} encoding {preview.encoding}
-          </h2>
-          <MappingEditor mapping={mapping} onChange={(next) => void rePreview(next)} />
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
+        <Card>
+          <CardHeader
+            title={
+              <StepTitle n={2} state="active">
+                Preview — {preview.totalRows} rows, {preview.duplicateCount} duplicates, {preview.errorCount} errors,
+                {/* Rows dropped by the profile's skipRules never appear in the table below and
+                    were counted nowhere on screen, so a mis-typed skip rule that swallowed half
+                    the file looked exactly like a short file. */}
+                {preview.skipped > 0 ? ` ${preview.skipped} skipped by profile rules,` : ''} encoding {preview.encoding}
+              </StepTitle>
+            }
+            description="Wrong columns? Fix the mapping and the preview re-reads the same file."
+          />
+          <CardBody className="flex flex-col gap-4">
+            <MappingEditor mapping={mapping} onChange={(next) => void rePreview(next)} />
+
+            <TableWrap className="max-h-96 overflow-y-auto">
               <thead>
-                <tr className="border-b dark:border-slate-800">
-                  <th className="py-1">Date</th>
-                  <th>Description</th>
-                  <th>Merchant</th>
-                  <th className="text-right">Amount</th>
-                  <th>Category</th>
-                  <th>Flags</th>
+                <tr>
+                  <th scope="col">Date</th>
+                  <th scope="col">Description</th>
+                  <th scope="col">Merchant</th>
+                  <th scope="col" className="text-right">Amount</th>
+                  <th scope="col">Category</th>
+                  <th scope="col">Flags</th>
                 </tr>
               </thead>
               <tbody>
                 {preview.rows.map((row) => (
                   <tr key={`${row.rowIndex}-${row.dedupHash}`} className={row.isDuplicate ? 'opacity-50' : ''}>
-                    <td className="py-1">{row.date}</td>
+                    <td className="tabnum whitespace-nowrap text-muted">{row.date}</td>
                     <td>{row.rawDescription}</td>
-                    <td>{row.normalizedMerchant}</td>
-                    <td className="text-right">{formatCents(row.amountCents)}</td>
-                    <td>{row.predictedCategoryName ?? '—'}{row.predictedSource === 'bayes' ? ' (guess)' : ''}</td>
-                    <td>{[row.isDuplicate ? 'duplicate' : null, row.isTransfer ? 'transfer' : null].filter(Boolean).join(', ')}</td>
+                    <td className="text-muted">{row.normalizedMerchant}</td>
+                    <td className="text-right"><Money cents={row.amountCents} /></td>
+                    <td className="text-muted">{row.predictedCategoryName ?? '—'}{row.predictedSource === 'bayes' ? ' (guess)' : ''}</td>
+                    <td>
+                      <span className="flex flex-wrap gap-1">
+                        {row.isDuplicate ? <span className="badge badge--slate">duplicate</span> : null}
+                        {row.isTransfer ? <span className="badge badge--blue">transfer</span> : null}
+                      </span>
+                    </td>
                   </tr>
                 ))}
               </tbody>
-            </table>
-          </div>
-          {preview.errors.length > 0 ? (
-            <details>
-              <summary className="cursor-pointer text-sm">{preview.errors.length} rows could not be parsed</summary>
-              <ul className="mt-2 list-inside list-disc text-xs">
-                {preview.errors.map((rowError) => (
-                  <li key={rowError.rowIndex}>
-                    Row {rowError.rowIndex + 1}: {rowError.reason} — {rowError.cells.join(' | ')}
-                  </li>
-                ))}
-              </ul>
-            </details>
-          ) : null}
-          <button type="button" onClick={() => void commit()} disabled={busy} className="w-fit rounded bg-slate-900 px-3 py-2 text-sm text-white disabled:opacity-60 dark:bg-slate-100 dark:text-slate-900">
-            Import {preview.totalRows - preview.duplicateCount} transactions
-          </button>
-        </section>
+            </TableWrap>
+
+            {preview.errors.length > 0 ? (
+              <details className="rounded-md border border-line bg-surface-2/50 px-3 py-2">
+                <summary className="cursor-pointer text-sm font-medium text-ink">{preview.errors.length} rows could not be parsed</summary>
+                <ul className="mt-2 list-inside list-disc text-xs text-muted">
+                  {preview.errors.map((rowError) => (
+                    <li key={rowError.rowIndex}>
+                      Row {rowError.rowIndex + 1}: {rowError.reason} — {rowError.cells.join(' | ')}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            ) : null}
+
+            <div className="flex items-center gap-3 border-t border-line pt-4">
+              <StepMark n={3} state="active" />
+              <button type="button" onClick={() => void commit()} disabled={busy} className="btn btn--primary btn--lg">
+                Import {preview.totalRows - preview.duplicateCount} transactions
+              </button>
+            </div>
+          </CardBody>
+        </Card>
       ) : null}
 
-      <section className="flex flex-col gap-2">
-        <h2 className="font-medium">History</h2>
-        <table className="w-full text-left text-sm">
-          <thead>
-            <tr className="border-b dark:border-slate-800">
-              <th className="py-1">When</th>
-              <th>Account</th>
-              <th>File</th>
-              <th>By</th>
-              <th className="text-right">Added</th>
-              <th className="text-right">Dupes</th>
-              <th className="text-right">Errors</th>
-              <th />
-            </tr>
-          </thead>
-          <tbody>
-            {historyRows.map((row) => (
-              <tr key={row.id} className="border-b border-slate-100 dark:border-slate-900">
-                <td className="py-1">{row.createdAt.slice(0, 16).replace('T', ' ')}</td>
-                <td>{row.accountName}</td>
-                <td>{row.filename}</td>
-                <td>{row.importedByName}</td>
-                <td className="text-right">{row.rowsAdded}</td>
-                <td className="text-right">{row.rowsDuplicate}</td>
-                <td className="text-right">{row.rowsError}</td>
-                <td>
-                  <button
-                    type="button"
-                    onClick={() => void undo(row.id)}
-                    disabled={busy}
-                    className="rounded border px-2 py-1 text-xs disabled:opacity-60 dark:border-slate-700"
-                  >
-                    Undo
-                  </button>
-                </td>
+      <Card>
+        <CardHeader title="History" description="Every import, and the button that takes one back out." />
+        {historyRows.length === 0 ? (
+          <EmptyState icon={ImportIcon} title="Nothing imported yet">
+            Once you upload a statement it lands here, with an undo next to it.
+          </EmptyState>
+        ) : (
+          <TableWrap bare>
+            <thead>
+              <tr>
+                <th scope="col">When</th>
+                <th scope="col">Account</th>
+                <th scope="col">File</th>
+                <th scope="col">By</th>
+                <th scope="col" className="text-right">Added</th>
+                <th scope="col" className="text-right">Dupes</th>
+                <th scope="col" className="text-right">Errors</th>
+                <th scope="col" />
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
+            </thead>
+            <tbody>
+              {historyRows.map((row) => (
+                <tr key={row.id}>
+                  <td className="tabnum whitespace-nowrap text-muted">{row.createdAt.slice(0, 16).replace('T', ' ')}</td>
+                  <td className="whitespace-nowrap">{row.accountName}</td>
+                  <td className="font-mono text-xs">{row.filename}</td>
+                  <td className="text-muted">{row.importedByName}</td>
+                  <td className="tabnum text-right">{row.rowsAdded}</td>
+                  <td className="tabnum text-right text-muted">{row.rowsDuplicate}</td>
+                  <td className="tabnum text-right text-muted">{row.rowsError}</td>
+                  <td className="text-right">
+                    <button
+                      type="button"
+                      onClick={() => void undo(row.id)}
+                      disabled={busy}
+                      className="btn btn--secondary btn--sm"
+                    >
+                      Undo
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </TableWrap>
+        )}
+      </Card>
 
-      <p className="text-sm text-slate-600 dark:text-slate-400">
+      <p className="text-sm text-muted">
         Importing from a bank that is not listed? Either adjust the columns in the preview editor above (editing a built-in profile automatically saves a
-        copy for this account and leaves the shared preset untouched), or <a className="underline" href="/import/wizard">set up a new bank profile from a
+        copy for this account and leaves the shared preset untouched), or <a className="font-medium text-accent-text underline underline-offset-2" href="/import/wizard">set up a new bank profile from a
         sample file</a>.
       </p>
     </div>

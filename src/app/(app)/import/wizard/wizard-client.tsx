@@ -4,10 +4,18 @@ import { useActionState, useState } from 'react';
 import { MappingEditor } from '@/components/MappingEditor';
 import { FormError } from '@/components/FormError';
 import { SubmitButton } from '@/components/SubmitButton';
+import { Card, CardBody, CardHeader } from '@/components/ui/Card';
+import { Notice } from '@/components/ui/Notice';
+import { PageHeader } from '@/components/ui/PageHeader';
+import { TableWrap } from '@/components/ui/Table';
+import { Field, inputClass } from '@/components/ui/form';
 import type { ImportMapping } from '@/lib/import/mapping';
 import { saveWizardProfileAction, type WizardState } from '../actions';
 
 const initial: WizardState = {};
+
+const fileInputClass =
+  'text-sm text-muted file:mr-3 file:rounded-md file:border-0 file:bg-accent-soft file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-accent-soft-fg';
 
 export function WizardClient({ starterMapping }: { starterMapping: ImportMapping }) {
   const [mapping, setMapping] = useState<ImportMapping>(starterMapping);
@@ -38,52 +46,72 @@ export function WizardClient({ starterMapping }: { starterMapping: ImportMapping
 
   return (
     <div className="flex flex-col gap-6">
-      <h1 className="text-xl font-semibold">Add a bank</h1>
-      <p className="text-sm text-slate-600 dark:text-slate-400">
-        Upload a sample export from the bank. The first rows are shown with their column numbers so you can say which column holds the date, the
-        description and the amount. Nothing is imported here — this only saves a reusable profile.
-      </p>
-      <FormError message={error ?? state.error} />
-      {state.message ? <p className="text-sm text-green-700 dark:text-green-400">{state.message}</p> : null}
+      <PageHeader
+        eyebrow="Import"
+        title="Add a bank"
+        description="Upload a sample export from the bank. The first rows are shown with their column numbers so you can say which column holds the date, the description and the amount. Nothing is imported here — this only saves a reusable profile."
+      />
 
-      <form action={upload} className="flex items-end gap-3 text-sm">
-        <input type="file" name="file" accept=".csv,text/csv" required />
-        <SubmitButton>Show the first rows</SubmitButton>
-      </form>
+      <FormError message={error ?? state.error} />
+      {state.message ? <Notice tone="success">{state.message}</Notice> : null}
+
+      <Card>
+        <CardHeader title="Sample file" description="A short export is plenty — the first handful of rows is all this needs." />
+        <CardBody>
+          <form action={upload} className="flex flex-wrap items-center gap-3">
+            <input type="file" name="file" accept=".csv,text/csv" required className={fileInputClass} />
+            <SubmitButton>Show the first rows</SubmitButton>
+          </form>
+        </CardBody>
+      </Card>
 
       {rows ? (
         <>
-          <p className="text-xs text-slate-500">Detected encoding: {encoding}</p>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
+          <Card>
+            <CardHeader title="What the file looks like" description={`Detected encoding: ${encoding}`} />
+            <TableWrap bare className="max-h-96 overflow-y-auto">
               <thead>
-                <tr className="border-b dark:border-slate-800">
+                <tr>
                   {(rows[0] ?? []).map((_, index) => (
-                    <th key={index} className="py-1">col {index}</th>
+                    <th scope="col" key={index}>col {index}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {rows.map((row, rowIndex) => (
-                  <tr key={rowIndex} className="border-b border-slate-100 dark:border-slate-900">
+                  <tr key={rowIndex}>
                     {row.map((cell, cellIndex) => (
-                      <td key={cellIndex} className="max-w-40 truncate py-1 pr-2">{cell}</td>
+                      <td key={cellIndex} className="max-w-40 truncate text-xs">{cell}</td>
                     ))}
                   </tr>
                 ))}
               </tbody>
-            </table>
-          </div>
+            </TableWrap>
+          </Card>
 
-          <MappingEditor mapping={mapping} onChange={setMapping} />
+          <Card>
+            <CardHeader title="Which column is which" description="Column numbers start at 0, matching the headings above." />
+            <CardBody>
+              <MappingEditor mapping={mapping} onChange={setMapping} />
+            </CardBody>
+          </Card>
 
-          <form action={save} className="flex max-w-md flex-col gap-3 text-sm">
-            <input type="hidden" name="mapping" value={JSON.stringify(mapping)} />
-            <input type="hidden" name="stagingId" value={stagingId} />
-            <input name="name" placeholder="Profile name, e.g. Tangerine Chequing" required className="rounded border px-2 py-1 dark:bg-slate-900" />
-            <input name="institution" placeholder="Institution, e.g. Tangerine" required className="rounded border px-2 py-1 dark:bg-slate-900" />
-            <SubmitButton>Save profile</SubmitButton>
-          </form>
+          <Card className="max-w-md">
+            <CardHeader title="Save this profile" description="Reusable for every future import from this bank." />
+            <CardBody>
+              <form action={save} className="flex flex-col gap-4">
+                <input type="hidden" name="mapping" value={JSON.stringify(mapping)} />
+                <input type="hidden" name="stagingId" value={stagingId} />
+                <Field label="Profile name">
+                  <input name="name" placeholder="Tangerine Chequing" required className={inputClass} />
+                </Field>
+                <Field label="Institution">
+                  <input name="institution" placeholder="Tangerine" required className={inputClass} />
+                </Field>
+                <SubmitButton className="w-fit">Save profile</SubmitButton>
+              </form>
+            </CardBody>
+          </Card>
         </>
       ) : null}
     </div>

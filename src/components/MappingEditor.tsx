@@ -2,7 +2,13 @@
 
 import type { ImportMapping } from '@/lib/import/mapping';
 import { DATE_FORMATS } from '@/lib/dates';
+import { Field, inputClass, labelClass, selectClass } from '@/components/ui/form';
 
+/**
+ * Which column of the bank's CSV holds what. Shared by the import preview and
+ * the add-a-bank wizard, so it stays a bare grid with no card of its own —
+ * each caller decides what it sits inside.
+ */
 export function MappingEditor({
   mapping,
   onChange,
@@ -14,78 +20,115 @@ export function MappingEditor({
   const numberOrNull = (value: string) => (value.trim() === '' ? null : Number(value));
 
   return (
-    <div className="grid grid-cols-2 gap-3 rounded-md border border-slate-200 p-3 text-sm dark:border-slate-800 md:grid-cols-3">
-      <label className="flex flex-col gap-1">
-        Has header
-        <input type="checkbox" checked={mapping.hasHeader} onChange={(e) => set('hasHeader', e.target.checked)} />
+    <div className="grid gap-4 rounded-lg border border-line bg-surface-2/50 p-4 sm:grid-cols-2 lg:grid-cols-3">
+      <label className="flex items-center gap-2 self-end pb-2">
+        <input
+          type="checkbox"
+          checked={mapping.hasHeader}
+          onChange={(e) => set('hasHeader', e.target.checked)}
+          className="accent-accent"
+        />
+        <span className={labelClass}>Has header</span>
       </label>
-      <label className="flex flex-col gap-1">
-        Header rows
-        <input type="number" min={0} value={mapping.headerRows} onChange={(e) => set('headerRows', Number(e.target.value))} className="rounded border px-2 py-1 dark:bg-slate-900" />
-      </label>
-      <label className="flex flex-col gap-1">
-        Date column
-        <input type="number" min={0} value={mapping.dateCol} onChange={(e) => set('dateCol', Number(e.target.value))} className="rounded border px-2 py-1 dark:bg-slate-900" />
-      </label>
-      <label className="flex flex-col gap-1">
-        Date format
-        <select value={mapping.dateFormat} onChange={(e) => set('dateFormat', e.target.value)} className="rounded border px-2 py-1 dark:bg-slate-900">
+      <Field label="Header rows">
+        <input
+          type="number"
+          min={0}
+          value={mapping.headerRows}
+          onChange={(e) => set('headerRows', Number(e.target.value))}
+          className={inputClass}
+        />
+      </Field>
+      <Field label="Date column">
+        <input
+          type="number"
+          min={0}
+          value={mapping.dateCol}
+          onChange={(e) => set('dateCol', Number(e.target.value))}
+          className={inputClass}
+        />
+      </Field>
+      <Field label="Date format">
+        <select value={mapping.dateFormat} onChange={(e) => set('dateFormat', e.target.value)} className={selectClass}>
           {DATE_FORMATS.map((format) => (
             <option key={format} value={format}>
               {format}
             </option>
           ))}
         </select>
-      </label>
-      <label className="flex flex-col gap-1">
-        Description columns (comma separated)
+      </Field>
+      <Field label="Description columns (comma separated)">
         <input
           value={mapping.descCols.join(',')}
           onChange={(e) => set('descCols', e.target.value.split(',').map((v) => Number(v.trim())).filter((v) => Number.isInteger(v)))}
-          className="rounded border px-2 py-1 dark:bg-slate-900"
+          className={inputClass}
         />
-      </label>
-      <label className="flex flex-col gap-1">
-        Amount mode
-        <select value={mapping.amountMode} onChange={(e) => set('amountMode', e.target.value as ImportMapping['amountMode'])} className="rounded border px-2 py-1 dark:bg-slate-900">
+      </Field>
+      <Field label="Amount mode">
+        <select
+          value={mapping.amountMode}
+          onChange={(e) => set('amountMode', e.target.value as ImportMapping['amountMode'])}
+          className={selectClass}
+        >
           <option value="signed">Single signed amount column</option>
           <option value="debit_credit">Separate debit / credit columns</option>
         </select>
-      </label>
+      </Field>
       {mapping.amountMode === 'signed' ? (
         <>
-          <label className="flex flex-col gap-1">
-            Amount column
-            <input type="number" min={0} value={mapping.amountCol ?? ''} onChange={(e) => set('amountCol', numberOrNull(e.target.value))} className="rounded border px-2 py-1 dark:bg-slate-900" />
-          </label>
-          <label className="flex flex-col gap-1">
-            Sign convention
-            <select value={mapping.signConvention} onChange={(e) => set('signConvention', e.target.value as ImportMapping['signConvention'])} className="rounded border px-2 py-1 dark:bg-slate-900">
+          <Field label="Amount column">
+            <input
+              type="number"
+              min={0}
+              value={mapping.amountCol ?? ''}
+              onChange={(e) => set('amountCol', numberOrNull(e.target.value))}
+              className={inputClass}
+            />
+          </Field>
+          <Field label="Sign convention">
+            <select
+              value={mapping.signConvention}
+              onChange={(e) => set('signConvention', e.target.value as ImportMapping['signConvention'])}
+              className={selectClass}
+            >
               <option value="negative_is_spend">Negative = money out</option>
               <option value="positive_is_spend">Positive = money out (Amex style)</option>
             </select>
-          </label>
+          </Field>
         </>
       ) : (
         <>
-          <label className="flex flex-col gap-1">
-            Debit column (money out)
-            <input type="number" min={0} value={mapping.debitCol ?? ''} onChange={(e) => set('debitCol', numberOrNull(e.target.value))} className="rounded border px-2 py-1 dark:bg-slate-900" />
-          </label>
-          <label className="flex flex-col gap-1">
-            Credit column (money in)
-            <input type="number" min={0} value={mapping.creditCol ?? ''} onChange={(e) => set('creditCol', numberOrNull(e.target.value))} className="rounded border px-2 py-1 dark:bg-slate-900" />
-          </label>
+          <Field label="Debit column (money out)">
+            <input
+              type="number"
+              min={0}
+              value={mapping.debitCol ?? ''}
+              onChange={(e) => set('debitCol', numberOrNull(e.target.value))}
+              className={inputClass}
+            />
+          </Field>
+          <Field label="Credit column (money in)">
+            <input
+              type="number"
+              min={0}
+              value={mapping.creditCol ?? ''}
+              onChange={(e) => set('creditCol', numberOrNull(e.target.value))}
+              className={inputClass}
+            />
+          </Field>
         </>
       )}
-      <label className="flex flex-col gap-1">
-        Encoding
-        <select value={mapping.encoding} onChange={(e) => set('encoding', e.target.value as ImportMapping['encoding'])} className="rounded border px-2 py-1 dark:bg-slate-900">
+      <Field label="Encoding">
+        <select
+          value={mapping.encoding}
+          onChange={(e) => set('encoding', e.target.value as ImportMapping['encoding'])}
+          className={selectClass}
+        >
           <option value="auto">Detect automatically</option>
           <option value="utf-8">UTF-8</option>
           <option value="windows-1252">windows-1252</option>
         </select>
-      </label>
+      </Field>
     </div>
   );
 }

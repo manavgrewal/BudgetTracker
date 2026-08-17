@@ -29,13 +29,3 @@ export function TableWrap({
 export function AmountCell({ children, className = '' }: { children: React.ReactNode; className?: string }) {
   return <td className={`money text-right ${className}`}>{children}</td>;
 }
-
-export function EmptyRow({ colSpan, children }: { colSpan: number; children: React.ReactNode }) {
-  return (
-    <tr>
-      <td colSpan={colSpan} className="px-4 py-10 text-center text-sm text-muted">
-        {children}
-      </td>
-    </tr>
-  );
-}

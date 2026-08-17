@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Notice } from '@/components/ui/Notice';
 
 /**
  * The only file control in the feature. MUST-6.1 fixes its exact shape; MUST-10.2 fixes its
@@ -166,9 +167,9 @@ export function ReceiptUploader({
   }
 
   return (
-    <div className="flex flex-col gap-2">
-      <label className="flex flex-col gap-1 text-sm">
-        {label}
+    <div className="flex flex-col gap-3">
+      <label className="flex flex-col gap-1.5">
+        <span className="field-label">{label}</span>
         {/* MUST-6.1, exactly: capture="environment" opens a phone's rear camera directly and
             is ignored by a desktop browser. No native app, no getUserMedia, no canvas. */}
         <input
@@ -189,28 +190,38 @@ export function ReceiptUploader({
             if (chosen.length > 0) void upload(chosen);
             event.target.value = '';
           }}
-          className="text-sm"
+          className="text-sm text-muted file:mr-3 file:rounded-md file:border-0 file:bg-accent-soft file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-accent-soft-fg"
         />
       </label>
 
-      {error ? <p role="alert" className="text-sm text-red-700 dark:text-red-300">{error}</p> : null}
-      {notice ? <p className="text-sm text-slate-600 dark:text-slate-300">{notice}</p> : null}
+      {error ? <Notice tone="error">{error}</Notice> : null}
+      {notice ? <p className="text-sm text-muted">{notice}</p> : null}
 
       {files.length > 0 ? (
         <ul className="flex flex-wrap gap-3">
           {files.map((file) => (
-            <li key={file.stagingId} className="flex w-40 flex-col gap-1 rounded border p-2 text-xs dark:border-slate-700">
-              {file.previewUrl ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img src={file.previewUrl} alt={file.originalFilename} className="max-h-24 w-full object-contain" />
-              ) : (
-                <span className="text-slate-500">PDF</span>
-              )}
-              <span className="truncate" title={file.originalFilename}>{file.originalFilename}</span>
-              <span className="text-slate-500">
+            <li
+              key={file.stagingId}
+              className="flex w-40 flex-col gap-1.5 rounded-md border border-line bg-surface-2/50 p-2 text-xs"
+            >
+              <span className="flex h-24 items-center justify-center overflow-hidden rounded-xs bg-surface">
+                {file.previewUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={file.previewUrl} alt={file.originalFilename} className="max-h-24 w-full object-contain" />
+                ) : (
+                  <span className="text-subtle">PDF</span>
+                )}
+              </span>
+              <span className="truncate font-medium text-ink" title={file.originalFilename}>{file.originalFilename}</span>
+              <span className={file.ocr === 'failed' ? 'money-neg' : 'text-subtle'}>
                 {file.ocr === 'pending' ? 'Reading…' : file.ocr === 'done' ? 'Read' : 'Could not read'}
               </span>
-              <button type="button" onClick={() => remove(file.stagingId)} className="w-fit underline">
+              <button
+                type="button"
+                onClick={() => remove(file.stagingId)}
+                aria-label={`Remove ${file.originalFilename}`}
+                className="btn btn--ghost btn--sm w-fit px-1.5 text-xs"
+              >
                 Remove
               </button>
             </li>

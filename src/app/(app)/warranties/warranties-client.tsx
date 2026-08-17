@@ -2,7 +2,14 @@
 
 import Link from 'next/link';
 import { StatusBadge } from '@/components/warranty/StatusBadge';
-import { formatCents } from '@/lib/money';
+import { WarrantiesIcon } from '@/components/icons';
+import { Card, CardBody, CardFooter } from '@/components/ui/Card';
+import { EmptyState } from '@/components/ui/EmptyState';
+import { Money } from '@/components/ui/Money';
+import { Notice } from '@/components/ui/Notice';
+import { PageHeader } from '@/components/ui/PageHeader';
+import { TableWrap } from '@/components/ui/Table';
+import { Field, inputClass, selectClass } from '@/components/ui/form';
 // Ruling P4: WARRANTY_SORTS/WarrantySort come from constants.ts (pure, client-safe), NOT
 // from search.ts -- search.ts imports @/db/client, and a VALUE import from it (as opposed to
 // a type-only one) drags better-sqlite3 into this client bundle and breaks `next build`.
@@ -57,134 +64,149 @@ export function WarrantiesClient({
 
   return (
     <div className="flex flex-col gap-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-xl font-semibold">Warranties</h1>
-        <Link href="/warranties/new" className="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white dark:bg-slate-100 dark:text-slate-900">
-          Add warranty
-        </Link>
-      </div>
+      <PageHeader
+        title="Warranties"
+        description="Receipts, coverage and cancel-by dates for everything worth keeping the paperwork on."
+        actions={
+          <Link href="/warranties/new" className="btn btn--primary">
+            Add warranty
+          </Link>
+        }
+      />
 
-      {result.error ? (
-        <p role="alert" className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
-          {result.error}
-        </p>
-      ) : null}
+      {result.error ? <Notice tone="error">{result.error}</Notice> : null}
 
-      {/* A plain GET form: ?q=/?status=/?owner=/?typeId=/?sort= are all linkable and survive
-          refresh (Ruling P12). The type filter chip composes with every other filter here --
-          it does not replace any of them (type-deltas.md T9). */}
-      <form method="get" className="flex flex-wrap items-end gap-2 text-sm">
-        <label className="flex flex-col gap-1">
-          Search
-          <input
-            name="q"
-            defaultValue={query}
-            placeholder="Any word on the receipt"
-            className="w-64 rounded border px-2 py-1 dark:border-slate-700 dark:bg-slate-900"
-          />
-        </label>
-        <label className="flex flex-col gap-1">
-          Status
-          <select name="status" defaultValue={status} className="rounded border px-2 py-1 dark:bg-slate-900">
-            <option value="">All</option>
-            {WARRANTY_STATUSES.map((value) => (
-              // M15: statusLabel() gives the human-readable text ("Active", "Expiring
-              // soon", ...); the option's VALUE stays the raw status code the server
-              // filters on. statusLabel() is subscription-agnostic by construction, and
-              // that is deliberate here too -- a filter option applies across both
-              // warranties and subscriptions at once, so it uses the neutral wording
-              // rather than either verb (expiryPhrase()'s "expires"/"cancel by" swap is
-              // for a single item's own row, not this generic bucket).
-              <option key={value} value={value}>{statusLabel(value, null, today)}</option>
-            ))}
-          </select>
-        </label>
-        <label className="flex flex-col gap-1">
-          Owner
-          <select name="owner" defaultValue={owner} className="rounded border px-2 py-1 dark:bg-slate-900">
-            <option value="">All</option>
-            {people.map((person) => (
-              <option key={person.id} value={person.id}>{person.name}</option>
-            ))}
-          </select>
-        </label>
-        <label className="flex flex-col gap-1">
-          Type
-          <select name="typeId" defaultValue={typeId} className="rounded border px-2 py-1 dark:bg-slate-900">
-            <option value="">All</option>
-            {types.map((type) => (
-              <option key={type.id} value={type.id}>{type.name}</option>
-            ))}
-          </select>
-        </label>
-        <label className="flex flex-col gap-1">
-          Sort
-          <select name="sort" defaultValue={sort} className="rounded border px-2 py-1 dark:bg-slate-900">
-            {WARRANTY_SORTS.map((value) => (
-              <option key={value} value={value}>{SORT_LABELS[value]}</option>
-            ))}
-          </select>
-        </label>
-        <button type="submit" className="rounded border px-3 py-1 dark:border-slate-700">Apply</button>
-      </form>
+      <Card>
+        <CardBody className="pt-5">
+          {/* A plain GET form: ?q=/?status=/?owner=/?typeId=/?sort= are all linkable and survive
+              refresh (Ruling P12). The type filter chip composes with every other filter here --
+              it does not replace any of them (type-deltas.md T9). */}
+          <form method="get" className="flex flex-wrap items-end gap-3">
+            <Field label="Search" className="min-w-[14rem] flex-1">
+              <input name="q" defaultValue={query} placeholder="Any word on the receipt" className={inputClass} />
+            </Field>
+            <Field label="Status">
+              <select name="status" defaultValue={status} className={selectClass}>
+                <option value="">All</option>
+                {WARRANTY_STATUSES.map((value) => (
+                  // M15: statusLabel() gives the human-readable text ("Active", "Expiring
+                  // soon", ...); the option's VALUE stays the raw status code the server
+                  // filters on. statusLabel() is subscription-agnostic by construction, and
+                  // that is deliberate here too -- a filter option applies across both
+                  // warranties and subscriptions at once, so it uses the neutral wording
+                  // rather than either verb (expiryPhrase()'s "expires"/"cancel by" swap is
+                  // for a single item's own row, not this generic bucket).
+                  <option key={value} value={value}>{statusLabel(value, null, today)}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Owner">
+              <select name="owner" defaultValue={owner} className={selectClass}>
+                <option value="">All</option>
+                {people.map((person) => (
+                  <option key={person.id} value={person.id}>{person.name}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Type">
+              <select name="typeId" defaultValue={typeId} className={selectClass}>
+                <option value="">All</option>
+                {types.map((type) => (
+                  <option key={type.id} value={type.id}>{type.name}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Sort">
+              <select name="sort" defaultValue={sort} className={selectClass}>
+                {WARRANTY_SORTS.map((value) => (
+                  <option key={value} value={value}>{SORT_LABELS[value]}</option>
+                ))}
+              </select>
+            </Field>
+            <button type="submit" className="btn btn--primary">Apply</button>
+          </form>
+        </CardBody>
+      </Card>
 
-      {result.rows.length === 0 ? (
-        searching ? (
-          <p className="text-sm text-slate-600 dark:text-slate-300">No matches for that search.</p>
+      <Card>
+        {result.rows.length === 0 ? (
+          searching ? (
+            <EmptyState icon={WarrantiesIcon} title="No matches for that search.">
+              Try fewer words, or clear the status and owner filters.
+            </EmptyState>
+          ) : (
+            <EmptyState
+              icon={WarrantiesIcon}
+              title="No warranties yet"
+              action={
+                <Link href="/warranties/new" className="btn btn--primary btn--sm">
+                  Add the first one
+                </Link>
+              }
+            >
+              Snap the receipt and this will remember the model, the price and when the cover runs out.
+            </EmptyState>
+          )
         ) : (
-          <p className="text-sm text-slate-600 dark:text-slate-300">
-            No warranties yet. <Link href="/warranties/new" className="underline">Add the first one</Link>.
-          </p>
-        )
-      ) : (
-        <table className="w-full text-left text-sm">
-          <thead className="text-xs uppercase text-slate-500">
-            <tr>
-              <th className="py-2">Item</th>
-              <th>Type</th>
-              <th>Vendor</th>
-              <th>Purchase date</th>
-              <th>Expiry</th>
-              <th>Status</th>
-              <th>Owner</th>
-              <th className="text-right">Price</th>
-            </tr>
-          </thead>
-          <tbody>
-            {result.rows.map((row) => (
-              <tr key={row.id} className="border-b border-slate-100 dark:border-slate-900">
-                <td className="py-2">
-                  <Link href={`/warranties/${row.id}`} className="hover:underline">{row.name}</Link>
-                  {row.model ? <div className="text-xs text-slate-500">{row.model}</div> : null}
-                </td>
-                <td>{row.typeName ?? '—'}</td>
-                <td>{row.vendor ?? '—'}</td>
-                <td>{row.purchaseDate}</td>
-                {/* Delta T9: expiryPhrase() supplies the "expires"/"cancel by" verb -- no
-                    component hard-codes either word (MUST-19.11). */}
-                <td>{row.expiryDate === null ? '—' : expiryPhrase(row.isSubscription, row.expiryDate)}</td>
-                <td>
-                  <StatusBadge status={row.status} expiryDate={row.expiryDate} today={today} isSubscription={row.isSubscription} />
-                </td>
-                <td>{row.ownerName}</td>
-                <td className="text-right tabular-nums">{row.priceCents === null ? '—' : formatCents(row.priceCents)}</td>
+          <TableWrap bare>
+            <thead>
+              <tr>
+                <th scope="col">Item</th>
+                <th scope="col">Type</th>
+                <th scope="col">Vendor</th>
+                <th scope="col">Purchase date</th>
+                <th scope="col">Expiry</th>
+                <th scope="col">Status</th>
+                <th scope="col">Owner</th>
+                <th scope="col" className="text-right">Price</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
+            </thead>
+            <tbody>
+              {result.rows.map((row) => (
+                <tr key={row.id}>
+                  <td>
+                    <Link href={`/warranties/${row.id}`} className="font-medium text-ink hover:text-accent-text">{row.name}</Link>
+                    {row.model ? <div className="text-xs text-subtle">{row.model}</div> : null}
+                  </td>
+                  <td>
+                    {row.typeName ? (
+                      <span className="badge badge--slate">{row.typeName}</span>
+                    ) : (
+                      <span className="text-subtle">—</span>
+                    )}
+                  </td>
+                  <td className="text-muted">{row.vendor ?? '—'}</td>
+                  <td className="tabnum whitespace-nowrap text-muted">{row.purchaseDate}</td>
+                  {/* Delta T9: expiryPhrase() supplies the "expires"/"cancel by" verb -- no
+                      component hard-codes either word (MUST-19.11). */}
+                  <td className="whitespace-nowrap text-muted">{row.expiryDate === null ? '—' : expiryPhrase(row.isSubscription, row.expiryDate)}</td>
+                  <td>
+                    <StatusBadge status={row.status} expiryDate={row.expiryDate} today={today} isSubscription={row.isSubscription} />
+                  </td>
+                  <td className="whitespace-nowrap text-muted">{row.ownerName}</td>
+                  <td className="text-right">
+                    {row.priceCents === null ? <span className="text-subtle">—</span> : <Money cents={row.priceCents} plain />}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </TableWrap>
+        )}
 
-      {result.pageCount > 1 ? (
-        <nav className="flex items-center gap-3 text-xs text-slate-500">
-          <span>Page {result.page} of {result.pageCount} · {result.total} items</span>
-          {result.page > 1 ? (
-            <Link href={pageHref(result.page - 1)} className="underline">Prev</Link>
-          ) : null}
-          {result.page < result.pageCount ? (
-            <Link href={pageHref(result.page + 1)} className="underline">Next</Link>
-          ) : null}
-        </nav>
-      ) : null}
+        {result.pageCount > 1 ? (
+          <CardFooter>
+            <nav className="flex items-center gap-3" aria-label="Pages">
+              <span>Page {result.page} of {result.pageCount} · {result.total} items</span>
+              {result.page > 1 ? (
+                <Link href={pageHref(result.page - 1)} className="font-medium text-accent-text underline underline-offset-2">Prev</Link>
+              ) : null}
+              {result.page < result.pageCount ? (
+                <Link href={pageHref(result.page + 1)} className="font-medium text-accent-text underline underline-offset-2">Next</Link>
+              ) : null}
+            </nav>
+          </CardFooter>
+        ) : null}
+      </Card>
     </div>
   );
 }
