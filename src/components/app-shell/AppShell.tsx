@@ -36,11 +36,49 @@ export function AppShell({
   const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);
   const current = activeNavItem(pathname);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const menuPanelRef = useRef<HTMLDivElement>(null);
 
   // Navigating is the implicit "close the menu" gesture on a phone.
   useEffect(() => {
     setMenuOpen(false);
   }, [pathname]);
+
+  // The panel is `fixed` (see below) precisely so it stays put over whatever
+  // is behind it, which means that "whatever is behind it" must not scroll:
+  // lock the body while it is open, and undo it however the menu closes
+  // (link click, Escape, outside tap, or the effect above on route change).
+  useEffect(() => {
+    if (!menuOpen) return;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [menuOpen]);
+
+  // Escape and an outside tap both close the menu; Escape also hands focus
+  // back to the button that opened it, mirroring the account menu below.
+  useEffect(() => {
+    if (!menuOpen) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key !== 'Escape') return;
+      setMenuOpen(false);
+      menuButtonRef.current?.focus();
+    }
+    function onPointerDown(event: MouseEvent | TouchEvent) {
+      const target = event.target as Node;
+      if (menuPanelRef.current?.contains(target)) return;
+      if (menuButtonRef.current?.contains(target)) return;
+      setMenuOpen(false);
+    }
+    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('mousedown', onPointerDown);
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('mousedown', onPointerDown);
+    };
+  }, [menuOpen]);
 
   return (
     <div className="min-h-screen">
@@ -69,6 +107,7 @@ export function AppShell({
       <div className="flex min-h-screen flex-col lg:pl-64">
         <header className="sticky top-0 z-30 flex h-16 shrink-0 items-center gap-2 border-b border-line bg-canvas/85 px-4 backdrop-blur-md sm:px-6 lg:px-8">
           <button
+            ref={menuButtonRef}
             type="button"
             onClick={() => setMenuOpen((open) => !open)}
             aria-expanded={menuOpen}
@@ -92,9 +131,23 @@ export function AppShell({
         </header>
 
         {menuOpen ? (
-          <div id="mobile-nav" className="border-b border-line bg-surface px-3 py-3 shadow-card lg:hidden">
+          // Fixed to the viewport, not the document: the header above is sticky and stays
+          // put on scroll, but a statically-positioned panel would still open at wherever
+          // the page had scrolled *to* in the document, off-screen above the fold. Anchoring
+          // to `top-16` (the header's own height) and covering to the viewport bottom keeps
+          // it in view no matter how far down the page the user was when they opened it.
+          <div
+            id="mobile-nav"
+            ref={menuPanelRef}
+            className="fixed inset-x-0 top-16 bottom-0 z-40 overflow-y-auto border-b border-line bg-surface px-3 py-3 shadow-card lg:hidden"
+          >
             <nav aria-label="Sections">
-              <NavList items={NAV} pathname={pathname} reviewCount={reviewCount} />
+              <NavList
+                items={NAV}
+                pathname={pathname}
+                reviewCount={reviewCount}
+                onNavigate={() => setMenuOpen(false)}
+              />
             </nav>
           </div>
         ) : null}
@@ -121,12 +174,17 @@ function NavList({
   pathname,
   reviewCount,
   rail = false,
+  onNavigate,
 }: {
   items: NavItem[];
   pathname: string;
   reviewCount: number;
   /** The desktop rail draws an accent bar on the sheet edge; the phone menu does not. */
   rail?: boolean;
+  /** Fired on link click; the phone menu uses this to close itself immediately,
+   *  including when the link points at the page already on screen (a route change
+   *  alone would not fire in that case). */
+  onNavigate?: () => void;
 }) {
   const active = activeNavItem(pathname);
   return (
@@ -138,6 +196,7 @@ function NavList({
           <li key={item.href}>
             <Link
               href={item.href}
+              onClick={onNavigate}
               aria-current={isActive ? 'page' : undefined}
               className={`relative flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors ${
                 isActive

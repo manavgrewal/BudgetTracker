@@ -66,6 +66,7 @@ All notable changes to Budget Tracker are recorded here.
   "Ongoing" for a contract, "Open-ended" for a loan. Open-ended items were already excluded
   from the dashboard's "Coming due" widget and every expiring-soon query; a regression test
   now pins that guarantee.
+- Mobile menu now opens in view when scrolled (was rendering off-screen at page top).
 
 ## [1.2.2] - 2026-08-17
 
