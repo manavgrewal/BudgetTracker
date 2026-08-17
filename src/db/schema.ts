@@ -434,3 +434,162 @@ export const warrantyItemTypes = sqliteTable(
   },
   (t) => [uniqueIndex('warranty_item_types_name_uq').on(t.name)],
 );
+
+/**
+ * Notifications (spec 2026-08-17 §3.2). Mirrors drizzle/0006_notifications.sql.
+ *
+ * NOT represented here — these exist ONLY in that raw SQL file (MUST-3.4 / MUST-3.15):
+ *   - CHECK (id = 1), the SQL-enforced singleton (§3.2, decision 19)
+ *   - CHECK (preset IN ('brevo','smtp2go','gmail','custom'))
+ *   - CHECK (port BETWEEN 1 AND 65535)
+ *   - CHECK (security IN ('tls','starttls','none'))
+ *
+ * `password_encrypted` is base64(iv ‖ tag ‖ ciphertext), AES-256-GCM under HKDF info
+ * 'notify-smtp-v1' (MUST-5.1/5.2). It is never selected into a page prop (MUST-5.3).
+ */
+export const notificationSmtp = sqliteTable('notification_smtp', {
+  id: integer('id').primaryKey(),
+  preset: text('preset', { enum: ['brevo', 'smtp2go', 'gmail', 'custom'] }).notNull(),
+  host: text('host').notNull(),
+  port: integer('port').notNull(),
+  security: text('security', { enum: ['tls', 'starttls', 'none'] }).notNull(),
+  username: text('username').notNull(),
+  passwordEncrypted: text('password_encrypted').notNull(),
+  fromEmail: text('from_email').notNull(),
+  fromName: text('from_name').notNull().default('Budget Tracker'),
+  enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+  lastError: text('last_error'),
+  lastErrorAt: text('last_error_at'),
+  lastSuccessAt: text('last_success_at'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+
+/**
+ * Where one person is reached on one channel (spec §3.3).
+ *
+ * NOT represented here — SQL only:
+ *   - CHECK (channel IN ('telegram','email'))
+ *   - the channel/secret_encrypted pairing CHECK: a telegram row MUST carry a secret and
+ *     an email row MUST NOT. A misconfiguration is loud rather than silent.
+ *
+ * `secret_encrypted` is the bot token under HKDF info 'notify-telegram-v1' (MUST-3.5:
+ * each user supplies their OWN token, so one blocked bot cannot silence the household).
+ */
+export const notificationTargets = sqliteTable(
+  'notification_targets',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    userId: integer('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    channel: text('channel', { enum: ['telegram', 'email'] }).notNull(),
+    destination: text('destination').notNull(),
+    secretEncrypted: text('secret_encrypted'),
+    enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+    /** Set by a SUCCESSFUL Send test only; the UI badges an unverified channel. */
+    verifiedAt: text('verified_at'),
+    lastError: text('last_error'),
+    lastErrorAt: text('last_error_at'),
+    lastSuccessAt: text('last_success_at'),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (t) => [uniqueIndex('notification_targets_user_channel_uq').on(t.userId, t.channel)],
+);
+
+/**
+ * The sparse per-event, per-channel toggle matrix (spec §3.4).
+ *
+ * NOT represented here — SQL only:
+ *   - CHECK (channel IN ('telegram','email'))
+ *   - the WITHOUT ROWID storage class (the composite PK IS the row)
+ *
+ * MUST-3.6: `event_id` deliberately carries NO CHECK and NO foreign key. That is what
+ * makes MUST-4.4 true — a future event type is one appended entry in
+ * src/lib/notify/events.ts and nothing else. Unknown ids are ignored on read, never
+ * deleted, so a downgrade-then-upgrade restores the user's choice.
+ *
+ * MUST-3.7: a row exists ONLY where a user actively changed a toggle. Nothing seeds this
+ * table. The effective value is `row?.enabled ?? registryDefault(event_id)`.
+ */
+export const notificationPrefs = sqliteTable(
+  'notification_prefs',
+  {
+    userId: integer('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    eventId: text('event_id').notNull(),
+    channel: text('channel', { enum: ['telegram', 'email'] }).notNull(),
+    enabled: integer('enabled', { mode: 'boolean' }).notNull().default(false),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.eventId, t.channel] })],
+);
+
+/**
+ * Per-user knobs (spec §3.5). One row per user, created lazily on first save — an ABSENT
+ * row means every default applies, so a user who never opens the page still behaves
+ * correctly.
+ *
+ * NOT represented here — SQL only: the six range CHECKs. MUST-3.8: these are typed
+ * columns rather than a JSON blob because every one is read inside a query predicate or a
+ * loop condition, and a CHECK is the cheapest defence against a stored 0 that would make
+ * the scheduler nag every tick.
+ */
+export const notificationUserSettings = sqliteTable('notification_user_settings', {
+  userId: integer('user_id')
+    .primaryKey()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  comingDueDays: integer('coming_due_days').notNull().default(14),
+  /** Capped at 99 on purpose: 100 is the OTHER event (§3.5). */
+  budgetThresholdPct: integer('budget_threshold_pct').notNull().default(80),
+  staleImportWeeks: integer('stale_import_weeks').notNull().default(3),
+  dailyHour: integer('daily_hour').notNull().default(8),
+  /** 0 = Sunday .. 6 = Saturday. */
+  digestWeekday: integer('digest_weekday').notNull().default(1),
+  digestHour: integer('digest_hour').notNull().default(8),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+
+/**
+ * The delivery queue AND the dedup guard (spec §3.6).
+ *
+ * NOT represented here — SQL only:
+ *   - CHECK (channel IN ('telegram','email'))
+ *   - CHECK (status IN ('pending','sent','failed'))
+ *
+ * MUST-3.9: `notification_outbox_dedup_uq` IS the dedup mechanism. Every enqueue is an
+ * INSERT ... ON CONFLICT DO NOTHING and `changes === 0` means "already fired". There is no
+ * separate dedup table, so the guard cannot drift from reality and a crash between
+ * "decide to send" and "record that we sent" is impossible — they are one statement.
+ *
+ * MUST-7.2: `subject` and `body` are rendered at ENQUEUE time, not send time.
+ * MUST-3.10: sent/failed rows are retained as the "Recent deliveries" list and the dedup
+ * memory; only runMaintenanceSweep()'s 90-day purge removes them.
+ */
+export const notificationOutbox = sqliteTable(
+  'notification_outbox',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    userId: integer('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    channel: text('channel', { enum: ['telegram', 'email'] }).notNull(),
+    eventId: text('event_id').notNull(),
+    dedupKey: text('dedup_key').notNull(),
+    subject: text('subject').notNull(),
+    body: text('body').notNull(),
+    status: text('status', { enum: ['pending', 'sent', 'failed'] }).notNull().default('pending'),
+    attempts: integer('attempts').notNull().default(0),
+    nextAttemptAt: text('next_attempt_at').notNull(),
+    lastError: text('last_error'),
+    createdAt: text('created_at').notNull(),
+    sentAt: text('sent_at'),
+  },
+  (t) => [
+    uniqueIndex('notification_outbox_dedup_uq').on(t.userId, t.channel, t.dedupKey),
+    index('notification_outbox_due_idx').on(t.status, t.nextAttemptAt),
+    index('notification_outbox_user_idx').on(t.userId, t.id),
+  ],
+);
