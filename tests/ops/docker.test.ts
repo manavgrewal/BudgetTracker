@@ -101,8 +101,8 @@ describe('version and changelog', () => {
   const pkg = JSON.parse(read('package.json')) as { version: string; dependencies: Record<string, string> };
   const changelog = read('CHANGELOG.md');
 
-  it('declares 1.2.0 as the single source of truth', () => {
-    expect(pkg.version).toBe('1.2.0');
+  it('declares 1.2.1 as the single source of truth', () => {
+    expect(pkg.version).toBe('1.2.1');
   });
 
   it('declares the three new runtime dependencies (§17.27)', () => {
@@ -111,15 +111,16 @@ describe('version and changelog', () => {
     }
   });
 
-  it('has a dated 1.2.0 section and a fresh empty Unreleased above it', () => {
-    expect(changelog).toContain('## [1.2.0] - 2026-08-17');
+  it('has a dated 1.2.1 section and a fresh empty Unreleased above it', () => {
+    expect(changelog).toContain('## [1.2.1] - 2026-08-17');
     const unreleased = changelog.indexOf('## Unreleased');
-    const released = changelog.indexOf('## [1.2.0]');
+    const released = changelog.indexOf('## [1.2.1]');
     expect(unreleased).toBeGreaterThan(-1);
     expect(unreleased).toBeLessThan(released);
-    // §17.23: the previously-unreleased entries are ABSORBED into 1.2.0, so Unreleased is
-    // now empty — it must no longer mention them.
-    expect(changelog.slice(unreleased, released)).not.toContain('Forced password change');
+    // The previously-unreleased GHCR entry is ABSORBED into 1.2.1 (it was never tagged as a
+    // release — v1.2.0 predates commit 3e86842), so Unreleased is now empty and must no
+    // longer mention it.
+    expect(changelog.slice(unreleased, released)).not.toContain('Prebuilt multi-arch images');
   });
 
   it('records the backup format change in 1.1.0', () => {
@@ -148,8 +149,9 @@ describe('docker-compose.yml', () => {
     expect(compose).toContain('no-new-privileges:true');
   });
 
-  it('requires SECRET_KEY rather than defaulting it', () => {
-    expect(compose).toMatch(/SECRET_KEY:\s*\$\{SECRET_KEY:\?/);
+  it('does not require SECRET_KEY — it is optional, zero-config by default', () => {
+    expect(compose).not.toMatch(/SECRET_KEY:\s*\$\{SECRET_KEY:\?/);
+    expect(compose).toMatch(/SECRET_KEY:\s*\$\{SECRET_KEY:-\}/);
   });
 
   it('defines a healthcheck', () => {

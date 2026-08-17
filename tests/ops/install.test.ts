@@ -448,8 +448,9 @@ describe('install/synology-compose.yml', () => {
     expect(compose).toContain('budget-tracker:latest');
   });
 
-  it('carries a literal SECRET_KEY placeholder, because Container Manager has no .env', () => {
-    expect(compose).toContain('PASTE-YOUR-GENERATED-KEY-HERE');
+  it('ships SECRET_KEY commented out as an optional override, because Container Manager has no .env', () => {
+    expect(compose).toMatch(/#\s*SECRET_KEY:/);
+    expect(compose).not.toMatch(/^\s*SECRET_KEY:/m);
     expect(compose).not.toContain('${SECRET_KEY');
   });
 
@@ -587,8 +588,9 @@ describe('docs/INSTALL-SYNOLOGY.md', () => {
     expect(synology).toContain(':3000');
   });
 
-  it('tells the reader where the SECRET_KEY goes', () => {
-    expect(synology).toContain('PASTE-YOUR-GENERATED-KEY-HERE');
+  it('tells the reader SECRET_KEY is optional and where to set it if they want to', () => {
+    expect(synology).toMatch(/optional/i);
+    expect(synology).toContain('secret.key');
     expect(synology).toContain('synology-compose.yml');
   });
 

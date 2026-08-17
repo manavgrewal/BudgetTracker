@@ -21,14 +21,30 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.2.1] - 2026-08-17
+
 ### Added
 
+- **Zero-config SECRET_KEY.** A fresh install no longer needs one set at all: if `SECRET_KEY`
+  is unset on first boot, the app generates a random key itself at `data/secret.key` and
+  reuses it on every start after that. Setting `SECRET_KEY` yourself still works exactly as
+  before and always takes precedence — this only removes the requirement, not the option.
 - **Prebuilt multi-arch images on GHCR.** Tagging a release (`v*`) or running the new
   `Release image` workflow by hand builds and pushes `ghcr.io/manavgrewal/budgettracker`
   for linux/amd64 and linux/arm64, tagged with both the version and `latest`. Paired with a
   new pull-only compose file, `install/synology-compose-pull.yml`, installing no longer
   requires a source checkout or a `docker build` — Immich-style paste-and-go, on Synology,
   QNAP, Unraid, or any other Docker host.
+
+### Changed
+
+- `docker-compose.yml`, `install/synology-compose.yml` and `install/synology-compose-pull.yml`
+  no longer require `SECRET_KEY` to be set before starting — the pull compose drops the
+  placeholder line entirely, and the other two ship it commented out as an optional override.
+  The install scripts (`install-linux.sh`, `install-windows.ps1`, `install-synology.sh`) are
+  unchanged: they still generate a `.env` with its own `SECRET_KEY` up front, which remains
+  best practice for a script-driven install and simply takes precedence over the generated
+  file, same as any other explicitly-set `SECRET_KEY`.
 
 ## [1.2.0] - 2026-08-17
 

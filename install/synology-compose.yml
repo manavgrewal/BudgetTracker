@@ -1,7 +1,9 @@
 # Budget Tracker — paste this into Container Manager -> Project -> Create.
 #
-# BEFORE STARTING: replace PASTE-YOUR-GENERATED-KEY-HERE below with a random
-# string of at least 32 bytes. See docs/INSTALL-SYNOLOGY.md step 3 for how to
+# ZERO-CONFIG: nothing below needs editing to start. The app generates its own key on first
+# boot at data/secret.key and reuses it from then on. Want to manage the key yourself instead
+# (e.g. to reuse the same one across a rebuild)? Uncomment the SECRET_KEY line below and set
+# it to a random string of at least 32 bytes — see docs/INSTALL-SYNOLOGY.md step 4 for how to
 # generate one without a terminal.
 #
 # UPDATING FROM AN OLDER COMPOSE with an absolute-path "volumes:" line: move
@@ -21,7 +23,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      SECRET_KEY: "PASTE-YOUR-GENERATED-KEY-HERE"
+      # SECRET_KEY: "set-your-own-if-you-prefer"
       TRUST_PROXY: "0"
       TZ: "America/Toronto"
       PORT: "3000"

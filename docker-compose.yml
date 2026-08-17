@@ -7,8 +7,10 @@ services:
     ports:
       - "3000:3000"
     environment:
-      # Required. Generate once and keep it — see the README.
-      SECRET_KEY: ${SECRET_KEY:?set SECRET_KEY in .env before starting}
+      # Optional. If unset (or blank), the app generates one itself on first boot at
+      # data/secret.key and reuses it from then on — see the README. Set SECRET_KEY in .env
+      # only if you want to manage the key yourself; a value set here always wins.
+      SECRET_KEY: ${SECRET_KEY:-}
       # Turn on ONLY behind a TLS-terminating reverse proxy you control.
       TRUST_PROXY: ${TRUST_PROXY:-0}
       TZ: ${TZ:-America/Toronto}

@@ -35,15 +35,17 @@ cloud account, no bank API.
 
 ## Quickstart
 
-See **[INSTALL.md](./INSTALL.md)** for the full step-by-step setup (generating `SECRET_KEY`,
-building or transferring the image, first run, and reverse-proxy/Tailscale options). The sections
-below cover the same ground in more detail plus day-to-day operations.
+See **[INSTALL.md](./INSTALL.md)** for the full step-by-step setup (building or transferring the
+image, first run, and reverse-proxy/Tailscale options). The sections below cover the same ground
+in more detail plus day-to-day operations.
 
 ---
 
-## 1. Generate a SECRET_KEY
+## 1. SECRET_KEY (optional — auto-generated if you skip this)
 
-You need one random secret before the first start.
+Nothing to do before the first start: if `SECRET_KEY` is unset, the app generates one itself at
+`data/secret.key` on first boot and reuses it from then on. Set your own only if you want to
+manage it yourself:
 
 ```bash
 node -e "console.log(require('crypto').randomBytes(48).toString('base64url'))"
@@ -57,10 +59,12 @@ TZ=America/Toronto
 TRUST_PROXY=0
 ```
 
-**Keep this value.** It is never used directly as a cipher key — encryption keys are derived from
-it with HKDF-SHA256. If you lose or rotate it, every stored TOTP secret becomes undecryptable and
-each user with two-factor authentication has to **re-enroll** their authenticator app. Nothing
-else is affected: transactions, budgets, goals and passwords are untouched.
+**Keep this value, whichever way it was created.** It is never used directly as a cipher key —
+encryption keys are derived from it with HKDF-SHA256. If you lose or rotate it, every stored TOTP
+secret becomes undecryptable and each user with two-factor authentication has to **re-enroll**
+their authenticator app. Nothing else is affected: transactions, budgets, goals and passwords are
+untouched. `data/secret.key` is deliberately excluded from backup archives, so back it up
+separately once (a password manager entry works well).
 
 ---
 
@@ -240,7 +244,7 @@ This app is not designed for exposure to the public internet. Do not port-forwar
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `SECRET_KEY` | *(required)* | Random string, at least 32 bytes. Encryption keys are derived from it. |
+| `SECRET_KEY` | *(auto-generated)* | Random string, at least 32 bytes. Encryption keys are derived from it. If unset, the app generates one at `DATA_DIR/secret.key` on first boot. |
 | `TRUST_PROXY` | `0` | When `1`, trust `X-Forwarded-Proto` and `X-Forwarded-For`. Only behind a proxy you control. |
 | `TZ` | `America/Toronto` | Timezone for date handling and the nightly job. |
 | `PORT` | `3000` | Listening port inside the container. |
@@ -254,8 +258,9 @@ image update never touches them.
 ## 7. Troubleshooting
 
 **The container restarts in a loop.** Check `docker compose logs budget-tracker`. The usual cause
-is a missing `SECRET_KEY` (the app refuses to start without one) or a `/data` directory the
-`node` user cannot write to. Fix ownership with `sudo chown -R 1000:1000 data`.
+is a `/data` directory the `node` user cannot write to — which also blocks the auto-generated
+`secret.key` — or a manually-set `SECRET_KEY` shorter than 32 bytes. Fix ownership with
+`sudo chown -R 1000:1000 data`.
 
 **`Error: Could not locate the bindings file` or `invalid ELF header`.** The native modules were
 built for a different architecture. Rebuild the image on (or for) the target platform — see the
@@ -297,7 +302,7 @@ enrollment with **Reset MFA** under **Settings → Users**.
 npm install
 npm test              # vitest
 npm run typecheck
-npm run dev           # needs SECRET_KEY and DATA_DIR in the environment
+npm run dev           # needs DATA_DIR in the environment; SECRET_KEY is optional (auto-generated)
 npm run build
 ```
 

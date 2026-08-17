@@ -118,15 +118,17 @@ describe('install/synology-compose-pull.yml', () => {
     expect(pullCompose).not.toContain('build: .');
   });
 
-  it('explains what it is, the SECRET_KEY placeholder, the data-folder permission step, and how to pin a version', () => {
-    expect(pullCompose).toMatch(/PASTE-YOUR-GENERATED-KEY-HERE/);
+  it('explains what it is, the optional SECRET_KEY override, the data-folder permission step, and how to pin a version', () => {
+    expect(pullCompose).toMatch(/zero-config/i);
     expect(pullCompose).toMatch(/docs\/INSTALL-SYNOLOGY\.md steps? 1-2/);
     expect(pullCompose).toMatch(/Read\/Write/);
     expect(pullCompose).toMatch(/:latest.*to a specific version tag|change.*:latest.*to.*:1\.2\.0|1\.2\.0/i);
   });
 
-  it('carries the same literal SECRET_KEY placeholder pattern as the build compose (no .env here either)', () => {
-    expect(pullCompose).toContain('PASTE-YOUR-GENERATED-KEY-HERE');
+  it('ships SECRET_KEY commented out as an optional override, not a required placeholder (no .env here either)', () => {
+    expect(pullCompose).toMatch(/#\s*SECRET_KEY:/);
+    expect(pullCompose).not.toMatch(/^\s*SECRET_KEY:/m);
+    expect(pullCompose).not.toContain('PASTE-YOUR-GENERATED-KEY-HERE');
     expect(pullCompose).not.toContain('${SECRET_KEY');
   });
 

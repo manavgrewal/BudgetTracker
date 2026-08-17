@@ -1,13 +1,34 @@
-import { describe, it, expect } from 'vitest';
-import { readEnv, DEFAULT_TZ, DEFAULT_PORT, DEFAULT_DATA_DIR, MIN_SECRET_KEY_BYTES } from '@/lib/env';
+import { describe, it, expect, afterEach } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import os from 'node:os';
+import {
+  readEnv,
+  resetSecretKeyCacheForTests,
+  DEFAULT_TZ,
+  DEFAULT_PORT,
+  DEFAULT_DATA_DIR,
+  MIN_SECRET_KEY_BYTES,
+  SECRET_KEY_FILENAME,
+} from '@/lib/env';
 
 const goodSecret = 'x'.repeat(MIN_SECRET_KEY_BYTES);
 
-describe('readEnv', () => {
-  it('requires SECRET_KEY', () => {
-    expect(() => readEnv({})).toThrowError(/SECRET_KEY/);
-  });
+const tmpDirs: string[] = [];
+function freshDataDir(): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-env-test-'));
+  tmpDirs.push(dir);
+  return dir;
+}
 
+afterEach(() => {
+  resetSecretKeyCacheForTests();
+  for (const dir of tmpDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+describe('readEnv', () => {
   it('rejects a SECRET_KEY shorter than 32 bytes', () => {
     expect(() => readEnv({ SECRET_KEY: 'short' })).toThrowError(/at least 32 bytes/);
   });
@@ -47,5 +68,112 @@ describe('readEnv', () => {
     const env = readEnv({ SECRET_KEY: goodSecret, TZ: 'UTC', DATA_DIR: '/srv/data' });
     expect(env.tz).toBe('UTC');
     expect(env.dataDir).toBe('/srv/data');
+  });
+});
+
+describe('readEnv — zero-config SECRET_KEY file resolution', () => {
+  it('generates a key file when no SECRET_KEY is set and none exists yet', () => {
+    const dataDir = freshDataDir();
+    const keyPath = path.join(dataDir, SECRET_KEY_FILENAME);
+    expect(fs.existsSync(keyPath)).toBe(false);
+
+    const env = readEnv({ DATA_DIR: dataDir });
+
+    expect(fs.existsSync(keyPath)).toBe(true);
+    expect(Buffer.byteLength(env.secretKey, 'utf8')).toBeGreaterThanOrEqual(MIN_SECRET_KEY_BYTES);
+    // 48 random bytes, base64-encoded.
+    expect(env.secretKey).toBe(fs.readFileSync(keyPath, 'utf8').trim());
+    expect(Buffer.from(env.secretKey, 'base64').length).toBe(48);
+  });
+
+  it('treats an empty-string SECRET_KEY (e.g. an unset compose ${VAR:-}) as not provided', () => {
+    const dataDir = freshDataDir();
+    const env = readEnv({ SECRET_KEY: '', DATA_DIR: dataDir });
+    expect(fs.existsSync(path.join(dataDir, SECRET_KEY_FILENAME))).toBe(true);
+    expect(env.secretKey.length).toBeGreaterThan(0);
+  });
+
+  it('writes the key file with mode 0600 (POSIX platforms only)', () => {
+    if (process.platform === 'win32') return;
+    const dataDir = freshDataDir();
+    readEnv({ DATA_DIR: dataDir });
+    const mode = fs.statSync(path.join(dataDir, SECRET_KEY_FILENAME)).mode & 0o777;
+    expect(mode).toBe(0o600);
+  });
+
+  it('never leaves a partially-written temp file behind after generation', () => {
+    const dataDir = freshDataDir();
+    readEnv({ DATA_DIR: dataDir });
+    const entries = fs.readdirSync(dataDir);
+    expect(entries).toEqual([SECRET_KEY_FILENAME]);
+  });
+
+  it('reads back an existing valid key file instead of generating a new one', () => {
+    const dataDir = freshDataDir();
+    const keyPath = path.join(dataDir, SECRET_KEY_FILENAME);
+    const existingKey = 'y'.repeat(64);
+    fs.mkdirSync(dataDir, { recursive: true });
+    fs.writeFileSync(keyPath, `${existingKey}\n`); // trailing newline, as an editor might leave
+
+    const env = readEnv({ DATA_DIR: dataDir });
+    expect(env.secretKey).toBe(existingKey);
+  });
+
+  it('is idempotent: a second readEnv() call returns the same key without rewriting the file', () => {
+    const dataDir = freshDataDir();
+    const keyPath = path.join(dataDir, SECRET_KEY_FILENAME);
+
+    const first = readEnv({ DATA_DIR: dataDir }).secretKey;
+    const mtimeAfterFirst = fs.statSync(keyPath).mtimeMs;
+
+    resetSecretKeyCacheForTests();
+    const second = readEnv({ DATA_DIR: dataDir }).secretKey;
+    const mtimeAfterSecond = fs.statSync(keyPath).mtimeMs;
+
+    expect(second).toBe(first);
+    expect(mtimeAfterSecond).toBe(mtimeAfterFirst);
+  });
+
+  it('caches the resolved key across calls without re-reading the file from disk', () => {
+    const dataDir = freshDataDir();
+    const keyPath = path.join(dataDir, SECRET_KEY_FILENAME);
+
+    const first = readEnv({ DATA_DIR: dataDir }).secretKey;
+    // Mutate the file directly, WITHOUT resetting the cache — a real cache means readEnv()
+    // must not notice, since it never touches disk again for this dataDir this process.
+    fs.writeFileSync(keyPath, 'z'.repeat(64));
+    const second = readEnv({ DATA_DIR: dataDir }).secretKey;
+
+    expect(second).toBe(first);
+  });
+
+  it('hard-errors on a present-but-too-short key file, and does not regenerate it', () => {
+    const dataDir = freshDataDir();
+    const keyPath = path.join(dataDir, SECRET_KEY_FILENAME);
+    fs.mkdirSync(dataDir, { recursive: true });
+    fs.writeFileSync(keyPath, 'too-short');
+
+    expect(() => readEnv({ DATA_DIR: dataDir })).toThrowError(/shorter than 32 bytes/);
+    // Never silently regenerated: the same bad content is still there afterwards.
+    expect(fs.readFileSync(keyPath, 'utf8')).toBe('too-short');
+  });
+
+  it('a too-short SECRET_KEY env var still hard-errors even when a valid key file exists', () => {
+    const dataDir = freshDataDir();
+    const keyPath = path.join(dataDir, SECRET_KEY_FILENAME);
+    fs.mkdirSync(dataDir, { recursive: true });
+    fs.writeFileSync(keyPath, goodSecret);
+
+    expect(() => readEnv({ SECRET_KEY: 'short', DATA_DIR: dataDir })).toThrowError(/at least 32 bytes/);
+  });
+
+  it('a valid SECRET_KEY env var always wins over an existing key file', () => {
+    const dataDir = freshDataDir();
+    const keyPath = path.join(dataDir, SECRET_KEY_FILENAME);
+    fs.mkdirSync(dataDir, { recursive: true });
+    fs.writeFileSync(keyPath, 'y'.repeat(64));
+
+    const env = readEnv({ SECRET_KEY: goodSecret, DATA_DIR: dataDir });
+    expect(env.secretKey).toBe(goodSecret);
   });
 });

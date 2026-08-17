@@ -7,13 +7,16 @@
 # nothing in this file is Synology-specific except this comment block.
 #
 # BEFORE STARTING:
-#   1. Replace PASTE-YOUR-GENERATED-KEY-HERE below with a random string of at least 32
-#      bytes — see docs/INSTALL-SYNOLOGY.md step 4, or run `openssl rand -base64 48`.
-#   2. Create the data folder and give it Read/Write permission BEFORE the first start —
+#   1. Create the data folder and give it Read/Write permission BEFORE the first start —
 #      see docs/INSTALL-SYNOLOGY.md steps 1-2 (File Station -> right-click the data folder
 #      -> Properties -> Permission -> Create -> grant Read/Write to Everyone, or your
 #      `docker` group user). Skipping this leaves the container crash-looping on an
 #      unwritable /data.
+#
+# ZERO-CONFIG otherwise: nothing else needs editing. The app generates its own key on first
+# boot at data/secret.key and reuses it from then on. Want to manage the key yourself instead?
+# Uncomment the SECRET_KEY line below and set it to a random string of at least 32 bytes
+# (`openssl rand -base64 48` works).
 #
 # PINNING A VERSION: this file tracks ":latest", the newest published image. To stay on a
 # known-good release instead of always taking the newest one, change
@@ -27,7 +30,7 @@ services:
     ports:
       - "3000:3000"
     environment:
-      SECRET_KEY: "PASTE-YOUR-GENERATED-KEY-HERE"
+      # SECRET_KEY: "set-your-own-if-you-prefer"
       TRUST_PROXY: "0"
       TZ: "America/Toronto"
       PORT: "3000"

@@ -18,9 +18,9 @@ Next.js build. Docker pulls a ready-to-run multi-arch image (linux/amd64 + linux
    folder as `docker-compose.yml`. It works unchanged on Synology Container Manager, QNAP,
    Unraid, TrueNAS SCALE, or any plain Linux/Windows/macOS Docker host — nothing in it is
    Synology-specific.
-3. Open it and replace `PASTE-YOUR-GENERATED-KEY-HERE` with a random string of at least 32
-   bytes (`openssl rand -base64 48` works, or see the SECRET_KEY note under Prerequisites).
-4. `docker compose up -d`, then open `http://<host>:3000`.
+3. `docker compose up -d`, then open `http://<host>:3000`. Nothing else to configure — the app
+   generates its own SECRET_KEY at first boot (see the note under Prerequisites). Want to
+   manage the key yourself instead? Uncomment the `SECRET_KEY:` line in the compose file first.
 
 Pin a specific release instead of always tracking the newest image by changing `:latest` to a
 version tag in the compose file's `image:` line, e.g. `ghcr.io/manavgrewal/budgettracker:1.2.0`.
@@ -53,12 +53,19 @@ works exactly as it did before.
 | **Port** | 3000 on the host, or any other port via `--port` / `-Port`. |
 | **Browser** | Any current Chrome, Edge, Firefox or Safari, on any device on your network. |
 
-You also need a **SECRET_KEY**: one random string of at least 32 bytes. Every installer generates
-it for you; the Synology no-SSH path asks you to paste one in.
+Budget Tracker uses a **SECRET_KEY** — one random string of at least 32 bytes, used to derive
+encryption keys for stored TOTP secrets — but you do not need to provide one. If none is set on
+first boot, the app generates one itself at `data/secret.key` and reuses it on every start after
+that. The Linux, Windows and Synology-over-SSH installers still generate one into `.env` up front,
+which is the recommended path for a script-driven install and always takes precedence over the
+generated file; provide `SECRET_KEY` yourself only if you want to manage it that way.
 
-> **Keep the SECRET_KEY.** It is never used directly as a cipher key — encryption keys are derived
-> from it. If you lose or change it, everyone who turned on two-factor authentication has to
-> re-enroll their authenticator app. Transactions, budgets, goals and passwords are unaffected.
+> **Keep it safe, whichever way it was created.** It is never used directly as a cipher key —
+> encryption keys are derived from it. If it is lost or changed, everyone who turned on two-factor
+> authentication has to re-enroll their authenticator app. Transactions, budgets, goals and
+> passwords are unaffected. `data/secret.key` is deliberately excluded from backup archives (see
+> "Keeping backups on a separate NAS" below), so back it up separately once — a password manager
+> entry works well.
 
 ---
 
@@ -138,7 +145,7 @@ Two paths, pick one:
 
 - **No terminal:** follow [docs/INSTALL-SYNOLOGY.md](docs/INSTALL-SYNOLOGY.md). It is a
   click-by-click Container Manager walkthrough — upload the folder, create a Project, paste
-  `install/synology-compose.yml`, set your SECRET_KEY, start, open the URL.
+  `install/synology-compose.yml`, start, open the URL. No SECRET_KEY to set.
 - **Over SSH:** clone the project onto whichever volume you keep Docker things on (any volume
   works — the app's data lives inside this folder):
   ```bash
@@ -156,7 +163,7 @@ Two paths, pick one:
 
 Anything with Docker and the Compose plugin works with the Linux script. If your NAS only offers
 a compose text box (no shell), copy `install/synology-compose.yml`, change the volume path to
-something valid on your system, paste in your SECRET_KEY, and start it.
+something valid on your system, and start it — no SECRET_KEY to set.
 
 ---
 
@@ -328,6 +335,11 @@ which carry names, addresses and partial card numbers, on top of the whole trans
 history. If you copy them off the NAS, turn on your backup tool's client-side encryption
 (Synology Hyper Backup offers it) and keep the key somewhere other than the NAS.
 
+**`data/secret.key` is deliberately excluded from every backup archive** — it contains only
+`budget.db` and `receipts/` — precisely so an offsite copy of your backups can never decrypt
+your TOTP secrets on its own. Back up `data/secret.key` separately, once, somewhere safe (a
+password manager entry works well).
+
 ### Option A — mount the NAS share at `/data/backups`
 
 Mount the remote share on the host first (`/etc/fstab`, or DSM → Control Panel → Shared Folder),
@@ -437,12 +449,13 @@ password**.
 
 ### I forgot / lost my SECRET_KEY
 
-If you forgot your SECRET_KEY: only two-factor authentication depends on it. Everything else —
-transactions, budgets, goals, passwords — is unaffected.
+If you forgot your SECRET_KEY — or lost the auto-generated `data/secret.key` — only two-factor
+authentication depends on it. Everything else — transactions, budgets, goals, passwords — is
+unaffected.
 
-Each user's TOTP secret is encrypted with a key derived from `SECRET_KEY`. Once the key is gone,
-those secrets can never be decrypted again, so **no authenticator app can ever produce a code the
-app will accept** for those accounts. A new password alone does not help — the sign-in still asks
+Each user's TOTP secret is encrypted with a key derived from it. Once that key is gone, those
+secrets can never be decrypted again, so **no authenticator app can ever produce a code the app
+will accept** for those accounts. A new password alone does not help — the sign-in still asks
 for the second factor.
 
 1. Generate a new one: `openssl rand -base64 48`
@@ -497,8 +510,9 @@ they disagree by more than half a minute.
 docker compose logs --tail 50 budget-tracker
 ```
 
-The two usual causes are a missing or too-short `SECRET_KEY` (the app refuses to start without at
-least 32 bytes) and an unwritable `/data`.
+The two usual causes are an unwritable `/data` (which also blocks the auto-generated
+`data/secret.key`) and a manually-set `SECRET_KEY` shorter than 32 bytes — the app refuses to
+start rather than silently accepting either.
 
 ### "Could not locate the bindings file" or "invalid ELF header"
 

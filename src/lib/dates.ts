@@ -1,4 +1,8 @@
-import { readEnv } from '@/lib/env';
+// Deliberately @/lib/env-tz, NOT @/lib/env: this module is shared/isomorphic (reachable from
+// client components via *-client.tsx), and @/lib/env statically imports node:fs/path/crypto
+// for its SECRET_KEY file resolution, which cannot be bundled for the browser. See
+// env-tz.ts's docblock.
+import { readTz } from '@/lib/env-tz';
 
 export type DateFormat =
   | 'MM/DD/YYYY'
@@ -253,11 +257,7 @@ export function monthLabel(month: string): string {
 }
 
 function safeTz(): string {
-  try {
-    return readEnv().tz;
-  } catch {
-    return 'America/Toronto';
-  }
+  return readTz();
 }
 
 /**

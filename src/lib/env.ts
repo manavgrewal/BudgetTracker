@@ -1,3 +1,8 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import crypto from 'node:crypto';
+import { DEFAULT_TZ, readTz } from '@/lib/env-tz';
+
 export interface AppEnv {
   secretKey: string;
   trustProxy: boolean;
@@ -6,20 +11,101 @@ export interface AppEnv {
   dataDir: string;
 }
 
-export const DEFAULT_TZ = 'America/Toronto';
+// Re-exported so every existing importer of DEFAULT_TZ from '@/lib/env' keeps working
+// unchanged — the actual constant lives in @/lib/env-tz (see that file's docblock for why).
+export { DEFAULT_TZ };
 export const DEFAULT_PORT = 3000;
 export const DEFAULT_DATA_DIR = '/data';
 export const MIN_SECRET_KEY_BYTES = 32;
+/** Byte length used only when auto-generating a key — comfortably above MIN_SECRET_KEY_BYTES. */
+export const GENERATED_SECRET_KEY_BYTES = 48;
+export const SECRET_KEY_FILENAME = 'secret.key';
 
 const TRUTHY = new Set(['1', 'true', 'yes', 'on']);
 
-export function readEnv(source: Partial<NodeJS.ProcessEnv> = process.env): AppEnv {
-  const secretKey = source.SECRET_KEY ?? '';
-  if (secretKey.length === 0) {
-    throw new Error('SECRET_KEY is required (random string of at least 32 bytes)');
+/**
+ * readEnv() is called as a default-parameter expression all over the request path
+ * (src/lib/auth/csrf.ts, src/lib/auth/ratelimit.ts, src/lib/auth/session.ts, ...), so once a
+ * key has been read from — or generated onto — disk it is cached here for the life of the
+ * process. Without this, zero-config installs would hit the filesystem (or worse, attempt to
+ * generate a fresh key) on every single request. Keyed by resolved path, mirroring the
+ * module-level singleton pattern src/db/client.ts uses for the database connection
+ * (`instance` + `ensureInstance()` + a `setDbForTests` reset seam).
+ */
+let cachedKeyPath: string | null = null;
+let cachedKeyValue: string | null = null;
+
+/** Test seam, mirrors setDbForTests(): forces the next readEnv() call that falls through to
+ *  the file-backed path to re-resolve from disk instead of reusing the cached value. */
+export function resetSecretKeyCacheForTests(): void {
+  cachedKeyPath = null;
+  cachedKeyValue = null;
+}
+
+/**
+ * Resolves SECRET_KEY when no env var is set: read `${dataDir}/secret.key` if present,
+ * otherwise generate one. A present-but-invalid file is a hard error — it is NEVER silently
+ * regenerated, since that would invalidate every enrolled two-factor device.
+ */
+function readOrGenerateSecretKeyFile(dataDir: string): string {
+  const keyPath = path.join(dataDir, SECRET_KEY_FILENAME);
+  if (cachedKeyPath === keyPath && cachedKeyValue !== null) {
+    return cachedKeyValue;
   }
-  if (Buffer.byteLength(secretKey, 'utf8') < MIN_SECRET_KEY_BYTES) {
-    throw new Error('SECRET_KEY must be at least 32 bytes');
+
+  let existing: string | null = null;
+  try {
+    existing = fs.readFileSync(keyPath, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+
+  let value: string;
+  if (existing !== null) {
+    value = existing.trim();
+    if (Buffer.byteLength(value, 'utf8') < MIN_SECRET_KEY_BYTES) {
+      throw new Error(
+        `${keyPath} contains a key shorter than ${MIN_SECRET_KEY_BYTES} bytes. It will not be ` +
+          'regenerated automatically — doing so would silently invalidate every enrolled ' +
+          'two-factor device. Restore a valid key, or delete the file to generate a fresh one ' +
+          '(only if you accept re-enrolling two-factor).',
+      );
+    }
+  } else {
+    value = crypto.randomBytes(GENERATED_SECRET_KEY_BYTES).toString('base64');
+    fs.mkdirSync(dataDir, { recursive: true });
+    // Atomic write: generate under a unique temp name in the SAME directory, then rename —
+    // never a partially-written key is ever visible at the final path.
+    const tmpPath = path.join(
+      dataDir,
+      `.${SECRET_KEY_FILENAME}.tmp-${process.pid}-${crypto.randomBytes(6).toString('hex')}`,
+    );
+    fs.writeFileSync(tmpPath, value, { mode: 0o600 });
+    fs.renameSync(tmpPath, keyPath);
+    console.log(`[env] generated ${keyPath} — back this file up; losing it means re-enrolling two-factor devices`);
+  }
+
+  cachedKeyPath = keyPath;
+  cachedKeyValue = value;
+  return value;
+}
+
+export function readEnv(source: Partial<NodeJS.ProcessEnv> = process.env): AppEnv {
+  const dataDir = source.DATA_DIR && source.DATA_DIR.length > 0 ? source.DATA_DIR : DEFAULT_DATA_DIR;
+
+  // An explicitly-set SECRET_KEY always wins, and a too-short one is a hard error with no
+  // fallback to the file — misconfiguration must never be silently papered over. An empty/unset
+  // env var (including the empty string a compose file's `${SECRET_KEY:-}` expands to when the
+  // host variable is absent) is treated as "not provided" and falls through to the key file.
+  const rawSecretKey = source.SECRET_KEY ?? '';
+  let secretKey: string;
+  if (rawSecretKey.length > 0) {
+    if (Buffer.byteLength(rawSecretKey, 'utf8') < MIN_SECRET_KEY_BYTES) {
+      throw new Error('SECRET_KEY must be at least 32 bytes');
+    }
+    secretKey = rawSecretKey;
+  } else {
+    secretKey = readOrGenerateSecretKeyFile(dataDir);
   }
 
   const rawPort = source.PORT;
@@ -35,8 +121,8 @@ export function readEnv(source: Partial<NodeJS.ProcessEnv> = process.env): AppEn
   return {
     secretKey,
     trustProxy: TRUTHY.has((source.TRUST_PROXY ?? '').trim().toLowerCase()),
-    tz: source.TZ && source.TZ.length > 0 ? source.TZ : DEFAULT_TZ,
+    tz: readTz(source),
     port,
-    dataDir: source.DATA_DIR && source.DATA_DIR.length > 0 ? source.DATA_DIR : DEFAULT_DATA_DIR,
+    dataDir,
   };
 }
