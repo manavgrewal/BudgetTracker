@@ -225,6 +225,15 @@ export function ArrowRightIcon(props: IconProps) {
   );
 }
 
+export function BellIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="M18 8a6 6 0 1 0-12 0c0 6-2 7-2 7h16s-2-1-2-7" />
+      <path d="M13.7 20a2 2 0 0 1-3.4 0" />
+    </Glyph>
+  );
+}
+
 /**
  * The mark: three rising bars inside a rounded tile — a ledger turning into a
  * trend, which is the whole product in one glyph. Filled (not stroked) so it

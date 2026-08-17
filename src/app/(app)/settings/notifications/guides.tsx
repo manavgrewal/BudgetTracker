@@ -25,7 +25,10 @@ export const GUIDE_CLOSING_ACTION: Record<'telegram' | SmtpPreset, string> = {
 function Closing({ action }: { action: string }) {
   return (
     <p className="text-sm text-muted">
-      <strong className="font-semibold text-ink">Last step:</strong> press <strong className="font-semibold text-ink">{action}</strong>.{' '}
+      {/* MUST-11.8: "press {action}" is bolded as one phrase, not `action` alone, so this
+          copy is never itself an element whose own text exactly matches the button's label —
+          a test locating the real button by that exact text must find only one. */}
+      <strong className="font-semibold text-ink">Last step:</strong> <strong className="font-semibold text-ink">press {action}</strong>.{' '}
       {action === 'Send test message'
         ? 'If it arrives in Telegram, you are done.'
         : 'If it arrives, you are done.'}{' '}
@@ -91,12 +94,12 @@ export function TelegramGuide() {
           Press <strong className="font-semibold text-ink">Start</strong>, or just send it the word <code>hello</code>. Anything will do.
         </li>
         <li>
-          Come back to this page and press <strong className="font-semibold text-ink">Detect chat ID</strong>. The app asks Telegram
+          Come back to this page and <strong className="font-semibold text-ink">press Detect chat ID</strong>. The app asks Telegram
           which conversations your bot has received messages in, and lists them here.
         </li>
         <li>
           Pick yourself from the list. If you set the bot up for a family group chat instead, add the bot to that group, send one message
-          there, and press <strong className="font-semibold text-ink">Detect chat ID</strong> again — the group will appear in the list
+          there, and <strong className="font-semibold text-ink">press Detect chat ID</strong> again — the group will appear in the list
           too.
         </li>
         <li>
@@ -104,8 +107,8 @@ export function TelegramGuide() {
         </li>
       </ol>
       <p className="text-sm text-muted">
-        If the list comes back empty, it almost always means step 9 did not go through. Send your bot another message and press{' '}
-        <strong className="font-semibold text-ink">Detect chat ID</strong> again.
+        If the list comes back empty, it almost always means step 9 did not go through. Send your bot another message and{' '}
+        <strong className="font-semibold text-ink">press Detect chat ID</strong> again.
       </p>
 
       <Heading>About the token</Heading>

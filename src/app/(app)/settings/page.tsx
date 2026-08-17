@@ -4,6 +4,7 @@ import { findUserByUsername } from '@/lib/auth/users';
 import { countUnusedRecoveryCodes } from '@/lib/auth/totp';
 import {
   ArrowRightIcon,
+  BellIcon,
   BudgetsIcon,
   ImportIcon,
   SettingsIcon,
@@ -67,6 +68,28 @@ export default async function SettingsPage() {
               Log out everywhere
             </button>
           </form>
+        </CardBody>
+      </Card>
+
+      <Card>
+        <CardHeader title="Notifications" description="where the app messages you, and about what." />
+        <CardBody>
+          <Link
+            href="/settings/notifications"
+            className="group flex items-start gap-3 rounded-md p-1 transition-colors hover:text-accent-text"
+          >
+            <span
+              aria-hidden="true"
+              className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-accent-soft text-accent-soft-fg"
+            >
+              <BellIcon className="h-[1.15rem] w-[1.15rem]" />
+            </span>
+            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <span className="text-sm font-semibold text-ink">Notifications</span>
+              <span className="text-sm text-muted">Telegram and email alerts. Nothing is sent until you set a channel up.</span>
+            </span>
+            <ArrowRightIcon className="mt-1 h-4 w-4 shrink-0 text-subtle transition-transform group-hover:translate-x-0.5" />
+          </Link>
         </CardBody>
       </Card>
 
