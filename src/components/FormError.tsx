@@ -1,8 +1,14 @@
+import { Notice } from '@/components/ui/Notice';
+
+/**
+ * The error line under a form's heading. Renders nothing when there is nothing
+ * wrong, so a form can mount it unconditionally.
+ */
 export function FormError({ message }: { message?: string | null }) {
   if (!message) return null;
   return (
-    <p role="alert" className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300">
-      {message}
-    </p>
+    <Notice tone="error">
+      <p>{message}</p>
+    </Notice>
   );
 }

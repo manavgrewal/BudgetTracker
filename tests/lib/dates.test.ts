@@ -10,6 +10,7 @@ import {
   isIsoDate,
   isMonthKey,
   monthEnd,
+  monthLabel,
   monthOf,
   monthRange,
   monthStart,
@@ -192,5 +193,24 @@ describe('addDaysIso / daysBetweenIso', () => {
     expect(daysBetweenIso('2026-08-16', '2026-08-16')).toBe(0);
     expect(daysBetweenIso('2026-08-16', '2026-08-15')).toBe(-1);
     expect(daysBetweenIso('2024-02-28', '2024-03-01')).toBe(2);
+  });
+});
+
+describe('monthLabel', () => {
+  it('spells out a month key for headings', () => {
+    expect(monthLabel('2026-08')).toBe('August 2026');
+    expect(monthLabel('2026-01')).toBe('January 2026');
+    expect(monthLabel('2025-12')).toBe('December 2025');
+  });
+
+  it('never shifts the month the way a synthesised Date would', () => {
+    // '2026-03-01T00:00Z' is still February in Toronto; a lookup table cannot slip.
+    expect(monthLabel('2026-03')).toBe('March 2026');
+  });
+
+  it('hands back anything that is not a month key untouched', () => {
+    expect(monthLabel('')).toBe('');
+    expect(monthLabel('2026-13')).toBe('2026-13');
+    expect(monthLabel('2026-08-16')).toBe('2026-08-16');
   });
 });

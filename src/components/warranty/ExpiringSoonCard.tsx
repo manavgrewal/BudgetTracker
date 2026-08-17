@@ -2,6 +2,8 @@ import Link from 'next/link';
 import { daysBetweenIso } from '@/lib/dates';
 import { expiringSoonLabel, expiryPhrase } from '@/lib/warranty/constants';
 import type { WarrantyListItem } from '@/lib/warranty/search';
+import { ArrowRightIcon } from '@/components/icons';
+import { Card, CardHeader } from '@/components/ui/Card';
 
 /** §17.19 / MUST-10.5: top 5, hidden when empty. */
 export const EXPIRING_WIDGET_LIMIT = 5;
@@ -16,29 +18,39 @@ export function ExpiringSoonCard({ items, today }: { items: WarrantyListItem[]; 
   if (items.length === 0) return null;
 
   return (
-    <section className="flex flex-col gap-2">
-      <div className="flex items-center justify-between">
-        <h2 className="font-medium">Warranties expiring soon</h2>
-        <Link href="/warranties?status=expiring" className="text-sm underline">View all</Link>
-      </div>
-      <ul className="text-sm">
+    <Card>
+      <CardHeader
+        title="Warranties expiring soon"
+        action={
+          <Link
+            href="/warranties?status=expiring"
+            className="btn btn--ghost btn--sm text-accent-text hover:text-accent-text"
+          >
+            View all
+            <ArrowRightIcon className="h-4 w-4" />
+          </Link>
+        }
+      />
+      <ul className="border-t border-line text-sm">
         {items.slice(0, EXPIRING_WIDGET_LIMIT).map((row) => (
-          <li key={row.id} className="flex justify-between border-b border-slate-100 py-1 dark:border-slate-900">
-            <span>
-              <Link href={`/warranties/${row.id}`} className="hover:underline">{row.name}</Link>
-              {row.vendor ? <span className="ml-2 text-slate-500">{row.vendor}</span> : null}
+          <li
+            key={row.id}
+            className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 border-b border-line px-5 py-3 last:border-b-0 sm:px-6"
+          >
+            <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+              <Link href={`/warranties/${row.id}`} className="font-medium text-ink hover:text-accent-text">
+                {row.name}
+              </Link>
+              {row.vendor ? <span className="text-subtle">{row.vendor}</span> : null}
               {/* type-deltas.md T10: a type badge, skipped entirely when the item is
                   untyped — no empty pill left behind. */}
               {row.typeName ? (
-                <span
-                  data-testid="type-badge"
-                  className="ml-2 rounded bg-slate-100 px-1 text-xs dark:bg-slate-800"
-                >
+                <span data-testid="type-badge" className="badge badge--slate">
                   {row.typeName}
                 </span>
               ) : null}
             </span>
-            <span className="text-amber-700 dark:text-amber-300">
+            <span className="shrink-0 text-sm font-medium text-warning">
               {/* Every row here already carries status 'expiring' (expiringSoonItems()'s own
                   filter), which per warrantyStatus() in expiry.ts is only ever reached with a
                   non-null expiryDate. MUST-19.10 / MUST-19.13 / type-deltas.md T10: a warranty
@@ -53,6 +65,6 @@ export function ExpiringSoonCard({ items, today }: { items: WarrantyListItem[]; 
           </li>
         ))}
       </ul>
-    </section>
+    </Card>
   );
 }

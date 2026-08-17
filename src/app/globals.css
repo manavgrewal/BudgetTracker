@@ -1,15 +1,568 @@
 @import "tailwindcss";
 
+/* ---------------------------------------------------------------------------
+   Budget Tracker design system — "Ledger"
+
+   Direction: a household ledger rendered as a calm, modern finance product.
+   Paper-white surfaces by day, ink by night; one accent (iris) used sparingly
+   so the money numbers stay the loudest thing on the page.
+
+   Dark mode is CLASS-based (`.dark` on <html>), never media-query-only: the
+   header toggle has to be able to override the device preference. The
+   pre-hydration script in src/components/theme/theme-script.tsx puts the class
+   on before first paint, so nothing flashes.
+
+   Everything below is a token. Components reference tokens, never raw hexes,
+   so a theme change is a one-file change.
+--------------------------------------------------------------------------- */
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ---------- Light (default) ---------- */
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
+
+  /* Background layers: canvas < surface < surface-2 < surface-3 */
+  --canvas: #f5f5fa;
+  --surface: #ffffff;
+  --surface-2: #efeff7;
+  --surface-3: #e7e7f3;
+  /* Inputs read as recessed into the card rather than flush with it. */
+  --field-bg: #ffffff;
+
+  /* Hairlines */
+  --line: #e2e2ef;
+  --line-strong: #cfcfe4;
+
+  /* Text hierarchy */
+  --ink: #16162b;
+  --muted: #5a5a72;
+  --subtle: #6e6e88;
+
+  /* Accent (iris) — fill vs. on-canvas text are separate tokens because a
+     single value cannot clear AA in both roles in both themes. */
+  --accent: #4b49d6;
+  --accent-hover: #3f3dbf;
+  --accent-fg: #ffffff;
+  --accent-text: #4b49d6;
+  --accent-soft: #e9e8fb;
+  --accent-soft-fg: #3a38b0;
+
+  /* Money + status. positive/negative are the money pair. */
+  --positive: #0b7a52;
+  --positive-soft: #dff4e9;
+  --positive-soft-fg: #0a6244;
+  --negative: #c2352b;
+  --negative-soft: #fdeae8;
+  --negative-soft-fg: #a52a22;
+  --warning: #9a5b00;
+  --warning-soft: #fdf0d9;
+  --warning-soft-fg: #7d4a00;
+  --info: #1d63c7;
+  --info-soft: #e5eefc;
+  --info-soft-fg: #17509f;
+  --neutral-soft: #ececf4;
+  --neutral-soft-fg: #43435c;
+
+  --money-positive: var(--positive);
+  --money-negative: var(--negative);
+
+  /* Graphic fills: meters, chart bars, anything that is a shape rather than a
+     word. Text needs 4.5:1 and goes dark and muted to get it; a bar only needs
+     3:1, and holding it to the text ratio is what turns amber into mud. These
+     are the same three hues opened up to the ratio their job actually needs. */
+  --positive-solid: #0f9d63;
+  --warning-solid: #cf7a00;
+  --negative-solid: #d33f33;
+
+  /* Focus */
+  --focus: #4b49d6;
+
+  /* Elevation — soft and low-contrast; cards should lift, not float. */
+  --elev-flat: 0 1px 2px rgb(22 22 43 / 0.05);
+  --elev-card: 0 1px 2px rgb(22 22 43 / 0.04), 0 12px 28px -18px rgb(22 22 43 / 0.28);
+  --elev-pop: 0 2px 6px rgb(22 22 43 / 0.08), 0 20px 44px -20px rgb(22 22 43 / 0.38);
+
+  /* Ambient wash behind the auth pages */
+  --wash-a: rgb(75 73 214 / 0.12);
+  --wash-b: rgb(29 99 199 / 0.07);
 }
 
-body {
-  @apply bg-white text-slate-900 antialiased;
+/* ---------- Dark ---------- */
+.dark {
+  color-scheme: dark;
+
+  --canvas: #0e0f17;
+  --surface: #171826;
+  --surface-2: #1f2133;
+  --surface-3: #272a3f;
+  --field-bg: #10111c;
+
+  --line: #2a2c40;
+  --line-strong: #3a3d55;
+
+  --ink: #ededf5;
+  --muted: #a9adc4;
+  --subtle: #868ba6;
+
+  --accent: #5d59e8;
+  --accent-hover: #6f6bf2;
+  --accent-fg: #ffffff;
+  --accent-text: #a5a0ff;
+  --accent-soft: #232244;
+  --accent-soft-fg: #b6b2ff;
+
+  --positive: #3dd68c;
+  --positive-soft: #10352a;
+  --positive-soft-fg: #5fe0a4;
+  --negative: #ff7b70;
+  --negative-soft: #3a1a1a;
+  --negative-soft-fg: #ff9d94;
+  --warning: #f2b544;
+  --warning-soft: #3a2a0e;
+  --warning-soft-fg: #ffc960;
+  --info: #7cb8ff;
+  --info-soft: #14243f;
+  --info-soft-fg: #9cc9ff;
+  --neutral-soft: #232537;
+  --neutral-soft-fg: #c3c7dc;
+
+  /* On ink, the AA-safe text colours are already bright enough to work as
+     fills, so the graphic tokens simply track them. */
+  --positive-solid: var(--positive);
+  --warning-solid: var(--warning);
+  --negative-solid: var(--negative);
+
+  --focus: #a5a0ff;
+
+  --elev-flat: 0 1px 2px rgb(0 0 0 / 0.4);
+  --elev-card: 0 1px 2px rgb(0 0 0 / 0.5), 0 14px 32px -20px rgb(0 0 0 / 0.8);
+  --elev-pop: 0 2px 6px rgb(0 0 0 / 0.6), 0 24px 48px -22px rgb(0 0 0 / 0.9);
+
+  --wash-a: rgb(93 89 232 / 0.22);
+  --wash-b: rgb(124 184 255 / 0.09);
 }
 
-@media (prefers-color-scheme: dark) {
+/* ---------- Tailwind theme bridge ----------
+   `inline` keeps the utilities pointing at the live custom properties above
+   instead of snapshotting their light-mode values, which is what makes one set
+   of utility classes work in both themes. */
+@theme inline {
+  --color-canvas: var(--canvas);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-subtle: var(--subtle);
+
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-fg: var(--accent-fg);
+  --color-accent-text: var(--accent-text);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-soft-fg: var(--accent-soft-fg);
+
+  --color-positive: var(--positive);
+  --color-positive-solid: var(--positive-solid);
+  --color-warning-solid: var(--warning-solid);
+  --color-negative-solid: var(--negative-solid);
+  --color-positive-soft: var(--positive-soft);
+  --color-positive-soft-fg: var(--positive-soft-fg);
+  --color-negative: var(--negative);
+  --color-negative-soft: var(--negative-soft);
+  --color-negative-soft-fg: var(--negative-soft-fg);
+  --color-warning: var(--warning);
+  --color-warning-soft: var(--warning-soft);
+  --color-warning-soft-fg: var(--warning-soft-fg);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-info-soft-fg: var(--info-soft-fg);
+  --color-neutral-soft: var(--neutral-soft);
+  --color-neutral-soft-fg: var(--neutral-soft-fg);
+
+  --color-focus: var(--focus);
+
+  --radius-xs: 0.375rem;
+  --radius-sm: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1rem;
+  --radius-xl: 1.25rem;
+  --radius-2xl: 1.5rem;
+
+  --shadow-flat: var(--elev-flat);
+  --shadow-card: var(--elev-card);
+  --shadow-pop: var(--elev-pop);
+
+  /* No network font fetch, ever (offline invariant): a curated system stack.
+     Segoe UI Variable leads because the household runs Windows; the display
+     cut is a genuinely tighter, more refined face for headings and numbers. */
+  --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, BlinkMacSystemFont,
+    "SF Pro Text", Inter, Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  --font-display: "Segoe UI Variable Display", "Segoe UI", system-ui, -apple-system,
+    BlinkMacSystemFont, "SF Pro Display", Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "Cascadia Mono", "SF Mono", "JetBrains Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+}
+
+@layer base {
+  /* Tailwind 4 defaults `border-color` to currentColor, which turns every bare
+     `border` utility into a hard black rule. Hairlines are the house default. */
+  *,
+  ::before,
+  ::after {
+    border-color: var(--line);
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
   body {
-    @apply bg-slate-950 text-slate-100;
+    background-color: var(--canvas);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--font-display);
+    letter-spacing: -0.014em;
+  }
+
+  /* One visible focus treatment for the whole app. */
+  :focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background: var(--accent-soft);
+    color: var(--accent-soft-fg);
+  }
+
+  /* Native controls inherit the theme rather than painting themselves white. */
+  input,
+  select,
+  textarea,
+  button {
+    font: inherit;
+    color: inherit;
+  }
+}
+
+@layer components {
+  /* ----- Numbers -----
+     Money is the content, so it gets the one piece of bespoke typography:
+     tabular figures (columns line up), tightened tracking, display face. */
+  .tabnum {
+    font-variant-numeric: tabular-nums;
+  }
+
+  .money {
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+  }
+
+  .money-xl {
+    font-family: var(--font-display);
+    font-variant-numeric: tabular-nums;
+    font-size: clamp(1.75rem, 1.2rem + 1.9vw, 2.5rem);
+    line-height: 1.05;
+    font-weight: 650;
+    letter-spacing: -0.03em;
+  }
+
+  .money-lg {
+    font-family: var(--font-display);
+    font-variant-numeric: tabular-nums;
+    font-size: 1.375rem;
+    line-height: 1.15;
+    font-weight: 620;
+    letter-spacing: -0.02em;
+  }
+
+  .money-pos {
+    color: var(--money-positive);
+  }
+
+  .money-neg {
+    color: var(--money-negative);
+  }
+
+  /* ----- Eyebrow label -----
+     The small caps label above a number. Structural, not decorative: it names
+     what the number counts. */
+  .eyebrow {
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--subtle);
+  }
+
+  /* ----- Badges -----
+     Hue-named modifiers on purpose: warranty status is specified by colour
+     (§10.2 active neutral · expiring amber · expired red · lifetime blue), and
+     naming them after the semantic token would lose that mapping. */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    border-radius: 9999px;
+    padding: 0.125rem 0.5rem;
+    font-size: 0.75rem;
+    font-weight: 550;
+    line-height: 1.4;
+    white-space: nowrap;
+  }
+
+  .badge--slate {
+    background: var(--neutral-soft);
+    color: var(--neutral-soft-fg);
+  }
+
+  /* "We don't know" reads as an outline rather than another filled chip, so it
+     never gets mistaken for a status the app actually determined. */
+  .badge--muted {
+    background: transparent;
+    border: 1px dashed var(--line-strong);
+    color: var(--subtle);
+    padding: 0 0.4375rem;
+  }
+
+  .badge--amber {
+    background: var(--warning-soft);
+    color: var(--warning-soft-fg);
+  }
+
+  .badge--red {
+    background: var(--negative-soft);
+    color: var(--negative-soft-fg);
+  }
+
+  .badge--blue {
+    background: var(--info-soft);
+    color: var(--info-soft-fg);
+  }
+
+  .badge--green {
+    background: var(--positive-soft);
+    color: var(--positive-soft-fg);
+  }
+
+  .badge--accent {
+    background: var(--accent-soft);
+    color: var(--accent-soft-fg);
+  }
+
+  /* ----- Form controls ----- */
+  .field-label {
+    display: block;
+    font-size: 0.8125rem;
+    font-weight: 550;
+    color: var(--muted);
+  }
+
+  .field-hint {
+    font-size: 0.75rem;
+    color: var(--subtle);
+  }
+
+  .field-control {
+    width: 100%;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--line-strong);
+    background: var(--field-bg);
+    color: var(--ink);
+    padding: 0.5rem 0.75rem;
+    font-size: 0.875rem;
+    line-height: 1.4;
+    box-shadow: var(--elev-flat);
+    transition: border-color 120ms ease, box-shadow 120ms ease;
+  }
+
+  .field-control::placeholder {
+    color: var(--subtle);
+  }
+
+  .field-control:hover:not(:disabled) {
+    border-color: var(--accent-text);
+  }
+
+  .field-control:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 1px;
+    border-color: var(--focus);
+  }
+
+  .field-control:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  select.field-control {
+    /* Native arrow, themed background — no background-image so the offline
+       invariant holds and the control keeps its platform affordance. */
+    padding-right: 0.5rem;
+  }
+
+  /* ----- Buttons ----- */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4375rem;
+    border-radius: var(--radius-sm);
+    border: 1px solid transparent;
+    padding: 0.5rem 0.875rem;
+    font-size: 0.875rem;
+    font-weight: 560;
+    line-height: 1.25;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease,
+      box-shadow 120ms ease, transform 120ms ease;
+  }
+
+  .btn:active:not(:disabled) {
+    transform: translateY(0.5px);
+  }
+
+  .btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
+
+  .btn--sm {
+    padding: 0.3125rem 0.625rem;
+    font-size: 0.8125rem;
+  }
+
+  .btn--lg {
+    padding: 0.625rem 1.125rem;
+    font-size: 0.9375rem;
+  }
+
+  .btn--primary {
+    background: var(--accent);
+    color: var(--accent-fg);
+    box-shadow: var(--elev-flat);
+  }
+
+  .btn--primary:hover:not(:disabled) {
+    background: var(--accent-hover);
+  }
+
+  .btn--secondary {
+    background: var(--surface);
+    color: var(--ink);
+    border-color: var(--line-strong);
+    box-shadow: var(--elev-flat);
+  }
+
+  .btn--secondary:hover:not(:disabled) {
+    background: var(--surface-2);
+    border-color: var(--accent-text);
+  }
+
+  .btn--danger {
+    background: var(--negative);
+    color: var(--accent-fg);
+    box-shadow: var(--elev-flat);
+  }
+
+  .dark .btn--danger {
+    /* The dark negative is a light coral; white on it would fail AA. */
+    color: #2a0f0c;
+  }
+
+  .btn--danger:hover:not(:disabled) {
+    filter: brightness(0.94);
+  }
+
+  .btn--ghost {
+    background: transparent;
+    color: var(--muted);
+  }
+
+  .btn--ghost:hover:not(:disabled) {
+    background: var(--surface-2);
+    color: var(--ink);
+  }
+
+  /* ----- Cards and tables ----- */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--elev-card);
+  }
+
+  .data-table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    font-size: 0.875rem;
+    text-align: left;
+  }
+
+  .data-table thead th {
+    position: sticky;
+    top: 0;
+    background: var(--surface-2);
+    color: var(--subtle);
+    font-size: 0.6875rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 0.625rem 1rem;
+    white-space: nowrap;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .data-table tbody td {
+    padding: 0.6875rem 1rem;
+    border-bottom: 1px solid var(--line);
+    vertical-align: middle;
+  }
+
+  .data-table tbody tr:last-child td {
+    border-bottom: 0;
+  }
+
+  .data-table tbody tr:hover td {
+    background: color-mix(in srgb, var(--surface-2) 60%, transparent);
+  }
+
+  /* ----- Ambient wash behind the signed-out pages ----- */
+  .auth-wash {
+    background-image:
+      radial-gradient(60rem 32rem at 12% -12%, var(--wash-a), transparent 62%),
+      radial-gradient(48rem 28rem at 96% 8%, var(--wash-b), transparent 60%);
+  }
+}
+
+/* Motion is a nicety; anyone who has asked for less gets none. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .btn:active:not(:disabled) {
+    transform: none;
   }
 }

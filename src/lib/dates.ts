@@ -223,6 +223,35 @@ export function currentMonth(now: Date = new Date(), tz?: string): string {
   return monthOf(todayIso(now, tz));
 }
 
+const FULL_MONTH_NAMES = [
+  'January',
+  'February',
+  'March',
+  'April',
+  'May',
+  'June',
+  'July',
+  'August',
+  'September',
+  'October',
+  'November',
+  'December',
+];
+
+/**
+ * '2026-08' -> 'August 2026', for headings and eyebrows.
+ *
+ * A lookup table rather than Intl: a month key has no day and no zone, and
+ * feeding a synthesised Date to a formatter is exactly how a month key ends up
+ * displaying as the previous month somewhere east of UTC. Unparseable input is
+ * handed back untouched so a heading degrades to the raw key instead of NaN.
+ */
+export function monthLabel(month: string): string {
+  if (!isMonthKey(month)) return month;
+  const [year, index] = month.split('-');
+  return `${FULL_MONTH_NAMES[Number(index) - 1]} ${year}`;
+}
+
 function safeTz(): string {
   try {
     return readEnv().tz;

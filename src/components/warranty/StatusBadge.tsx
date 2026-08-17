@@ -2,13 +2,20 @@ import { daysBetweenIso } from '@/lib/dates';
 import { expiringSoonLabel } from '@/lib/warranty/constants';
 import { statusLabel, type WarrantyStatus } from '@/lib/warranty/expiry';
 
-/** §10.2: active neutral · expiring amber · expired red · lifetime blue · unknown grey. */
+/**
+ * §10.2: active neutral · expiring amber · expired red · lifetime blue · unknown grey.
+ *
+ * The modifiers are named after the hue rather than after a semantic token
+ * because the hue IS the spec here — the five statuses are defined by colour,
+ * and "expiring" is not the same idea as the app's generic warning state.
+ * Each one resolves to theme tokens in globals.css.
+ */
 const CLASSES: Record<WarrantyStatus, string> = {
-  active: 'bg-slate-100 text-slate-800 dark:bg-slate-800 dark:text-slate-100',
-  expiring: 'bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-200',
-  expired: 'bg-red-100 text-red-900 dark:bg-red-950 dark:text-red-200',
-  lifetime: 'bg-blue-100 text-blue-900 dark:bg-blue-950 dark:text-blue-200',
-  unknown: 'bg-slate-200 text-slate-600 dark:bg-slate-900 dark:text-slate-400',
+  active: 'badge--slate',
+  expiring: 'badge--amber',
+  expired: 'badge--red',
+  lifetime: 'badge--blue',
+  unknown: 'badge--muted',
 };
 
 /**
@@ -36,8 +43,6 @@ export function StatusBadge({
   isSubscription?: boolean;
 }) {
   return (
-    <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${CLASSES[status]}`}>
-      {labelFor(status, expiryDate, today, isSubscription)}
-    </span>
+    <span className={`badge ${CLASSES[status]}`}>{labelFor(status, expiryDate, today, isSubscription)}</span>
   );
 }
