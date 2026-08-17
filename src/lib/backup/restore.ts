@@ -16,7 +16,7 @@ import { z } from 'zod';
 import { migrationsFolder } from '@/db/client';
 import { readEnv } from '@/lib/env';
 import { APP_VERSION } from '@/lib/version';
-import { ARCHIVE_NAME_RE, LEGACY_NAME_RE, backupsDir, resolveSafeTarget } from '@/lib/backup/archive';
+import { ARCHIVE_NAME_RE, LEGACY_NAME_RE, PARTIAL_MAX_AGE_MS, backupsDir, resolveSafeTarget } from '@/lib/backup/archive';
 import {
   RestoreError,
   commitRestore,
@@ -98,6 +98,78 @@ const outcomeSchema = z.object({
   error: z.string().nullable(),
 });
 
+/**
+ * CRITICAL (T1 review): commit.json lives on the same bind-mounted ${DATA_DIR} as everything
+ * else here, so it is exactly as untrusted as restore-request.json (MUST-20.13) — a hand-
+ * written or tampered commit.json is an unconstrained rename/unlink primitive at boot time if
+ * it is ever trusted without validation. zod pins the shape; the path-containment check right
+ * after it (assertPlanPathsAreSafe) pins that every path/from/to it names actually resolves
+ * inside ${DATA_DIR}, so a tampered `to` of `/etc/passwd` (or `../../whatever`) is refused
+ * before a single rename is attempted.
+ */
+const stepSchema = z.union([
+  z.object({
+    op: z.literal('rename'),
+    from: z.string().min(1),
+    to: z.string().min(1),
+    optional: z.boolean().optional(),
+    incoming: z.boolean().optional(),
+  }),
+  z.object({ op: z.literal('touch-receipts'), dir: z.string().min(1) }),
+]);
+
+const planSchema = z.object({
+  version: z.literal(1),
+  stamp: z.string().min(1),
+  kind: z.enum(['archive', 'sqlite']),
+  steps: z.array(stepSchema),
+  attempts: z.number().int().nonnegative(),
+  receiptsRestored: z.number().int().nonnegative(),
+  safetyCopy: z.string().nullable(),
+  receiptsMovedAside: z.string().nullable(),
+});
+
+function resolvesInside(dataDir: string, candidate: string): boolean {
+  const resolvedDir = path.resolve(dataDir);
+  const resolved = path.resolve(candidate);
+  return resolved === resolvedDir || resolved.startsWith(resolvedDir + path.sep);
+}
+
+function assertPlanPathsAreSafe(plan: RestorePlan, dataDir: string): void {
+  for (const step of plan.steps) {
+    const paths: string[] =
+      step.op === 'rename' ? [step.from, step.to] : step.op === 'touch-receipts' ? [step.dir] : [];
+    for (const candidate of paths) {
+      if (!resolvesInside(dataDir, candidate)) {
+        throw new RestoreError('The restore commit journal references a path outside the data directory.');
+      }
+    }
+  }
+}
+
+/**
+ * The ONLY place commit.json is read. Never a bare cast: a truncated file (JSON.parse throws)
+ * or one whose shape zod rejects is treated by the caller exactly like exhausted retries —
+ * terminal, not silently discarded — so a corrupted or hand-edited commit.json can never wedge
+ * the state machine in restore-applying/ forever (which would otherwise mean the GUI can never
+ * stage another restore again).
+ */
+function readCommitJsonStrict(commitJsonPath: string, dataDir: string): RestorePlan {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(fs.readFileSync(commitJsonPath, 'utf8'));
+  } catch {
+    throw new RestoreError('The restore commit journal is unreadable or corrupted.');
+  }
+  const parsed = planSchema.safeParse(raw);
+  if (!parsed.success) {
+    throw new RestoreError('The restore commit journal failed validation.');
+  }
+  const plan = parsed.data as RestorePlan;
+  assertPlanPathsAreSafe(plan, dataDir);
+  return plan;
+}
+
 export function stagedDir(): string {
   return path.join(readEnv().dataDir, 'restore-staged');
 }
@@ -122,15 +194,44 @@ function commitJsonPathOf(dir: string): string {
   return path.join(dir, 'commit.json');
 }
 
-/** MUST-20.13: a half-written file must never be readable. */
+/**
+ * MUST-20.13/20.22: a half-written file must never be readable, AND (the `attempts` counter
+ * specifically) the write must survive a power loss, not just a process crash — a rename
+ * alone only guarantees the LATTER. The temp file is fsync'd before the rename; the
+ * directory entry is best-effort fsync'd afterward (wrapped in its own try/catch: Windows,
+ * and some filesystems, refuse to open a directory for reading at all).
+ */
 function writeJsonAtomically(target: string, value: unknown): void {
   const partial = `${target}.partial`;
-  fs.writeFileSync(partial, `${JSON.stringify(value, null, 2)}\n`);
+  const fd = fs.openSync(partial, 'w');
+  try {
+    fs.writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`);
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
   fs.renameSync(partial, target);
+  try {
+    const dirFd = fs.openSync(path.dirname(target), 'r');
+    try {
+      fs.fsyncSync(dirFd);
+    } finally {
+      fs.closeSync(dirFd);
+    }
+  } catch {
+    /* best-effort only — see docblock above */
+  }
 }
 
+/**
+ * MUST-20.12: restore-result.json's `error` field must be a written, operator-readable
+ * sentence, never a raw errno/stack trace. RestoreError messages already are one; anything
+ * else (ENOSPC, EIO, a thrown non-Error, an unanticipated bug) is logged in FULL to stderr by
+ * every caller of this function already — this is only what reaches the JSON file.
+ */
 function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  if (error instanceof RestoreError) return error.message;
+  return 'An unexpected error interrupted the restore. Check the container logs for details.';
 }
 
 /**
@@ -344,17 +445,64 @@ export function stageRestore(args: {
   }
 }
 
-/** F18's recovery text: the literal commands an operator can run by hand. */
+/**
+ * F18's recovery text: the literal commands an operator can run by hand. Built from the
+ * ACTUAL filesystem state at failure time (fs.existsSync), never assumed from the plan alone
+ * — `plan.safetyCopy` names a file that was never created if step 1 itself failed, and
+ * `receipts.pre-restore-<stamp>` cannot simply be moved back to `receipts` if a LATER step
+ * already renamed the incoming receipts into that path: `mv` would nest the old directory
+ * INSIDE the new one instead of restoring it. Whichever of `budget.db`/`receipts` is
+ * currently occupied gets moved aside to a `.failed-<stamp>` sibling first, so the safety
+ * copy always lands at the real target path.
+ */
 function buildRecoveryText(dataDir: string, plan: RestorePlan): string {
   const commands: string[] = [];
-  if (plan.safetyCopy) {
-    commands.push(`mv ${path.join(dataDir, plan.safetyCopy)} ${path.join(dataDir, 'budget.db')}`);
+  const dbTarget = path.join(dataDir, 'budget.db');
+  const safetyCopyPath = plan.safetyCopy ? path.join(dataDir, plan.safetyCopy) : null;
+  if (safetyCopyPath && fs.existsSync(safetyCopyPath)) {
+    if (fs.existsSync(dbTarget)) {
+      commands.push(
+        `mv ${dbTarget} ${path.join(dataDir, `budget.failed-${plan.stamp}.db`)} && mv ${safetyCopyPath} ${dbTarget}`,
+      );
+    } else {
+      commands.push(`mv ${safetyCopyPath} ${dbTarget}`);
+    }
   }
-  if (plan.receiptsMovedAside) {
-    commands.push(`mv ${path.join(dataDir, plan.receiptsMovedAside)} ${path.join(dataDir, 'receipts')}`);
+  const receiptsTarget = path.join(dataDir, 'receipts');
+  const receiptsAsidePath = plan.receiptsMovedAside ? path.join(dataDir, plan.receiptsMovedAside) : null;
+  if (receiptsAsidePath && fs.existsSync(receiptsAsidePath)) {
+    if (fs.existsSync(receiptsTarget)) {
+      commands.push(
+        `mv ${receiptsTarget} ${path.join(dataDir, `receipts.failed-${plan.stamp}`)} && mv ${receiptsAsidePath} ${receiptsTarget}`,
+      );
+    } else {
+      commands.push(`mv ${receiptsAsidePath} ${receiptsTarget}`);
+    }
   }
-  if (commands.length === 0) return 'No safety copy was made before the failure; nothing was changed.';
+  if (commands.length === 0) {
+    return 'No recoverable safety copy was found; inspect the data directory by hand.';
+  }
   return `Recover manually: ${commands.join(' && ')}`;
+}
+
+/**
+ * `'continue'` — boot may proceed to getDb() as normal. `'restart'` — MUST-20.23: a commit
+ * was interrupted mid-step and has NOT exhausted its retry cap; commit.json (and therefore
+ * restore-applying/) still exists, and the live budget.db may currently be missing or
+ * mid-transition. The caller (src/instrumentation-node.ts) MUST NOT call getDb() in this
+ * case — see applyStagedRestoreOnBoot()'s docblock — and must exit with RESTART_EXIT_CODE
+ * instead, so the next boot resumes the same commit.json under the same attempt cap.
+ */
+type BootOutcome = 'continue' | 'restart';
+
+function safeRemove(target: string): void {
+  try {
+    fs.rmSync(target, { recursive: true, force: true });
+  } catch (error) {
+    // A failed best-effort cleanup must never overturn a terminal outcome that was already
+    // written successfully just before it (T1 review, IMPORTANT minor).
+    console.warn(`[restore] could not remove ${target} after recording the outcome`, error);
+  }
 }
 
 function failExhausted(applying: string, marker: MarkerFields, plan: RestorePlan, reason: string, now: Date): void {
@@ -362,21 +510,77 @@ function failExhausted(applying: string, marker: MarkerFields, plan: RestorePlan
   const recovery = buildRecoveryText(dataDir, plan);
   writeOutcome(failedOutcome(marker, `${reason} ${recovery}`, now, plan));
   const failedDir = path.join(dataDir, `restore-failed-${now.toISOString().replace(/[:.]/g, '-')}`);
-  fs.renameSync(applying, failedDir);
+  try {
+    fs.renameSync(applying, failedDir);
+  } catch (error) {
+    console.warn(`[restore] could not rename ${applying} to ${failedDir}`, error);
+  }
 }
 
-function runCommitAttempt(applying: string, marker: MarkerFields, plan: RestorePlan, dataDir: string, now: Date): void {
+/**
+ * CRITICAL (T1 review): a commit.json that fails to parse or fails zod/path validation is
+ * treated exactly like exhausted retries — a TERMINAL failure, `restore-applying/` renamed
+ * to `restore-failed-<stamp>/` — never silently `rm -rf`'d and never left in place. Either of
+ * those would risk the state machine either destroying evidence or wedging forever (staging
+ * refuses while `restore-applying/` exists — MUST-20.10 — so the GUI could never restore
+ * again). None of the corrupt file's fields are trusted for the recovery text; the operator
+ * is pointed at the renamed directory and the data directory itself.
+ */
+function failCorruptCommitJson(applying: string, marker: MarkerFields, reason: string, now: Date): void {
+  writeOutcome(
+    failedOutcome(
+      marker,
+      `${reason} The restore commit journal could not be trusted, so no automatic recovery text could be built. ` +
+        `Inspect the renamed restore-applying/ directory and any budget.pre-restore-*.db / receipts.pre-restore-*/ ` +
+        `files under the data directory by hand.`,
+      now,
+    ),
+  );
+  const dataDir = readEnv().dataDir;
+  const failedDir = path.join(dataDir, `restore-failed-${now.toISOString().replace(/[:.]/g, '-')}`);
   try {
-    const result = commitRestore(plan, { dataDir });
-    writeOutcome(successOutcome(marker, plan, result, now));
-    fs.rmSync(applying, { recursive: true, force: true });
+    fs.renameSync(applying, failedDir);
+  } catch (error) {
+    console.warn(`[restore] could not rename ${applying} to ${failedDir}`, error);
+  }
+}
+
+function runCommitAttempt(applying: string, marker: MarkerFields, plan: RestorePlan, dataDir: string, now: Date): BootOutcome {
+  // T1 review minor: the try block below covers ONLY commitRestore() itself — the one thing
+  // that can genuinely fail and need a retry. A failure in the bookkeeping that follows a
+  // SUCCESSFUL commit (writeOutcome, cleanup) must never be reinterpreted as "the commit
+  // failed": that would misreport a real success as an exhausted failure, or worse, signal
+  // 'restart' for a restore that has already, correctly, fully completed.
+  let result: RestoreResult;
+  try {
+    result = commitRestore(plan, { dataDir, now });
   } catch (error) {
     if (plan.attempts >= MAX_COMMIT_ATTEMPTS) {
-      failExhausted(applying, marker, plan, 'This restore step could not be completed after the maximum number of attempts.', now);
+      failExhausted(
+        applying,
+        marker,
+        plan,
+        `This restore step could not be completed after the maximum number of attempts (${describeError(error)}).`,
+        now,
+      );
+      return 'continue';
     }
-    // Else: leave restore-applying/ (with commit.json already at the incremented attempts
-    // count) exactly as it is. MUST-20.20: boot continues regardless; the next boot resumes.
+    // CRITICAL (T1 review): commit.json already exists (the point of no return) and this
+    // attempt did not exhaust the cap. Leave restore-applying/ exactly as it is — its
+    // commit.json already has the incremented attempts count persisted, from BEFORE this
+    // attempt ran — and signal 'restart' so the caller exits instead of proceeding to
+    // getDb(). MUST-20.20 ("never throws") still holds: this function returns normally.
+    console.error(`[restore] commit attempt ${plan.attempts} failed; signalling a restart to retry`, error);
+    return 'restart';
   }
+
+  try {
+    writeOutcome(successOutcome(marker, plan, result, now));
+  } catch (error) {
+    console.error('[restore] the restore succeeded but recording the outcome failed', error);
+  }
+  safeRemove(applying);
+  return 'continue';
 }
 
 /**
@@ -384,7 +588,7 @@ function runCommitAttempt(applying: string, marker: MarkerFields, plan: RestoreP
  * either died during prepare (no commit.json: discard outright, never re-prepared) or during
  * commit (commit.json present: resume under the attempt cap).
  */
-function resumeApplying(applying: string, now: Date): void {
+function resumeApplying(applying: string, now: Date): BootOutcome {
   const marker = readMarkerLoose(markerPathOf(applying));
   const commitJsonPath = commitJsonPathOf(applying);
 
@@ -396,26 +600,33 @@ function resumeApplying(applying: string, now: Date): void {
         now,
       ),
     );
-    fs.rmSync(applying, { recursive: true, force: true });
-    return;
+    safeRemove(applying);
+    return 'continue';
   }
 
-  const plan = JSON.parse(fs.readFileSync(commitJsonPath, 'utf8')) as RestorePlan;
   const dataDir = readEnv().dataDir;
+  let plan: RestorePlan;
+  try {
+    plan = readCommitJsonStrict(commitJsonPath, dataDir);
+  } catch (error) {
+    failCorruptCommitJson(applying, marker, describeError(error), now);
+    return 'continue';
+  }
 
   if (plan.attempts >= MAX_COMMIT_ATTEMPTS) {
     failExhausted(applying, marker, plan, 'This restore failed after the maximum number of attempts.', now);
-    return;
+    return 'continue';
   }
 
+  // MUST-20.22: attempts is incremented and persisted BEFORE the first step of this run.
   const withAttempt: RestorePlan = { ...plan, attempts: plan.attempts + 1 };
   writeJsonAtomically(commitJsonPath, withAttempt);
-  runCommitAttempt(applying, marker, withAttempt, dataDir, now);
+  return runCommitAttempt(applying, marker, withAttempt, dataDir, now);
 }
 
 /** The PREPARE phase for a freshly-promoted request: build the plan, write commit.json (the
  *  point of no return), then attempt the first commit. */
-function prepareAndCommit(applying: string, marker: RestoreRequest, now: Date): void {
+function prepareAndCommit(applying: string, marker: RestoreRequest, now: Date): BootOutcome {
   const dataDir = readEnv().dataDir;
   let plan: RestorePlan;
   try {
@@ -429,13 +640,13 @@ function prepareAndCommit(applying: string, marker: RestoreRequest, now: Date): 
     // MUST-20.19/F15/F16: prepare failed. Live data is untouched by construction
     // (prepareRestore writes nothing outside scratchDir) — discard outright.
     writeOutcome(failedOutcome(marker, describeError(error), now));
-    fs.rmSync(applying, { recursive: true, force: true });
-    return;
+    safeRemove(applying);
+    return 'continue';
   }
 
   const withAttempt: RestorePlan = { ...plan, attempts: 1 };
   writeJsonAtomically(commitJsonPathOf(applying), withAttempt);
-  runCommitAttempt(applying, marker, withAttempt, dataDir, now);
+  return runCommitAttempt(applying, marker, withAttempt, dataDir, now);
 }
 
 /**
@@ -443,7 +654,7 @@ function prepareAndCommit(applying: string, marker: RestoreRequest, now: Date): 
  * F12-F14's exact behaviour — a failure here removes restore-staged/, never creates
  * restore-applying/ at all).
  */
-function promoteStagedAndPrepare(staged: string, applying: string, now: Date): void {
+function promoteStagedAndPrepare(staged: string, applying: string, now: Date): BootOutcome {
   const dataDir = readEnv().dataDir;
   const markerPath = markerPathOf(staged);
   let marker: RestoreRequest;
@@ -465,38 +676,56 @@ function promoteStagedAndPrepare(staged: string, applying: string, now: Date): v
   } catch (error) {
     const loose = readMarkerLoose(markerPath);
     writeOutcome(failedOutcome(loose, describeError(error), now));
-    fs.rmSync(staged, { recursive: true, force: true });
-    return;
+    safeRemove(staged);
+    return 'continue';
   }
 
   // MUST-20.9-style single atomic claim: this request is now claimed exactly once.
   fs.renameSync(staged, applying);
-  prepareAndCommit(applying, marker, now);
+  return prepareAndCommit(applying, marker, now);
 }
 
-function runBootRestore(now: Date): void {
+function runBootRestore(now: Date): BootOutcome {
   const applying = applyingDir();
   if (fs.existsSync(applying)) {
-    resumeApplying(applying, now);
-    return;
+    return resumeApplying(applying, now);
   }
   const staged = stagedDir();
-  if (!fs.existsSync(staged)) return; // MUST-20.27: the fast path — two stat calls, nothing logged.
-  promoteStagedAndPrepare(staged, applying, now);
+  if (!fs.existsSync(staged)) return 'continue'; // MUST-20.27: the fast path — two stat calls, nothing logged.
+  return promoteStagedAndPrepare(staged, applying, now);
 }
 
 /**
  * MUST-20.20, and the single most important line in this file. ${DATA_DIR} is a bind mount
  * the owner can edit, so every input here is untrusted; and a container that refuses to boot
  * is a worse outcome than a restore that did not happen — the same call MUST-7.6 already
- * makes for the OCR assets. Every failure is recorded and swallowed.
+ * makes for the OCR assets. Every failure is recorded and swallowed — this function itself
+ * never throws.
+ *
+ * MUST-20.23: its RETURN VALUE is part of the boot contract, not just informational.
+ * `'restart'` means a commit is mid-flight and has not exhausted its retries — the caller
+ * (src/instrumentation-node.ts) MUST exit with RESTART_EXIT_CODE instead of calling getDb().
+ * Continuing to boot in that state would let getDb() CREATE a fresh, empty, migrated
+ * budget.db at exactly the path the interrupted commit still needs to write its real payload
+ * to, and the app would then serve (and possibly accept writes into) that empty database
+ * until the next restart overwrites it — silently losing whatever was written in the
+ * meantime. `'continue'` covers every other case: nothing staged, a discarded prepare-phase
+ * death, a completed success, and an exhausted-retries terminal failure — all of which leave
+ * `restore-applying/` gone and a definitive result recorded, so booting onward is safe.
  */
-export function applyStagedRestoreOnBoot(now: Date = new Date()): void {
+export function applyStagedRestoreOnBoot(now: Date = new Date()): BootOutcome {
+  const resultFile = resultPath();
+  const resultMtimeBefore = mtimeOf(resultFile);
   try {
-    runBootRestore(now);
+    return runBootRestore(now);
   } catch (error) {
     console.error('[restore] boot hook failed; continuing boot with the current data', error);
     try {
+      // T1 review minor: if an inner step already wrote a terminal outcome during THIS call
+      // (e.g. the restore itself succeeded and only a best-effort cleanup afterward threw),
+      // resultPath()'s mtime will have moved. Never clobber a true result with a synthesized
+      // failure just because something unrelated threw after it was written.
+      if (mtimeOf(resultFile) !== resultMtimeBefore) return 'continue';
       const candidates = [markerPathOf(applyingDir()), markerPathOf(stagedDir())];
       const found = candidates.find((candidate) => fs.existsSync(candidate));
       const marker = found ? readMarkerLoose(found) : readMarkerLoose('');
@@ -504,6 +733,12 @@ export function applyStagedRestoreOnBoot(now: Date = new Date()): void {
     } catch {
       /* nothing more we can do */
     }
+    // An UNANTICIPATED top-level error (as opposed to a known, caught commit-attempt
+    // failure) does not by itself tell us whether a commit was in flight, and MUST-20.20's
+    // governing principle is that a container which will not boot is worse than a restore
+    // that did not happen — so this path continues boot, unlike the narrower, well-understood
+    // 'restart' signal from runCommitAttempt() above.
+    return 'continue';
   }
 }
 
@@ -559,5 +794,14 @@ export function purgePreRestoreCopies(now: Date = new Date()): number {
   removed += purgeAgedExceptNewest(dataDir, RESTORE_FAILED_RE, now, (name) =>
     fs.rmSync(path.join(dataDir, name), { recursive: true, force: true }),
   );
+  // T1 review minor: a restore-result.json.partial left by a writeJsonAtomically() call that
+  // was killed before its rename — mirrors the existing `.partial` sweep rule for backup
+  // archives (src/lib/backup/archive.ts's PARTIAL_MAX_AGE_MS), same 24h "nothing in flight
+  // could still be writing it" reasoning, not the 30-day safety-copy window above.
+  const partial = path.join(dataDir, 'restore-result.json.partial');
+  if (fs.existsSync(partial) && now.getTime() - mtimeOf(partial) > PARTIAL_MAX_AGE_MS) {
+    fs.rmSync(partial, { force: true });
+    removed += 1;
+  }
   return removed;
 }

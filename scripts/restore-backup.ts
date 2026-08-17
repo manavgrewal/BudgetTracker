@@ -68,7 +68,7 @@ function usage(): void {
   console.log(`Restore a Budget Tracker backup artifact into a data directory.
 
 Usage:
-  node --experimental-strip-types scripts/restore-backup.ts <artifact.tar.gz|artifact.db> [--data-dir /data]
+  node --experimental-strip-types scripts/restore-backup.ts <artifact.tar.gz|artifact.db> [--data-dir /data] [--allow-newer]
 
 Run this with the container STOPPED — restoring under a live SQLite connection is how you
 corrupt a database. See INSTALL.md -> "Restoring from a backup".
@@ -82,7 +82,13 @@ Both artifact shapes are accepted, detected by content, not filename:
   - a v1.1+ ".tar.gz" archive containing budget.db and every receipt file
   - a v1.0.0 bare ".db" SQLite snapshot (receipts/ is left completely untouched)
 
-Data directory: --data-dir, else $DATA_DIR, else /data.`);
+Data directory: --data-dir, else $DATA_DIR, else /data.
+
+--allow-newer: bypass the one-way migration guard, which otherwise refuses a backup carrying
+more applied migrations than this build ships. Use this ONLY when restoring a backup made by
+a newer app version after deliberately rolling the running image back to recover from a bad
+upgrade. It is CLI-only — there is no equivalent flag or setting for the GUI/boot restore
+path, which can never bypass this guard.`);
 }
 
 async function main(): Promise<void> {
@@ -98,7 +104,8 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   const dataDir = resolveDataDir(argv);
-  const result = restoreFromArtifact(artifact, { dataDir });
+  const allowNewerMigrations = argv.includes('--allow-newer');
+  const result = restoreFromArtifact(artifact, { dataDir, allowNewerMigrations });
   console.log(`Restored ${result.kind === 'archive' ? 'archive' : 'database-only backup'} into ${dataDir}`);
   console.log(`  database restored: ${result.databaseRestored}`);
   console.log(`  receipt files restored: ${result.receiptsRestored}`);

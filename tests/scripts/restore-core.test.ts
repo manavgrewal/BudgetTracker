@@ -148,6 +148,18 @@ describe('MUST-20.16: the one-way guard', () => {
     expect(readLocalMigrations(fakeJournal(4))).toEqual({ count: 4, maxWhen: 4000 });
   });
 
+  it('T1 review IMPORTANT 5: a missing local journal throws a written RestoreError, not a raw ENOENT', () => {
+    expect(() => readLocalMigrations(path.join(work, 'does-not-exist'))).toThrowError(RestoreError);
+    expect(() => readLocalMigrations(path.join(work, 'does-not-exist'))).not.toThrowError(/ENOENT/);
+  });
+
+  it('T1 review IMPORTANT 5: an unparseable local journal throws a written RestoreError, not a raw SyntaxError', () => {
+    const folder = path.join(work, 'bad-journal');
+    fs.mkdirSync(path.join(folder, 'meta'), { recursive: true });
+    fs.writeFileSync(path.join(folder, 'meta/_journal.json'), '{not valid json');
+    expect(() => readLocalMigrations(folder)).toThrowError(RestoreError);
+  });
+
   it('reads what a backup has applied', () => {
     expect(readAppliedMigrations(fakeDb('a.db', [1000, 2000]))).toEqual({ count: 2, maxWhen: 2000 });
   });
@@ -190,6 +202,51 @@ describe('MUST-20.16: the one-way guard', () => {
         migrationsFolder: fakeJournal(4, 'extra'),
       }),
     ).toThrowError(RestoreError);
+  });
+});
+
+describe('T1 review IMPORTANT 3 (controller ruling): --allow-newer bypasses the one-way guard, CLI only', () => {
+  it('validateArtifact refuses a newer backup by default but allows it with allowNewerMigrations', () => {
+    const db = fakeDb('newer-bypass.db', [1000, 2000, 3000, 9999]);
+    const local = fakeJournal(4, 'bypass');
+    expect(() => validateArtifact(db, { scratchDir: path.join(work, 's-bypass-off'), migrationsFolder: local })).toThrowError(
+      /newer version of Budget Tracker/i,
+    );
+    const report = validateArtifact(db, {
+      scratchDir: path.join(work, 's-bypass-on'),
+      migrationsFolder: local,
+      allowNewerMigrations: true,
+    });
+    expect(report.appliedMigrations).toBe(4);
+  });
+
+  it('restoreFromArtifact (the CLI path) restores a newer backup only when allowNewerMigrations is set', () => {
+    // restoreFromArtifact() resolves the REAL project drizzle/meta/_journal.json (it takes
+    // no migrationsFolder param), so "newer" here must exceed that real journal's actual max
+    // `when`, not just the small fixture values used against fakeJournal() elsewhere in this
+    // file.
+    const dataDir = makeLiveDataDir();
+    const newerDb = fakeDb('newer-restore.db', [1000, 2000, 3000, 9_999_999_999_999]);
+    expect(() => restoreFromArtifact(newerDb, { dataDir, now: new Date() })).toThrowError(
+      /newer version of Budget Tracker/i,
+    );
+    const result = restoreFromArtifact(newerDb, { dataDir, now: new Date(), allowNewerMigrations: true });
+    expect(result.databaseRestored).toBe(true);
+  });
+
+  it('prepareRestore refuses a newer backup by default even when the caller is the app/boot path', () => {
+    // The app/boot path (src/lib/backup/restore.ts) never passes allowNewerMigrations at
+    // all — this pins that omitting it (the app's only call shape) still enforces the guard.
+    const dataDir = makeLiveDataDir();
+    const newerDb = fakeDb('newer-app.db', [1000, 2000, 3000, 9999]);
+    expect(() =>
+      prepareRestore(newerDb, {
+        dataDir,
+        scratchDir: path.join(work, 's-app-guard'),
+        migrationsFolder: fakeJournal(4, 'app-guard'),
+        now: new Date(),
+      }),
+    ).toThrowError(/newer version of Budget Tracker/i);
   });
 });
 

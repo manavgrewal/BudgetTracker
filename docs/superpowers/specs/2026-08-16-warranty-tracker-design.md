@@ -979,7 +979,7 @@ The tension, stated exactly: the boot hook runs **inside** Next's standalone bun
 
 **MUST-20.6** The existing pin test stays and is extended: `RESTORE_STORED_NAME_RE` must be `.source`-equal to `STORED_NAME_RE` in `src/lib/warranty/receipts.ts`. That equality is now the *only* remaining deliberate duplication in the restore path, and it exists solely because the CLI cannot import `src/`.
 
-**MUST-20.7** `restore-core.ts` splits the existing monolithic `restoreFromArtifact()` into a **prepare / commit pair**, and `restoreFromArtifact()` is re-expressed in terms of them so the CLI's observable behaviour is bit-for-bit what it is today:
+**MUST-20.7** `restore-core.ts` splits the existing monolithic `restoreFromArtifact()` into a **prepare / commit pair**, and `restoreFromArtifact()` is re-expressed in terms of them so the CLI's observable behaviour is bit-for-bit what it is today (amended T1: CLI gains safety copy, preflight, and `--allow-newer`; recorded deviations):
 
 ```ts
 export function prepareRestore(

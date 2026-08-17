@@ -38,10 +38,40 @@ describe('MUST-20.4: the CLI half never imports src/', () => {
 
 describe('MUST-20.5: exactly one bridge from src/ into scripts/', () => {
   it('is src/lib/backup/restore.ts and nothing else', () => {
+    // T1 review minor: a dynamic import('.../scripts/...') is just as much a bridge as a
+    // static `from '.../scripts/...'` — the original regex only caught the latter.
     const importers = srcFiles()
-      .filter((file) => /from\s+['"][^'"]*scripts\//.test(fs.readFileSync(file, 'utf8')))
+      .filter((file) => {
+        const source = fs.readFileSync(file, 'utf8');
+        return /from\s+['"][^'"]*scripts\//.test(source) || /import\(\s*['"][^'"]*scripts\//.test(source);
+      })
       .map((file) => path.relative(root, file).replace(/\\/g, '/'));
     expect(importers).toEqual(['src/lib/backup/restore.ts']);
+  });
+});
+
+describe("MUST-20.4: type-only restore-core exports are always imported with 'type'", () => {
+  it("scripts/restore-backup.ts never bare-imports a type-only restore-core export", () => {
+    // Node's --experimental-strip-types erases `type`-marked specifiers; a BARE import of a
+    // binding that is only ever a type (no runtime export of that name exists) would instead
+    // survive stripping and fail at module-instantiation time with "does not provide an
+    // export named ...". This is a regex proxy for that class of bug, not a type-checker: it
+    // extracts every `export type X` / `export interface X` from restore-core.ts and asserts
+    // that if the bridge file mentions that name at all, it does so with the `type` modifier.
+    const core = read('scripts/restore-core.ts');
+    const bridge = read('scripts/restore-backup.ts');
+    const typeOnlyNames = [
+      ...[...core.matchAll(/^export type (\w+)/gm)].map((m) => m[1]),
+      ...[...core.matchAll(/^export interface (\w+)/gm)].map((m) => m[1]),
+    ];
+    expect(typeOnlyNames.length).toBeGreaterThan(0); // the assertion below is vacuous otherwise
+    for (const name of typeOnlyNames) {
+      const bareReference = new RegExp(`[{,]\\s*${name}\\s*[,}]`);
+      const typedReference = new RegExp(`type\\s+${name}\\b`);
+      if (bareReference.test(bridge)) {
+        expect(typedReference.test(bridge), `${name} must be imported/exported with 'type' in scripts/restore-backup.ts`).toBe(true);
+      }
+    }
   });
 });
 
@@ -49,10 +79,28 @@ describe('MUST-20.26: the restore runs before any database connection', () => {
   it('instrumentation-node calls applyStagedRestoreOnBoot() before getDb()', () => {
     const source = read('src/instrumentation-node.ts');
     const restore = source.indexOf('applyStagedRestoreOnBoot()');
-    const openDb = source.indexOf('getDb()');
+    // lastIndexOf: the actual call, not an earlier mention of "getDb()" inside a comment
+    // explaining WHY the 'restart' branch below must exit before reaching it.
+    const openDb = source.lastIndexOf('getDb()');
     expect(restore).toBeGreaterThan(-1);
     expect(openDb).toBeGreaterThan(-1);
     expect(restore).toBeLessThan(openDb);
+  });
+
+  it("a 'restart' outcome exits before getDb() (MUST-20.23)", () => {
+    // CRITICAL (T1 review): applyStagedRestoreOnBoot()'s 'restart' signal only protects the
+    // boot if the caller actually acts on it. This pins the wiring at the source level: the
+    // exit call must be reachable, must use RESTART_EXIT_CODE, and must appear strictly
+    // between the restore call and getDb().
+    const source = read('src/instrumentation-node.ts');
+    const restoreCall = source.indexOf('applyStagedRestoreOnBoot()');
+    const restartCheck = source.indexOf(`restoreOutcome === 'restart'`);
+    const exitCall = source.indexOf('process.exit(RESTART_EXIT_CODE)');
+    const openDb = source.lastIndexOf('getDb()');
+    expect(restoreCall).toBeGreaterThan(-1);
+    expect(restartCheck).toBeGreaterThan(restoreCall);
+    expect(exitCall).toBeGreaterThan(restartCheck);
+    expect(exitCall).toBeLessThan(openDb);
   });
 
   it('importing @/db/client opens no database', async () => {

@@ -170,7 +170,21 @@ export interface MigrationCounts {
 
 export function readLocalMigrations(migrationsFolder: string): MigrationCounts {
   const journal = path.join(migrationsFolder, 'meta', '_journal.json');
-  const parsed = JSON.parse(fs.readFileSync(journal, 'utf8')) as { entries?: { when?: number }[] };
+  // MUST-20.12: every error that can end up in restore-result.json must be a written,
+  // operator-readable RestoreError, never a raw ENOENT/parse SyntaxError bubbling up from a
+  // filesystem primitive.
+  let raw: string;
+  try {
+    raw = fs.readFileSync(journal, 'utf8');
+  } catch {
+    throw new RestoreError('Could not read the local migrations journal. The installation may be corrupted.');
+  }
+  let parsed: { entries?: { when?: number }[] };
+  try {
+    parsed = JSON.parse(raw) as { entries?: { when?: number }[] };
+  } catch {
+    throw new RestoreError('The local migrations journal is not valid JSON. The installation may be corrupted.');
+  }
   const entries = parsed.entries ?? [];
   return {
     count: entries.length,
@@ -214,6 +228,19 @@ export function assertNotNewerThanCode(databasePath: string, migrationsFolder: s
     );
   }
   return backup.count;
+}
+
+/**
+ * Controller ruling (T1 review): the one-way guard is a real safety property for the GUI/boot
+ * path, which must never be bypassable — but it is also the one thing that can strand an
+ * operator who has deliberately rolled the running image back to recover from a bad upgrade
+ * and now needs their most recent (newer-schema) backup back. `allowNewer` exists ONLY on the
+ * CLI disaster path (scripts/restore-backup.ts's `--allow-newer` flag, default off); the app
+ * side (src/lib/backup/restore.ts) never sets it, so the GUI/boot guard cannot be bypassed.
+ */
+function appliedMigrationsFor(databasePath: string, migrationsFolder: string, allowNewer: boolean | undefined): number {
+  if (allowNewer) return readAppliedMigrations(databasePath).count;
+  return assertNotNewerThanCode(databasePath, migrationsFolder);
 }
 
 const REQUIRED_TABLES = ['users', 'accounts', 'transactions'] as const;
@@ -267,7 +294,7 @@ export interface ValidationReport {
  */
 export function validateArtifact(
   artifactPath: string,
-  opts: { scratchDir: string; migrationsFolder: string },
+  opts: { scratchDir: string; migrationsFolder: string; allowNewerMigrations?: boolean },
 ): ValidationReport {
   let stats: fs.Stats;
   try {
@@ -292,7 +319,7 @@ export function validateArtifact(
       bytes: stats.size,
       sha256: sha256File(artifactPath),
       receiptCount: 0,
-      appliedMigrations: assertNotNewerThanCode(artifactPath, opts.migrationsFolder),
+      appliedMigrations: appliedMigrationsFor(artifactPath, opts.migrationsFolder, opts.allowNewerMigrations),
     };
   }
 
@@ -315,7 +342,7 @@ export function validateArtifact(
       bytes: stats.size,
       sha256: sha256File(artifactPath),
       receiptCount,
-      appliedMigrations: assertNotNewerThanCode(inner, opts.migrationsFolder),
+      appliedMigrations: appliedMigrationsFor(inner, opts.migrationsFolder, opts.allowNewerMigrations),
     };
   } finally {
     fs.rmSync(probe, { recursive: true, force: true });
@@ -323,8 +350,19 @@ export function validateArtifact(
 }
 
 export type RestoreStep =
-  | { op: 'unlink'; path: string }
-  | { op: 'rename'; from: string; to: string; optional?: boolean }
+  | {
+      op: 'rename';
+      from: string;
+      to: string;
+      optional?: boolean;
+      /**
+       * T1 review fix (CRITICAL 1a): true for the two steps whose `from` lives inside this
+       * plan's `work/` scratch directory (the incoming database/receipts). Tagged explicitly
+       * at plan time, not inferred at replay time, because the replay RULE differs by kind —
+       * see runStep()'s docblock.
+       */
+      incoming?: boolean;
+    }
   | { op: 'touch-receipts'; dir: string };
 
 export interface RestorePlan {
@@ -348,7 +386,15 @@ export interface RestorePlan {
  */
 export function prepareRestore(
   artifactPath: string,
-  opts: { dataDir: string; scratchDir: string; migrationsFolder: string; now: Date },
+  opts: {
+    dataDir: string;
+    scratchDir: string;
+    migrationsFolder: string;
+    now: Date;
+    /** CLI disaster-path only (controller ruling) — see appliedMigrationsFor()'s docblock.
+     *  The app/boot path never sets this. */
+    allowNewerMigrations?: boolean;
+  },
 ): RestorePlan {
   const dataDir = path.resolve(opts.dataDir);
   const scratchDir = path.resolve(opts.scratchDir);
@@ -359,6 +405,7 @@ export function prepareRestore(
   const report = validateArtifact(artifactPath, {
     scratchDir: path.join(scratchDir, 'validate-probe'),
     migrationsFolder: opts.migrationsFolder,
+    allowNewerMigrations: opts.allowNewerMigrations,
   });
 
   const workDir = path.join(scratchDir, 'work');
@@ -406,10 +453,10 @@ export function prepareRestore(
   if (report.kind === 'archive') {
     // MUST-12.8: the existing receipts/ is renamed aside, never deleted.
     steps.push({ op: 'rename', from: receiptsTarget, to: path.join(dataDir, `receipts.pre-restore-${stamp}`), optional: true });
-    steps.push({ op: 'rename', from: incomingReceipts, to: receiptsTarget });
-    steps.push({ op: 'rename', from: incomingDb, to: dbTarget });
+    steps.push({ op: 'rename', from: incomingReceipts, to: receiptsTarget, incoming: true });
+    steps.push({ op: 'rename', from: incomingDb, to: dbTarget, incoming: true });
   } else {
-    steps.push({ op: 'rename', from: incomingDb, to: dbTarget });
+    steps.push({ op: 'rename', from: incomingDb, to: dbTarget, incoming: true });
     // MUST-12.9: receipts/ is never renamed, emptied or modified on a bare-db restore —
     // only its files' mtimes are re-armed, and only after the database itself is in place.
     steps.push({ op: 'touch-receipts', dir: receiptsTarget });
@@ -430,37 +477,49 @@ export function prepareRestore(
 /**
  * MUST-20.22. Idempotency is decided from the FILESYSTEM, never from a flag inside the
  * journal: a flag written after the rename has its own crash window, and a flag written
- * before it lies. `to` present → already done, skip (checked FIRST — see below). Else if
- * `from` exists → do it. Neither, and optional → the object never existed (a first-run
- * install has no receipts/). Neither, and required → the plan and the disk disagree, and
- * guessing is how you lose data.
+ * before it lies. Two DIFFERENT replay rules, by step KIND — tagged at plan time
+ * (`step.incoming`), not inferred, because inferring it from path shape is exactly the bug
+ * a T1 review caught:
  *
- * `to` is checked before `from`, not after: a later step in the SAME plan renames something
- * into existence at the exact path an EARLIER step's `from` just vacated (step 1 moves
- * budget.db out of the way; the last step renames the incoming database back to that same
- * path). On a genuinely fresh replay this ordering makes no difference — `to` does not exist
- * yet either way. But calling commitRestore() a second time on an ALREADY fully-applied plan
- * (not a crash-resume, a plain repeat call) must be a no-op: by then `from` exists again
- * (holding the NEW content, repopulated by that later step), and checking `from` first would
- * misread the completed restore as "not started" and redo the rename — moving the just-
- * restored database back onto itself and, on Windows, throwing EPERM when the destination
- * directory (e.g. an already-populated receipts.pre-restore-<stamp>/) cannot be overwritten.
- * Checking `to` first recognises "already done" regardless of what has since moved back into
- * `from`'s place.
+ * - **Safety-copy steps** (current live path → `*.pre-restore-<stamp>`, `incoming` absent):
+ *   `to` is checked FIRST. A later INCOMING step's `to` reuses this step's `from` path (step 1
+ *   moves `budget.db` out of the way; the last step renames the incoming database back to
+ *   that same path), so by the time a full replay reaches here a second time, `from` may have
+ *   been repopulated with the NEW content while this step's own `to` (the safety copy)
+ *   already exists from the first run. Checking `to` first recognises "already done"
+ *   regardless of what has since moved back into `from`'s place — this is what makes
+ *   `commitRestore()` safe to call twice on an already-fully-applied plan.
+ * - **Incoming steps** (`work/*.incoming` → the live path, `incoming: true`): `from` is
+ *   checked FIRST instead, and — this is the fix — a stale `to` is unconditionally CLEARED
+ *   before the rename, never trusted as "already done" on its own. Nothing legitimate can
+ *   recreate an incoming step's `from` once it is gone (it lives under this plan's private
+ *   `work/` scratch dir), so `from` existing is a completely reliable "not done yet" signal.
+ *   The reverse is NOT reliable: if a boot ever continues past a failed, non-exhausted commit
+ *   attempt and reaches `getDb()` (it must not — see src/lib/backup/restore.ts's
+ *   `applyStagedRestoreOnBoot()` contract), `getDb()` will CREATE an empty `budget.db` at
+ *   exactly this step's `to`. A naive `to`-exists-means-done check would then skip installing
+ *   the real payload forever, reporting success over an empty database. Checking `from` first
+ *   and clearing `to` closes that hole even if the "must not reach getDb()" contract is ever
+ *   violated by a caller.
  *
  * touch-receipts always re-touches: it is idempotent by construction (re-stamping an mtime
- * that is already "now" is a no-op in effect), and it deliberately uses the wall clock at the
- * moment the step actually runs — not a value captured at plan time — because the grace
- * window it re-arms (MUST-4.9) is measured from whenever the restore actually completes, not
- * from whenever it was merely staged or prepared.
+ * that is already "now" is a no-op in effect). It uses the `now` passed to commitRestore()
+ * (defaulting to the real wall clock), not a value captured at plan time, because the grace
+ * window it re-arms (MUST-4.9) is measured from whenever the restore actually completes.
  */
-function runStep(step: RestoreStep): number {
-  if (step.op === 'unlink') {
-    fs.rmSync(step.path, { force: true });
-    return 0;
-  }
+function runStep(step: RestoreStep, now: Date): number {
   if (step.op === 'touch-receipts') {
-    return touchReceiptFiles(step.dir, new Date());
+    return touchReceiptFiles(step.dir, now);
+  }
+  if (step.incoming) {
+    if (fs.existsSync(step.from)) {
+      fs.rmSync(step.to, { recursive: true, force: true });
+      fs.renameSync(step.from, step.to);
+      return 0;
+    }
+    if (fs.existsSync(step.to)) return 0;
+    if (step.optional) return 0;
+    throw new RestoreError(`Restore step cannot be replayed: neither ${step.from} nor ${step.to} exists.`);
   }
   if (fs.existsSync(step.to)) return 0;
   if (fs.existsSync(step.from)) {
@@ -478,11 +537,12 @@ function runStep(step: RestoreStep): number {
  * argument that runs AFTER commit.json exists (the point of no return); the half that runs
  * BEFORE it is prepareRestore()'s "writes nothing outside scratchDir" property.
  */
-export function commitRestore(plan: RestorePlan, opts: { dataDir: string }): RestoreResult {
+export function commitRestore(plan: RestorePlan, opts: { dataDir: string; now?: Date }): RestoreResult {
   const dataDir = path.resolve(opts.dataDir);
+  const now = opts.now ?? new Date();
   let receiptsTouched = 0;
   for (const step of plan.steps) {
-    const touched = runStep(step);
+    const touched = runStep(step, now);
     if (step.op === 'touch-receipts') receiptsTouched = touched;
   }
   const dbPath = path.join(dataDir, 'budget.db');
@@ -516,7 +576,14 @@ function defaultMigrationsFolder(): string {
  */
 export function restoreFromArtifact(
   artifactPath: string,
-  opts: { dataDir: string; now?: Date },
+  opts: {
+    dataDir: string;
+    now?: Date;
+    /** CLI-only (`--allow-newer`, controller ruling): bypasses the one-way migration guard
+     *  for an operator who has deliberately rolled the running image back. Never set by the
+     *  app/boot path. */
+    allowNewerMigrations?: boolean;
+  },
 ): RestoreResult {
   const now = opts.now ?? new Date();
   const dataDir = path.resolve(opts.dataDir);
@@ -527,17 +594,12 @@ export function restoreFromArtifact(
       scratchDir: scratch,
       migrationsFolder: defaultMigrationsFolder(),
       now,
+      allowNewerMigrations: opts.allowNewerMigrations,
     });
-    const result = commitRestore(plan, { dataDir });
-    if (plan.kind === 'sqlite') {
-      // restoreFromArtifact's contract (unchanged from v1.1.0) re-arms every existing
-      // receipt's mtime to the `now` the CALLER supplied, not the wall clock at the moment
-      // the step happened to run — tests/scripts/restore-backup.test.ts asserts the exact
-      // value. commitRestore's own touch-receipts step already ran once against the real
-      // clock; this second, final pass is what makes the CLI's `now` override authoritative.
-      result.receiptsTouched = touchReceiptFiles(path.join(dataDir, 'receipts'), now);
-    }
-    return result;
+    // Passing `now` through means commitRestore's single touch-receipts pass uses the exact
+    // value the CALLER supplied (tests/scripts/restore-backup.test.ts asserts an exact mtime)
+    // rather than a second, separate re-touch pass — one touch, one clock, for every caller.
+    return commitRestore(plan, { dataDir, now });
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true });
   }
