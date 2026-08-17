@@ -3,6 +3,7 @@ import path from 'node:path';
 import { purgeOldLoginAttempts } from '@/lib/auth/ratelimit';
 import { purgeExpiredSessions } from '@/lib/auth/session';
 import { purgeStagedFiles } from '@/lib/import/staging';
+import { purgeOldOutboxRows } from '@/lib/notify/outbox';
 import { SETTING_BACKUP_RETENTION, getIntSetting, setIntSetting } from '@/lib/settings';
 import {
   ARCHIVE_NAME_RE,
@@ -129,6 +130,7 @@ export interface SweepResult {
   stagedFilesPurged: number;
   receiptOrphansPurged: number;
   preRestoreCopiesPurged: number;
+  outboxRowsPurged: number;
 }
 
 export function runMaintenanceSweep(at: Date = new Date()): SweepResult {
@@ -142,6 +144,10 @@ export function runMaintenanceSweep(at: Date = new Date()): SweepResult {
     // MUST-20.33: budget.pre-restore-*.db (+ -wal/-shm), receipts.pre-restore-*/ and
     // restore-failed-*/ older than 30 days, except the most recent of each kind.
     preRestoreCopiesPurged: purgePreRestoreCopies(at),
+    // MUST-3.14: sent/failed notification_outbox rows older than OUTBOX_RETENTION_DAYS = 90.
+    // Ninety days comfortably outlives the longest-lived dedup key that could still matter
+    // (a monthly budget key, ~31 days) and keeps the table trivial.
+    outboxRowsPurged: purgeOldOutboxRows(at),
   };
 }
 

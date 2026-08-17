@@ -185,6 +185,7 @@ describe('maintenance sweep', () => {
       stagedFilesPurged: 1,
       receiptOrphansPurged: 0,
       preRestoreCopiesPurged: 0,
+      outboxRowsPurged: 0,
     });
     expect((current!.sqlite.prepare('select count(*) as c from sessions').get() as { c: number }).c).toBe(1);
     expect((current!.sqlite.prepare('select count(*) as c from login_attempts').get() as { c: number }).c).toBe(1);
@@ -232,5 +233,31 @@ describe('runNightlyJob', () => {
     expect(fs.existsSync(result.backup.path)).toBe(true);
     expect(result.sweep.sessionsPurged).toBe(1);
     expect(Array.isArray(result.pruned)).toBe(true);
+  });
+});
+
+describe('MUST-3.14: the sweep prunes delivered notifications', () => {
+  it('reports outboxRowsPurged and leaves pending rows alone', () => {
+    const userId = insertTestUser(current!.db);
+    const old = '2026-01-01T00:00:00.000Z';
+    const recent = '2026-08-17T00:00:00.000Z';
+    const insert = (key: string, status: string, createdAt: string) =>
+      current!.sqlite
+        .prepare(
+          `insert into notification_outbox (user_id, channel, event_id, dedup_key, subject, body, status, next_attempt_at, created_at)
+           values (?, 'email', 'coming_due', ?, 's', 'b', ?, ?, ?)`,
+        )
+        .run(userId, key, status, createdAt, createdAt);
+    insert('old-sent', 'sent', old);
+    insert('old-failed', 'failed', old);
+    insert('old-pending', 'pending', old);
+    insert('new-sent', 'sent', recent);
+
+    const result = runMaintenanceSweep(new Date('2026-08-17T12:00:00Z'));
+    expect(result.outboxRowsPurged).toBe(2);
+    const keys = (
+      current!.sqlite.prepare('select dedup_key from notification_outbox order by dedup_key').all() as { dedup_key: string }[]
+    ).map((r) => r.dedup_key);
+    expect(keys).toEqual(['new-sent', 'old-pending']);
   });
 });
