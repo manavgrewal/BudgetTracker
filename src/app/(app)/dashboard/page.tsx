@@ -42,11 +42,11 @@ export default async function DashboardPage({
   const reviewCount = reviewQueueCount();
   const people = listUsers().filter((u) => u.isActive);
   // Nothing can be imported until at least one account exists, and a fresh
-  // install has none — so say so here rather than letting the Import page
+  // install has none. Say so here rather than letting the Import page
   // dead-end.
   const hasAccounts = listAccounts().length > 0;
 
-  // MUST-10.6: the widget respects the dashboard's existing person switcher — Household
+  // MUST-10.6: the widget respects the dashboard's existing person switcher. Household
   // shows every item, a selected person shows only items they own.
   const today = todayIso();
   const expiring = expiringSoonItems(EXPIRING_WIDGET_LIMIT, scopeUserId, today);

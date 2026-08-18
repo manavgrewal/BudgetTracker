@@ -5,9 +5,9 @@ import { assertWatchtowerUrl } from '@/lib/update/egress';
 /**
  * MUST-7.1: the app never touches the Docker socket, never shells out, never writes a
  * compose file and never restarts itself. It sends ONE HTTP request to the Watchtower
- * companion container on the compose network, and Watchtower — which already holds the
+ * companion container on the compose network, and Watchtower (which already holds the
  * socket, already carries the label scope, and is already the thing that updates this app on
- * a prebuilt-image install — does the rest.
+ * a prebuilt-image install) does the rest.
  *
  * The method is GET because that is the shape Watchtower's own documentation specifies for
  * /v1/update: the endpoint's contract is Watchtower's to define, not ours. Any 2xx is
@@ -42,7 +42,7 @@ export class WatchtowerError extends Error {
 
 /**
  * Below this, scrubSecrets(['a']) would shred every occurrence of the letter "a" in any
- * error string into "[redacted]" — a token this short is unusable as a secret in the first
+ * error string into "[redacted]". A token this short is unusable as a secret in the first
  * place, so it is treated as if WATCHTOWER_TOKEN were never set at all (same fallback path
  * as "absent"), rather than accepted and then silently mangling every future error message.
  */
@@ -80,7 +80,7 @@ function pair(source: Partial<NodeJS.ProcessEnv> | undefined): { url: string; to
 
 /**
  * MUST-7.8 / MUST-8.7: null on a build-from-source install, a bare `npm start`, or a pull
- * install whose compose predates §16.1 — and null, too, when the URL fails the guard, which
+ * install whose compose predates §16.1, and null, too, when the URL fails the guard, which
  * puts that install on the same fallback path with a reportable reason. Never a 500, never a
  * silent no-op.
  */
@@ -108,7 +108,7 @@ export function watchtowerConfigError(source?: Partial<NodeJS.ProcessEnv>): stri
 }
 
 /**
- * MUST-7.5: Watchtower's /v1/update handler performs the update and THEN responds — and the
+ * MUST-7.5: Watchtower's /v1/update handler performs the update and THEN responds, and the
  * container being replaced is this one. It is therefore entirely normal for the connection
  * to die before a response arrives: the app has just asked something to kill it. Treating
  * that as a failure would show a red error on the last screen a person sees before the app
@@ -117,14 +117,14 @@ export function watchtowerConfigError(source?: Partial<NodeJS.ProcessEnv>): stri
  * undici's global fetch never surfaces a socket-level error at the top level: a connection
  * reset or destroyed mid-request comes back as a top-level `TypeError('fetch failed')`, with
  * the actual OS-level error (ECONNRESET, EPIPE, ...) nested one or more levels down in
- * `.cause` — sometimes several layers deep. So this walks the `.cause` chain looking for a
+ * `.cause`, sometimes several layers deep. So this walks the `.cause` chain looking for a
  * recognizable code/name/message at ANY level, not just the top one.
  *
  * A second, deliberately separate check catches the case the walk can't resolve: a
  * top-level `TypeError('fetch failed')` whose cause carries nothing recognizable (e.g. the
  * far side closing the socket cleanly with no data written, which undici reports as a
  * generic "other side closed" rather than a named OS error). By the time this function runs,
- * the request has already been written to a URL that passed assertWatchtowerUrl — so the
+ * the request has already been written to a URL that passed assertWatchtowerUrl, so the
  * ambiguity resolves to accepted-unconfirmed rather than a hard failure, and the boot
  * reconciler is what actually confirms whether the update landed.
  */

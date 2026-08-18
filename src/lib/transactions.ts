@@ -101,7 +101,7 @@ function baseQuery() {
  * SQL LIKE gives % and _ wildcard meaning, so a user searching for "50%" was matching
  * "50" followed by anything, and "_" matched any single character. Neither is a security
  * hole (the needle is still a bound parameter), but both are silently wrong results.
- * Escaping them — and the escape character itself, first — with an explicit ESCAPE clause
+ * Escaping them (and the escape character itself, first) with an explicit ESCAPE clause
  * makes the search literal, which is what a search box in a finance app should be.
  */
 const LIKE_ESCAPE = '\\';
@@ -216,7 +216,7 @@ export function createManualTransaction(input: {
     .returning({ id: transactions.id })
     .get();
 
-  // The engine runs on manual entries too, always — a hand-typed "TD VISA PAYMENT" is
+  // The engine runs on manual entries too, always. A hand-typed "TD VISA PAYMENT" is
   // just as much a transfer as an imported one, and rename rules should apply to the
   // display name either way. Previously a manual entry that arrived WITH a category
   // skipped the engine entirely, so it could never be flagged as a transfer.
@@ -225,7 +225,7 @@ export function createManualTransaction(input: {
   // uncategorized or Bayes-guessed, so it has to see this row before confirmCategory
   // stamps source='manual' on it. confirmCategory then overwrites whatever the engine
   // guessed with the user's explicit choice, and never touches is_transfer or the
-  // display columns — so the manual category survives and the transfer flag sticks.
+  // display columns, so the manual category survives and the transfer flag sticks.
   runEngine([row.id]);
   if (parsed.categoryId !== null) {
     confirmCategory({ transactionId: row.id, categoryId: parsed.categoryId, userId: input.userId });
@@ -240,7 +240,7 @@ export function updateTransactionNotes(id: number, notes: string | null): void {
   getDb().update(transactions).set({ notes, updatedAt: nowIso() }).where(eq(transactions.id, id)).run();
 }
 
-/** Attribution edits never touch created_by (who entered it) — only who spent it. */
+/** Attribution edits never touch created_by (who entered it). Only who spent it. */
 export function bulkSetAttribution(ids: number[], attributedUserId: number | null): number {
   if (ids.length === 0) return 0;
   const result = getDb()

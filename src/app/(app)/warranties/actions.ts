@@ -43,7 +43,7 @@ export interface WarrantyActionState {
 
 /**
  * CROSS_ORIGIN_ERROR is deliberately NOT re-exported here: Next 15 allows only async
- * function exports from a 'use server' file — `next build` fails on any other export from a
+ * function exports from a 'use server' file. `next build` fails on any other export from a
  * module carrying this directive, and npm test/typecheck cannot catch that class of error.
  * The canonical string lives in @/lib/auth/csrf (a plain module) and is imported directly by
  * both this file and its test.
@@ -53,7 +53,7 @@ export interface WarrantyActionState {
  * Warranty items are household-shared (§1.3): every signed-in member may create, edit or
  * delete any item or receipt. owner_user_id is ATTRIBUTION, not access control, so there is
  * deliberately no requireAdmin() anywhere in this file. Changing an item's type is likewise
- * not an admin action (type-deltas.md T8 / MUST-19.15) — only the type LIST is
+ * not an admin action (type-deltas.md T8 / MUST-19.15). Only the type LIST is
  * admin-maintained (settings/item-types).
  */
 
@@ -73,7 +73,7 @@ const UPLOAD_INVALID_ERROR = 'That upload is no longer valid — please choose t
 
 /**
  * IMPORTANT 2: `JSON.parse` throws a raw SyntaxError ("Unexpected token…") and
- * `stagedSchema.parse` throws a ZodError whose `.message` is a JSON dump — neither is fit to
+ * `stagedSchema.parse` throws a ZodError whose `.message` is a JSON dump. Neither is fit to
  * show a user. Both collapse to the same written message here; safeParse (not parse) means
  * a malformed payload never reaches messageOf()/failure()'s generic "is this a real Error"
  * fallback with the wrong text attached.
@@ -174,7 +174,7 @@ function readOptionalId(formData: FormData, key: string): number | null {
 }
 
 /**
- * Delta T8 (type-deltas.md): '' or 'none' -> null (unclassified, a legitimate value — there
+ * Delta T8 (type-deltas.md): '' or 'none' -> null (unclassified, a legitimate value; there
  * is no Uncategorised row); anything else must be a positive integer. Existence against
  * warranty_item_types is checked separately, AFTER this shape check, so a bad id reads as
  * "That item type no longer exists." rather than a generic validation message.
@@ -235,7 +235,7 @@ function readItemInput(
 }
 
 /**
- * Delta T8: the type must still exist at write time — a race where an admin deletes an
+ * Delta T8: the type must still exist at write time: a race where an admin deletes an
  * unused type while this form is open. Returning early here (instead of letting the FK
  * throw) means the caller reads a plain readable message instead of a raw SQLite error.
  */
@@ -261,7 +261,7 @@ function messageOf(error: unknown, fallback: string): string {
 
 /**
  * IMPORTANT 2c: ownerUserId and transactionId are only shape-checked by zod (positive
- * integer) — neither is confirmed to exist before the write, so a tampered value (or a
+ * integer). Neither is confirmed to exist before the write, so a tampered value (or a
  * genuine race, e.g. the owner's account being deleted between page load and submit) reaches
  * the database and fails its FK constraint. Translate that raw SqliteError into the same
  * kind of written message a precheck would have produced, instead of leaking
@@ -355,7 +355,7 @@ export async function deleteWarrantyAction(
   const id = idField.safeParse(formData.get('itemId'));
   if (!id.success) return { error: 'Invalid request.' };
 
-  // M5: errors as return values, never thrown to the client — same contract as every other
+  // M5: errors as return values, never thrown to the client. Same contract as every other
   // action, even though deleteWarrantyItem's own failure modes are narrow today.
   try {
     if (!deleteWarrantyItem(id.data)) return { error: 'That item no longer exists.' };
@@ -384,7 +384,7 @@ export async function attachReceiptsAction(
   try {
     const staged = readStaged(formData);
     attached = attachStagedReceipts(id.data, staged);
-    // MUST-6.9: a duplicate digest on the same item WARNS; it never blocks — a duplicate is
+    // MUST-6.9: a duplicate digest on the same item WARNS; it never blocks. A duplicate is
     // a user judgement, not an error. Two rows sharing a digest is exactly that case.
     for (const receiptId of attached) {
       const row = getWarrantyReceipt(receiptId);
@@ -437,7 +437,7 @@ export async function reRunOcrAction(
   const receipt = getWarrantyReceipt(id.data);
   if (receipt === null) return { error: 'That receipt no longer exists.' };
 
-  // MUST-7.16: idempotent and safe to click repeatedly — a second click on a claimed row
+  // MUST-7.16: idempotent and safe to click repeatedly. A second click on a claimed row
   // is a no-op inside enqueueOcrJob(). M5: errors as return values, never thrown.
   try {
     resetReceiptForReOcr(id.data);

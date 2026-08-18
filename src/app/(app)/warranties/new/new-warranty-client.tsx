@@ -46,7 +46,7 @@ export function NewWarrantyClient({
   prefill,
 }: {
   people: { id: number; name: string }[];
-  /** Delta T9: an optional type dropdown -- "— none —" plus listItemTypes(). */
+  /** Delta T9: an optional type dropdown, with a blank "none" choice, plus listItemTypes(). */
   types: { id: number; name: string; kind: ItemKind }[];
   currentUserId: number;
   today: string;

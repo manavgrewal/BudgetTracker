@@ -15,7 +15,7 @@ export function LoansCard({ loans, totalOwedCents }: { loans: LoanSummary[]; tot
   const shown = loans.filter((loan) => loan.currentBalanceCents !== null || loan.principalCents !== null);
   if (shown.length === 0) return null;
 
-  // Review fix-round: a listed loan with a NULL balance renders '—' below rather than being
+  // Review fix-round: a listed loan with a NULL balance renders a dash placeholder below rather than being
   // silently folded into totalOwedCents at 0 -- the hint says so next to the figure, so the
   // total doesn't read as "everything" when it is actually "everything we're tracking".
   const hasUntrackedBalance = shown.some((loan) => loan.currentBalanceCents === null);

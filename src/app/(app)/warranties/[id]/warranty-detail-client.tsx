@@ -292,7 +292,7 @@ export function WarrantyDetailClient({
                 {billingAllowedForKind(item.kind) ? (
                   // review fix: cycle and amount are validated as a pair at the schema boundary
                   // (BILLING_PAIR_ERROR) -- render the value only when BOTH are present. Rendering
-                  // one alone either lies ("— / month", cycle set but no amount) or silently drops
+                  // one alone either lies (a blank placeholder next to "/ month", cycle set but no amount) or silently drops
                   // a value the member entered (amount set but no cycle shown) -- exactly the kind
                   // of blank-reads-as-broken defect task B set out to eliminate for the end date.
                   // F5 fix-round: this is now the ONLY billing/payment row on the page -- it used
@@ -481,7 +481,7 @@ export function WarrantyDetailClient({
                     {!receipt.fileExists ? (
                       <span className="text-subtle">file missing</span>
                     ) : receipt.mime === 'application/pdf' ? (
-                      // MUST-5.3: PDFs are LINKED, never embedded — an inline same-origin PDF
+                      // MUST-5.3: PDFs are LINKED, never embedded. An inline same-origin PDF
                       // runs the viewer's JavaScript in our origin.
                       <a href={`/api/warranties/receipts/${receipt.id}`} className="text-accent-text underline underline-offset-2">Download PDF</a>
                     ) : (

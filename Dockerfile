@@ -78,7 +78,7 @@ COPY --from=builder --chown=node:node /app/node_modules/@phc ./node_modules/@phc
 
 # Offline OCR assets. Next's standalone output tracing cannot know that a .wasm blob, a
 # worker script loaded by string path, and a .traineddata.gz under vendor/ are runtime
-# inputs — the same reason better-sqlite3, drizzle/ and CHANGELOG.md are copied explicitly.
+# inputs, the same reason better-sqlite3, drizzle/ and CHANGELOG.md are copied explicitly.
 # If any of these is missing at runtime, tesseract.js falls back to its CDN, which is the
 # exact failure an offline LAN install must never hit (spec §7.2, §7.4).
 COPY --from=builder --chown=node:node /app/vendor ./vendor

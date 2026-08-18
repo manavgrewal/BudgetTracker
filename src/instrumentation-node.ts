@@ -15,16 +15,16 @@ import { assertOcrAssets, resolveOcrAssets } from '@/lib/warranty/ocr/assets';
 // MUST-20.26: FIRST, before anything can open the database. This ordering is load-bearing
 // and tests/ops/restore-seams.test.ts pins it: src/db/client.ts builds its singleton lazily
 // inside ensureInstance(), so the import above is inert, and Next awaits register() before
-// the server accepts a request — so no route module can beat this to the database either.
+// the server accepts a request, so no route module can beat this to the database either.
 const restoreOutcome = applyStagedRestoreOnBoot();
 
 // MUST-20.23 (T1 review, CRITICAL): a 'restart' outcome means a commit was interrupted
-// mid-step and has NOT exhausted its retry cap — commit.json still exists and the live
+// mid-step and has NOT exhausted its retry cap. commit.json still exists and the live
 // budget.db may currently be missing or mid-transition. getDb() would CREATE a fresh, empty,
 // migrated database at exactly the path the interrupted commit still needs to finish writing
 // to, and the app would serve (and could accept writes into) that empty database until the
-// next restart silently overwrote it. Exiting here instead — the same RESTART_EXIT_CODE and
-// restart-policy path already used after a GUI-staged restore (MUST-20.28) — lets the next
+// next restart silently overwrote it. Exiting here instead (the same RESTART_EXIT_CODE and
+// restart-policy path already used after a GUI-staged restore, MUST-20.28) lets the next
 // boot resume the same commit.json under the same attempt cap, and getDb() below is never
 // reached while a commit might still be in flight.
 if (restoreOutcome === 'restart') {
@@ -32,11 +32,11 @@ if (restoreOutcome === 'restart') {
   process.exit(RESTART_EXIT_CODE);
 }
 
-// Opening the database here also applies the pragmas and runs migrations on boot — which is
+// Opening the database here also applies the pragmas and runs migrations on boot. This is
 // how a restored older backup migrates forward (MUST-20.24).
 getDb();
 
-// MUST-7.6: one line, either way. Missing assets DO NOT crash the app — receipts still
+// MUST-7.6: one line, either way. Missing assets DO NOT crash the app. Receipts still
 // upload and OCR jobs simply record 'failed' with "OCR engine unavailable on this
 // install." A warranty tracker without OCR is still a warranty tracker; a container that
 // refuses to boot is not.

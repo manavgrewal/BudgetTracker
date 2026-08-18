@@ -6,8 +6,8 @@
  * update, so the shared resource is the install itself: two admins pressing Check now are
  * contending for the same thing.
  *
- * MUST-10.10: APPLY_MAX = 3 per hour is not a security boundary — an admin can already
- * restart the container — it bounds a stuck form and a double-click storm against a
+ * MUST-10.10: APPLY_MAX = 3 per hour is not a security boundary. An admin can already
+ * restart the container. It bounds a stuck form and a double-click storm against a
  * container that is mid-replacement.
  */
 export const CHECK_NOW_WINDOW_MS = 10 * 60_000;
@@ -53,7 +53,7 @@ function verdict(stamps: number[], now: number, windowMs: number): RateVerdict {
  * MUST-10.9: a token is consumed only once the caller has passed every configuration guard,
  * so pressing Update now on an install with no Watchtower cannot burn apply quota while
  * doing nothing. The ordering is the caller's responsibility and every call site below
- * carries a comment saying so — this is the same discipline notify's runTest establishes.
+ * carries a comment saying so. This is the same discipline notify's runTest establishes.
  */
 function take(stamps: number[], now: number, windowMs: number, max: number): RateVerdict {
   prune(stamps, now, windowMs);

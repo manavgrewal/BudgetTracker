@@ -21,12 +21,12 @@ export const SEARCH_SYNTAX_ERROR = "That search couldn't be understood — try d
 export { WARRANTY_SORTS, isWarrantySort, type WarrantySort };
 
 /**
- * True for every ASCII control character: code points 0 through 31 (the C0 set — NUL, tab,
+ * True for every ASCII control character: code points 0 through 31 (the C0 set: NUL, tab,
  * newline, escape, unit separator, and so on) plus 127 (DEL). Deliberately built from plain
  * numeric comparisons against hex integer literals, never a regex escape sequence: escape
  * syntax written into this exact spot has, more than once, been corrupted in transit into a
  * literal raw control byte sitting in the source file instead of the intended two-character
- * escape text — this formulation has no escape syntax anywhere for anything to mis-decode.
+ * escape text. This formulation has no escape syntax anywhere for anything to mis-decode.
  */
 function isControlCodePoint(codePoint: number): boolean {
   return codePoint <= 0x1f || codePoint === 0x7f;
@@ -42,7 +42,7 @@ function stripControlChars(value: string): string {
 }
 
 /**
- * MUST-9.1 — FTS5 injection defence. FTS5 has its own query language: bare AND/OR/NOT/NEAR,
+ * MUST-9.1: FTS5 injection defence. FTS5 has its own query language: bare AND/OR/NOT/NEAR,
  * caret, colon, hyphen, star, parentheses and the double-quote character are all operators,
  * and an unbalanced quote is a syntax error that would otherwise surface as a 500 on a
  * perfectly ordinary search for `26" monitor`.
@@ -51,16 +51,16 @@ function stripControlChars(value: string): string {
  *      plain space FIRST. None of them are whitespace to JS regex's `\s`, so left alone one
  *      survives term-splitting untouched and gets wrapped as its own literal quoted phrase;
  *      SQLite's FTS5 tokenizer then raises a genuine driver-level syntax error for that
- *      phrase (verified directly against better-sqlite3) — without this scrub, a request
+ *      phrase (verified directly against better-sqlite3). Without this scrub, a request
  *      like GET /warranties?q=%00 would depend entirely on the safety net below instead of
  *      never producing a malformed query in the first place.
  *   1. trim, cap the raw input at 200 characters, split on whitespace
  *   2. drop empty terms; nothing left -> null (the caller omits MATCH entirely)
- *   3. wrap each term in double quotes, DOUBLING any internal double quote — a quoted
- *      string in FTS5 is a literal phrase, so every operator inside it loses its meaning
+ *   3. wrap each term in double quotes, DOUBLING any internal double quote (a quoted
+ *      string in FTS5 is a literal phrase, so every operator inside it loses its meaning)
  *   4. append `*` to the LAST term only (type-ahead prefix matching), but only when that
  *      term still contains a letter or a digit: a lone double-quote character escapes to
- *      four double-quotes back to back — an empty phrase, and not a query worth
+ *      four double-quotes back to back: an empty phrase, and not a query worth
  *      constructing (spec §9.1's last table row)
  *   5. join with a single space (FTS5's implicit AND)
  *   6. cap at 20 terms
@@ -251,13 +251,13 @@ export function searchWarrantyItems(filter: WarrantySearchFilter = {}): Warranty
     };
   } catch (error) {
     // IMPORTANT 2 (structural safety net, not string-matching): SQLite's FTS5 raises many
-    // different English messages for what is fundamentally the same class of problem —
+    // different English messages for what is fundamentally the same class of problem:
     // "unterminated string", "fts5: syntax error near ...", "no such column", "expected
     // integer", "unknown special query", and so on, and the exact wording is not a
     // contract this code should depend on keeping in sync with. What IS a stable contract
     // is the driver's own `.code`: every one of those cases surfaces as
     // `SQLITE_ERROR` (verified directly against better-sqlite3 for each). Scoped to
-    // `match !== null` — a SQLITE_ERROR that has nothing to do with the MATCH clause (a
+    // `match !== null`: a SQLITE_ERROR that has nothing to do with the MATCH clause (a
     // genuine bug elsewhere in this function) must still surface as a real error rather
     // than being swallowed as "that search couldn't be understood".
     const code = (error as { code?: string }).code;
@@ -269,7 +269,7 @@ export function searchWarrantyItems(filter: WarrantySearchFilter = {}): Warranty
 }
 
 /**
- * MUST-10.5: the dashboard widget — status 'expiring', soonest first, top N. `limit` is the
+ * MUST-10.5: the dashboard widget: status 'expiring', soonest first, top N. `limit` is the
  * caller's own cap (e.g. 5 for the widget); it is applied client-side, after
  * searchWarrantyItems() has already paged at WARRANTY_PAGE_SIZE, so `limit` must stay at or
  * under WARRANTY_PAGE_SIZE for this function to see enough rows to slice from.

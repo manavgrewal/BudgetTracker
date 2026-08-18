@@ -50,7 +50,7 @@ export default async function TransactionsPage({
       // Archived categories are included here (not just listCategories()) so a row whose
       // category was later archived can still render its real name on the per-row select
       // and keep it as the initial selection instead of silently falling back to
-      // "Uncategorized" — see TransactionsClient's activeCategories split.
+      // "Uncategorized". See TransactionsClient's activeCategories split.
       categories={listCategories({ includeArchived: true }).map((c) => ({ id: c.id, name: c.name, parentId: c.parentId, isArchived: c.isArchived }))}
       people={listUsers().map((u) => ({ id: u.id, name: u.name }))}
       today={todayIso()}

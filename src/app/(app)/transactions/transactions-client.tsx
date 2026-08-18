@@ -310,7 +310,7 @@ export function TransactionsClient({
                 </td>
                 <td className="whitespace-nowrap">
                   {/* MUST-11.1 / MUST-11.2: a purchase can carry a warranty; a transfer cannot.
-                      MUST-11.3: the URL carries ONLY the id — the add page derives the date,
+                      MUST-11.3: the URL carries ONLY the id. The add page derives the date,
                       the abs() price and the vendor from the transaction row server-side. */}
                   {row.isTransfer ? null : (
                     <Link href={`/warranties/new?transactionId=${row.id}`} className="btn btn--ghost btn--sm text-xs text-accent-text">

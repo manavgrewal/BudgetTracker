@@ -36,7 +36,7 @@ export default async function WarrantyDetailPage({ params }: { params: Promise<{
       today={today}
       linkedTransaction={txn ? { id: txn.id, date: txn.date, description: displayNameOf(txn) } : null}
       /* §10.4: never render a dead link. ON DELETE SET NULL leaves no durable marker that
-         a link USED to exist, so the only detectable case is a dangling id — which is what
+         a link USED to exist, so the only detectable case is a dangling id, which is what
          a database restored with foreign keys off would produce. See the plan's
          "Spec ambiguities resolved" note. */
       linkRemoved={item.transactionId !== null && txn === null}

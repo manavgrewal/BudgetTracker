@@ -4,7 +4,7 @@ import { APP_VERSION } from '@/lib/version';
 /**
  * MUST-3.1: the update feature adds NO table, NO column and NO migration. Every byte of
  * its state is a key/value row in the existing `settings` table, and this module owns every
- * one of those strings (MUST-3.2) — no other module writes a key beginning `update.`.
+ * one of those strings (MUST-3.2): no other module writes a key beginning `update.`.
  *
  * That is not a convenience. It is what makes MUST-1.1 structurally true rather than
  * conventionally true: there is no column with a default, no seeded row, no
@@ -107,7 +107,7 @@ export function readUpdateState(): UpdateState {
 
 /**
  * MUST-3.4: turning the feature OFF deletes every `update.` key except the flag itself.
- * Off means off, and re-enabling starts clean — no cached remote version to render, no
+ * Off means off, and re-enabling starts clean: no cached remote version to render, no
  * stale error banner, and no dismissed-version memory that would silently swallow the next
  * notice if it were turned back on.
  */
@@ -174,11 +174,11 @@ export function recordApplyOutcome(input: { at: Date; error?: string | null }): 
  * MUST-5.9: suppresses only the card's prominence, never the check and never the dedup.
  *
  * Fix round finding 3: routed through writeOrDelete rather than a bare setSetting, so
- * dismissVersion('') — the "Show again" un-dismiss call — DELETES the key instead of writing
+ * dismissVersion('') (the "Show again" un-dismiss call) DELETES the key instead of writing
  * an empty-string row. getSetting() returns exactly what was stored, never coercing '' to
- * null, so a bare setSetting('') would have left readUpdateState().dismissedVersion as '' —
- * a falsy-but-not-null value the About panel and Task 8's card logic would have had to guard
- * against separately, and easily wouldn't.
+ * null, so a bare setSetting('') would have left readUpdateState().dismissedVersion as ''.
+ * That is a falsy-but-not-null value the About panel and Task 8's card logic would have had
+ * to guard against separately, and easily wouldn't have.
  */
 export function dismissVersion(version: string): void {
   writeOrDelete(KEY_DISMISSED_VERSION, version);

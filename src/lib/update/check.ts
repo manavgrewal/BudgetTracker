@@ -32,7 +32,7 @@ export interface UpdateCheckResult {
 /**
  * Fix round finding 4 (round 3): applyUpdate() is the one choke point every triggerUpdate()
  * call passes through, so its return shape carries the APPLY bucket's verdict rather than a
- * bare TriggerOutcome — 'rate-limited' is a normal, distinguishable outcome, not a throw, and
+ * bare TriggerOutcome. 'rate-limited' is a normal, distinguishable outcome, not a throw, and
  * each of the two callers below folds it into whatever shape they already return for "did not
  * apply this time" (the internal auto-apply path treats it like Watchtower being absent; the
  * button action surfaces the same "Too many attempts" sentence it always has).
@@ -44,8 +44,8 @@ export interface ApplyOutcome {
 }
 
 /**
- * MUST-5.5: compares against `update.last_checked_at`, which is written on every attempt —
- * success or failure — so a container in a crash-restart loop makes at most one GitHub
+ * MUST-5.5: compares against `update.last_checked_at`, which is written on every attempt
+ * (success or failure), so a container in a crash-restart loop makes at most one GitHub
  * request per 24 hours, not one per boot, and a repeatedly failing check cannot become a
  * retry storm.
  */
@@ -63,7 +63,7 @@ function scrub(text: string): string {
 
 /**
  * MUST-7.4: the ordering is load-bearing.
- *   1. recordApplyRequested — written and COMMITTED before the fetch, because the request
+ *   1. recordApplyRequested: written and COMMITTED before the fetch, because the request
  *      that follows may kill this process. reconcileApplyOnBoot then closes the loop.
  *   2..7 live in triggerUpdate (assert, fetch, classify the outcome).
  *
@@ -76,7 +76,7 @@ export async function applyUpdate(input: { version: string; now?: Date }): Promi
   if (config === null) throw new WatchtowerError('This install has no Watchtower companion to ask.', { permanent: true });
 
   // Fix round finding 4 (round 3): the APPLY bucket is consumed HERE, inside the one function
-  // every triggerUpdate() call passes through — not at each caller's site. Two call-site
+  // every triggerUpdate() call passes through, not at each caller's site. Two call-site
   // duplicates (one here in this file's own auto-apply branch, one in applyUpdateAction) were
   // functionally equivalent but structurally wrong: a future third caller of applyUpdate()
   // would have bypassed both and reached Watchtower unbounded.
@@ -145,7 +145,7 @@ export async function runUpdateCheck(input: { now?: Date; manual?: boolean }): P
   if (severity === 'major') autoApply = false;
 
   // Fix round finding 4: the APPLY bucket must bound EVERY triggerUpdate call, not only the
-  // one applyUpdateAction's Apply button gates — this is the path a spammed Check-now button
+  // one applyUpdateAction's Apply button gates: this is the path a spammed Check-now button
   // reaches too, and without a token check somewhere it drives an unbounded run of real
   // /v1/update requests against a container that is (by definition, once the first one lands)
   // already mid-replacement. That check now lives inside applyUpdate() itself (round 3), so a
@@ -179,7 +179,7 @@ export async function runUpdateCheck(input: { now?: Date; manual?: boolean }): P
 }
 
 /**
- * MUST-6.2: this — one enqueue() plus one kickOutbox() — is the third and last file the
+ * MUST-6.2: this (one enqueue() plus one kickOutbox()) is the third and last file the
  * new event touches. No migration. No src/db/schema.ts change. No settings-UI change,
  * because the toggle matrix is generated from the registry.
  *

@@ -87,7 +87,7 @@ export async function setCategoryAction(_prev: ActionState, formData: FormData):
 
 // '' means "household/unattributed"; anything else must be a positive integer user id.
 // Number(raw) on a garbage string (e.g. a tampered <select> value) is NaN, which must
-// never reach attributed_user_id — hence the digits-only check before coercing.
+// never reach attributed_user_id, hence the digits-only check before coercing.
 const attributedUserIdField = z.string().trim().refine((v) => v === '' || /^\d+$/.test(v), { message: 'Invalid person selection.' });
 
 export async function setAttributionAction(_prev: ActionState, formData: FormData): Promise<ActionState> {

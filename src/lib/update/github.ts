@@ -6,14 +6,14 @@ import { APP_VERSION } from '@/lib/version';
 
 /**
  * MUST-4.1: the check compares APP_VERSION with the latest published GitHub release of the
- * PUBLIC repository VibeLogicCode/BudgetTracker. No authentication token is ever sent — an
+ * PUBLIC repository VibeLogicCode/BudgetTracker. No authentication token is ever sent. An
  * unauthenticated api.github.com caller gets 60 requests per hour per source IP, and this
  * feature's ceiling is one scheduled check per day plus a rate-limited button, so the quota
  * is never a design consideration.
  *
  * MUST-2.2: server-only. Never imported, directly or transitively, from a *-client.tsx.
  *
- * There are exactly two `fetch(` call sites in this file — one per endpoint, each with
+ * There are exactly two `fetch(` call sites in this file, one per endpoint, each with
  * `assertGithubUrl()` on the line immediately above it (MUST-8.5). They are deliberately not
  * folded into a shared request helper: that adjacency is the property a refactor loses first,
  * and Task 14's scanner checks for it at the source level.
@@ -58,7 +58,7 @@ function headers(): Record<string, string> {
     Accept: 'application/vnd.github+json',
     'X-GitHub-Api-Version': '2022-11-28',
     // GitHub requires a User-Agent; ours names the product and its version and nothing
-    // about the install — not its hostname, not its data directory, not its user count.
+    // about the install: not its hostname, not its data directory, not its user count.
     'User-Agent': `BudgetTracker/${APP_VERSION}`,
   };
 }
@@ -84,8 +84,8 @@ async function readJson(response: Response): Promise<unknown> {
 
 /**
  * MUST-4.2 endpoint 1. MUST-4.6: the ONLY fields read are tag_name and published_at. draft
- * and prerelease releases are refused by the endpoint itself — /releases/latest excludes
- * both — and a tag_name that fails parseSemver raises a PERMANENT error rather than being
+ * and prerelease releases are refused by the endpoint itself (/releases/latest excludes
+ * both), and a tag_name that fails parseSemver raises a PERMANENT error rather than being
  * guessed at, which is what keeps an unclassifiable version away from an auto-apply
  * decision (MUST-4.10).
  */
@@ -126,7 +126,7 @@ export async function fetchLatestRelease(): Promise<RemoteRelease> {
 /**
  * MUST-4.2 endpoint 2, pinned to the release's OWN tag rather than the default branch, so
  * the changelog an admin reads on the confirm screen is the changelog of the version being
- * offered — not whatever `main` happens to hold.
+ * offered, not whatever `main` happens to hold.
  *
  * `version` is re-serialised from parseSemver's integer components before it reaches the
  * URL (informational 4 of the Task 2 review): a value that survived parseSemver cannot
@@ -156,7 +156,7 @@ export async function fetchRemoteChangelog(version: string): Promise<string> {
   }
 
   // MUST-4.6: the only fields read are encoding, size and content, and both guards are
-  // permanent failures — the confirm screen then renders MUST-9.6's fallback sentence.
+  // permanent failures. The confirm screen then renders MUST-9.6's fallback sentence.
   const payload = (await readJson(response)) as { encoding?: unknown; size?: unknown; content?: unknown };
   if (payload.encoding !== 'base64') throw new UpdateCheckError(CHANGELOG_UNREADABLE, { permanent: true });
   if (typeof payload.size !== 'number' || payload.size > MAX_CHANGELOG_BYTES) {
@@ -170,8 +170,8 @@ export async function fetchRemoteChangelog(version: string): Promise<string> {
 /**
  * MUST-4.8: a repository is a place a person can write anything, and the confirm screen
  * treats it that way. The decoded text is parsed by the EXISTING pure parseChangelog() and
- * rendered by the EXISTING renderEmphasis() bold-run helper — no markdown library,
- * no dangerouslySetInnerHTML anywhere — and the parsed result is bounded here, with the
+ * rendered by the EXISTING renderEmphasis() bold-run helper (no markdown library,
+ * no dangerouslySetInnerHTML anywhere), and the parsed result is bounded here, with the
  * same truncateText discipline notify MUST-10.3 applies to merchant names.
  */
 export function boundRelease(release: ChangelogRelease): ChangelogRelease {

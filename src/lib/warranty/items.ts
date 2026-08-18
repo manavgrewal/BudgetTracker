@@ -179,7 +179,7 @@ export function warrantyInputSchema(today: string) {
       name: z.string().trim().min(1, 'Name is required').max(MAX_NAME_CHARS),
       vendor: optionalText(MAX_TEXT_CHARS),
       model: optionalText(MAX_TEXT_CHARS),
-      // §17.25: serial is stored but deliberately NOT unique and NOT validated — an OCR
+      // §17.25: serial is stored but deliberately NOT unique and NOT validated. An OCR
       // mis-read and a blank must both be storable.
       serial: optionalText(MAX_TEXT_CHARS),
       purchaseDate: z
@@ -237,7 +237,7 @@ export function warrantyInputSchema(today: string) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['warrantyMonths'], message: LIFETIME_WITH_TERM_ERROR });
       }
       // review fix: cycle and amount are a pair -- neither surface (detail, list) can render
-      // one alone without either lying ("— / month") or silently dropping the other value the
+      // one alone without either lying (a blank placeholder next to "/ month") or silently dropping the other value the
       // member actually entered. Both null/omitted (no billing at all) is fine; both set is
       // fine; exactly one set is rejected.
       const cycleSet = value.billingCycle !== null && value.billingCycle !== undefined;
@@ -367,7 +367,7 @@ export function getWarrantyItem(id: number): WarrantyItemRow | null {
 }
 
 /**
- * MUST-6.8: one DB transaction per item — the row and every staged receipt land together
+ * MUST-6.8: one DB transaction per item. The row and every staged receipt land together
  * or not at all. Files are moved inside it; a throw unlinks whatever was already adopted.
  */
 export function createWarrantyItem(
@@ -552,7 +552,7 @@ export function attachStagedReceipts(
  * still sniffs to an accepted type, rename it into receipts/ under a fresh stored_filename,
  * insert the row with the sidecar's text/status when present (otherwise 'pending', for the
  * sweep to pick up), then queue the sidecar for deletion and (if there was no sidecar) an
- * OCR job. The staging id is NEVER trusted as a path — findStagedReceipt applies the UUID
+ * OCR job. The staging id is NEVER trusted as a path. findStagedReceipt applies the UUID
  * guard.
  *
  * Ruling P9: `adopted` is the caller's own tracking array, pushed to IMMEDIATELY after each
@@ -585,7 +585,7 @@ function commitStaged(
 
   for (const ref of staged) {
     const found = findStagedReceipt(ref.stagingId);
-    // Purged by the 24 h sweep, or lost to a restart. Skip it — the save still succeeds.
+    // Purged by the 24 h sweep, or lost to a restart. Skip it; the save still succeeds.
     if (found === null) continue;
     const buf = fs.readFileSync(found.path);
     // M4: re-validate size at commit time too, not just at upload -- a staged file can sit
@@ -656,7 +656,7 @@ export function deleteWarrantyReceipt(id: number): boolean {
 }
 
 /**
- * MUST-7.16: reset to 'pending', clear text and error, enqueue. Idempotent — a second
+ * MUST-7.16: reset to 'pending', clear text and error, enqueue. Idempotent: a second
  * click on a claimed row is a no-op inside enqueueOcrJob().
  */
 export function resetReceiptForReOcr(id: number): boolean {
@@ -678,7 +678,7 @@ export function listStoredFilenames(): string[] {
     .map((row) => row.storedFilename);
 }
 
-/** MUST-6.9: a duplicate is a user judgement, so this WARNS — it never blocks. */
+/** MUST-6.9: a duplicate is a user judgement, so this WARNS. It never blocks. */
 export function sha256AlreadyOnItem(itemId: number, sha256: string): boolean {
   const row = getDb()
     .select({ id: warrantyReceipts.id })

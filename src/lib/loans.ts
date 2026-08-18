@@ -41,7 +41,7 @@ function chunkIds(ids: number[]): number[][] {
  *
  * This is the ONE loan action that carries a limit: ordinary loan CRUD and assign/unassign
  * carry none, consistent with every existing warranty and transaction action. The backfill
- * is the only expensive one — it scans up to a year of transactions.
+ * is the only expensive one. It scans up to a year of transactions.
  */
 export const BACKFILL_WINDOW_MS = 10 * 60_000;
 export const BACKFILL_MAX_GLOBAL = 5;
@@ -212,30 +212,30 @@ function activeRules(tx: ReturnType<typeof getDb>): ActiveRule[] {
 
 /**
  * MUST-11.15: the link row IS the guard. INSERT ... ON CONFLICT DO NOTHING, and the balance
- * move runs in the SAME statement sequence, conditional on changes > 0 — so a crash between
+ * move runs in the SAME statement sequence, conditional on changes > 0, so a crash between
  * "decide to apply" and "record that we applied" is impossible.
  *
  * F1 fix-round (sign-aware apply): `signedAmountCents` carries the transaction's real sign.
- * A NEGATIVE transaction is a PAYMENT — money left the household — and DECREMENTS the
+ * A NEGATIVE transaction is a PAYMENT (money left the household) and DECREMENTS the
  * balance, clamped at zero exactly as before (MUST-11.14 / MUST-13.6). A POSITIVE
- * transaction is a DISBURSEMENT or an adjustment — money arrived — and INCREMENTS the
+ * transaction is a DISBURSEMENT or an adjustment (money arrived) and INCREMENTS the
  * balance by its full magnitude; there is no ceiling to clamp against on that side.
  *
  * `applied_cents` always stores the UNSIGNED size of the move (never negative, so the
  * existing `applied_cents >= 0 AND applied_cents <= amount_cents` CHECK in drizzle/0007
- * needs no migration). The DIRECTION is therefore never read back off this row — it is
+ * needs no migration). The DIRECTION is therefore never read back off this row. It is
  * recovered at reversal time from the linked transaction's own (immutable) sign instead, by
  * `unassignTransactionFromLoan` and `reverseLoanLinksForTransactions` below. A payment
- * against a loan already at zero still produces a link row with applied_cents = 0 — the
+ * against a loan already at zero still produces a link row with applied_cents = 0: the
  * payment is recorded, the balance stays at zero, and nothing is silently swallowed.
  *
  * NEW-2 fix-round: `balanceCents` is `number | null` because `assignTransactionToLoan` can
  * target a loan whose balance is genuinely UNKNOWN (never anchored). An unknown balance
- * cannot be moved in either direction, so `applied` is forced to 0 — recording the link (the
+ * cannot be moved in either direction, so `applied` is forced to 0, recording the link (the
  * assignment itself is still real and still shown) without ever fabricating a move. Treating
  * null as 0 here was the exact bug: a disbursement against an unset balance would otherwise
- * record a phantom `applied_cents`, and a LATER unassign — after a person finally anchors the
- * balance — would subtract that phantom figure off a real number it had nothing to do with.
+ * record a phantom `applied_cents`, and a LATER unassign, after a person finally anchors the
+ * balance, would subtract that phantom figure off a real number it had nothing to do with.
  */
 function link(
   tx: ReturnType<typeof getDb>,
@@ -330,7 +330,7 @@ function alreadyLinked(tx: ReturnType<typeof getDb>, txnIds: number[]): Set<numb
  * F5 fix-round: the optional `report` out-param is how a caller learns the catch below fired,
  * without widening this function's own return type (still a plain `number`, unchanged for
  * the many call sites and tests that only care about the count). Only import/flow.ts and
- * simplefin/sync.ts pass one, to surface `loanMatchFailed` alongside `engineFailed` — the
+ * simplefin/sync.ts pass one, to surface `loanMatchFailed` alongside `engineFailed`. The
  * other three call sites (createManualTransaction, confirmCategory) have nowhere spec'd for
  * that signal to go and don't need it.
  */
@@ -348,7 +348,7 @@ export function applyLoanMatchers(txnIds: number[], at: Date = new Date(), repor
       for (const txn of candidates(tx, txnIds)) {
         if (txn.isTransfer) continue;
         // F1 ruling: rules auto-link PAYMENTS only. A positive transaction (a disbursement or
-        // an adjustment) is manual-assign only (assignTransactionToLoan, below) — a rule
+        // an adjustment) is manual-assign only (assignTransactionToLoan, below). A rule
         // silently deciding that an unrelated deposit is a loan disbursement would be a much
         // worse mistake than a household having to link one by hand.
         if (txn.amountCents >= 0) continue;
@@ -385,7 +385,7 @@ export function applyLoanMatchers(txnIds: number[], at: Date = new Date(), repor
 
 /**
  * MUST-13.9 / MUST-13.10: the opt-in historical pass. Scans transactions with
- * date >= addDaysIso(today, -LOAN_BACKFILL_DAYS) — served by transactions_date_idx — applies
+ * date >= addDaysIso(today, -LOAN_BACKFILL_DAYS) (served by transactions_date_idx), applies
  * the same matching and clamping rules, and stops after LOAN_BACKFILL_MAX links. One
  * transaction, and it reports both the count and the total applied so a mistake is visible
  * immediately rather than discovered a month later.
@@ -454,7 +454,7 @@ export function backfillLoanRule(
 /**
  * MUST-13.11: the same insert-and-decrement as the rule path, with source 'manual' and two
  * differences: it does NOT skip a transaction that already has a link to a DIFFERENT loan
- * (MUST-11.16 — a combined payment is legitimate), and it does NOT require the transaction
+ * (MUST-11.16: a combined payment is legitimate), and it does NOT require the transaction
  * to be negative, because a household may want a loan disbursement or an adjustment on the
  * record. It still refuses a transaction already linked to THIS loan; the unique index makes
  * that a no-op, reported as linked: false.
@@ -480,7 +480,7 @@ export function assignTransactionToLoan(input: { txnId: number; itemId: number; 
     if (!item) throw new Error('That loan no longer exists.');
 
     if (txn.amountCents === 0) throw new Error('A zero-amount transaction cannot be a loan payment.');
-    // F1 ruling: manual assign supports BOTH signs — a negative txn decrements the balance
+    // F1 ruling: manual assign supports BOTH signs. A negative txn decrements the balance
     // (a payment), a positive one increments it (a disbursement or an adjustment).
     // NEW-2 fix-round: item.balance is passed through UNCOALESCED -- `?? 0` here used to
     // treat "unknown balance" as "zero balance", see link()'s docblock.
@@ -501,7 +501,7 @@ export function assignTransactionToLoan(input: { txnId: number; itemId: number; 
  * transaction. Neither operation touches balance_updated_at (MUST-11.8).
  *
  * F1 fix-round: undoes the SIGNED delta `link()` applied, recovered from the linked
- * transaction's own (immutable) sign, not from this row — a payment link (a decrement) is
+ * transaction's own (immutable) sign, not from this row. A payment link (a decrement) is
  * restored by adding applied_cents back; a disbursement link (an increment) is restored by
  * subtracting it back.
  *
@@ -514,7 +514,7 @@ export function assignTransactionToLoan(input: { txnId: number; itemId: number; 
  * the forward payment clamp already makes. Two links against one loan do not commute when the
  * balance has moved in between (a disbursement followed by a payment that clamped can leave
  * less room than the disbursement's own applied_cents), so undoing just one of them in
- * isolation can ask for a balance below zero — which used to hit the `current_balance_cents
+ * isolation can ask for a balance below zero, which used to hit the `current_balance_cents
  * >= 0` CHECK and throw a raw SqliteError instead of ever reaching a state a person could see.
  * Clamping trades perfect reconstruction for "never crash, never go negative", which is the
  * same trade every other clamp in this file already makes.
@@ -545,18 +545,18 @@ export function unassignTransactionFromLoan(input: { txnId: number; itemId: numb
 /**
  * MUST-13.14: called INSIDE undoImport's existing transaction, BEFORE tx.delete(transactions).
  *
- * The ON DELETE CASCADE on loan_payments.txn_id would remove the rows anyway — but a cascade
+ * The ON DELETE CASCADE on loan_payments.txn_id would remove the rows anyway, but a cascade
  * cannot restore a balance, so the explicit reversal must run first. Returns rows reversed.
  *
  * F1 fix-round: joins back to the (still-existing, not-yet-deleted) transaction to recover
  * each link's sign, same as unassignTransactionFromLoan, and sums SIGNED restores per item
- * before applying — a batch can legitimately reverse a payment and a disbursement on the
+ * before applying. A batch can legitimately reverse a payment and a disbursement on the
  * same loan in one undo.
  *
  * F2 fix-round: same "don't fabricate a balance out of NULL" guard as unassign.
  *
  * NEW-1 fix-round: same zero-clamp as unassign, and for the same reason it matters MORE
- * here — this runs inside undoImport's own transaction, and an uncaught CHECK-constraint
+ * here: this runs inside undoImport's own transaction, and an uncaught CHECK-constraint
  * SqliteError would abort that ENTIRE transaction, rolling back the delete of every OTHER
  * sole transaction the undo was supposed to remove, not just this loan's. Clamping makes
  * that abort structurally impossible rather than merely unlikely.

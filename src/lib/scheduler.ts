@@ -119,7 +119,7 @@ export function startScheduler(): void {
   runOcrSweep();
   // MUST-6.1 / MUST-5.2: both run once immediately at boot, so a container that was off
   // through a slot catches up in seconds rather than waiting up to five minutes for the
-  // next cron tick — the update check goes first, ahead of the notification tick.
+  // next cron tick. The update check goes first, ahead of the notification tick.
   runUpdateTick();
   runNotifyTick();
 }

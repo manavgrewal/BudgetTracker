@@ -23,7 +23,7 @@ export const users = sqliteTable(
     createdAt: text('created_at').notNull(),
     /**
      * Mirrors drizzle/0001_add_must_change_password.sql. Declared last because
-     * ALTER TABLE ADD COLUMN appends physically — keep this in the same order as
+     * ALTER TABLE ADD COLUMN appends physically. Keep this in the same order as
      * the DDL so the mirror stays readable against `pragma table_info(users)`.
      */
     mustChangePassword: integer('must_change_password', { mode: 'boolean' }).notNull().default(false),
@@ -325,12 +325,12 @@ export const totpRecoveryCodes = sqliteTable(
 /**
  * Warranty tracker (spec 2026-08-16 §3). Mirrors drizzle/0002_warranty_tracker.sql.
  *
- * NOT represented here — these objects exist ONLY in that raw SQL file (MUST-3.4):
+ * NOT represented here; these objects exist ONLY in that raw SQL file (MUST-3.4):
  *   - every CHECK constraint on both tables,
  *   - the `warranty_search` FTS5 contentless virtual table
  *     (contentless_delete=1, tokenize='unicode61 remove_diacritics 2', rowid = warranty_items.id),
- *   - its six triggers — warranty_search_item_ai / _au / _ad and
- *     warranty_search_receipt_ai / _au / _ad — which are the index's ONLY writer.
+ *   - its six triggers (warranty_search_item_ai / _au / _ad and
+ *     warranty_search_receipt_ai / _au / _ad), which are the index's ONLY writer.
  * Application code must never INSERT, UPDATE or DELETE `warranty_search` directly (MUST-3.12).
  */
 export const warrantyItems = sqliteTable(
@@ -423,7 +423,7 @@ export const warrantyReceipts = sqliteTable(
     sizeBytes: integer('size_bytes').notNull(),
     sha256: text('sha256').notNull(),
     ocrText: text('ocr_text'),
-    /** Exactly three values — there is deliberately no 'running' state (§7.5). */
+    /** Exactly three values; there is deliberately no 'running' state (§7.5). */
     ocrStatus: text('ocr_status', { enum: ['pending', 'done', 'failed'] }).notNull().default('pending'),
     ocrError: text('ocr_error'),
     createdAt: text('created_at').notNull(),
@@ -469,7 +469,7 @@ export const warrantyItemTypes = sqliteTable(
 /**
  * Notifications (spec 2026-08-17 §3.2). Mirrors drizzle/0006_notifications.sql.
  *
- * NOT represented here — these exist ONLY in that raw SQL file (MUST-3.4 / MUST-3.15):
+ * NOT represented here; these exist ONLY in that raw SQL file (MUST-3.4 / MUST-3.15):
  *   - CHECK (id = 1), the SQL-enforced singleton (§3.2, decision 19)
  *   - CHECK (preset IN ('brevo','smtp2go','gmail','custom'))
  *   - CHECK (port BETWEEN 1 AND 65535)
@@ -499,7 +499,7 @@ export const notificationSmtp = sqliteTable('notification_smtp', {
 /**
  * Where one person is reached on one channel (spec §3.3).
  *
- * NOT represented here — SQL only:
+ * NOT represented here; SQL only:
  *   - CHECK (channel IN ('telegram','email'))
  *   - the channel/secret_encrypted pairing CHECK: a telegram row MUST carry a secret and
  *     an email row MUST NOT. A misconfiguration is loud rather than silent.
@@ -532,12 +532,12 @@ export const notificationTargets = sqliteTable(
 /**
  * The sparse per-event, per-channel toggle matrix (spec §3.4).
  *
- * NOT represented here — SQL only:
+ * NOT represented here; SQL only:
  *   - CHECK (channel IN ('telegram','email'))
  *   - the WITHOUT ROWID storage class (the composite PK IS the row)
  *
  * MUST-3.6: `event_id` deliberately carries NO CHECK and NO foreign key. That is what
- * makes MUST-4.4 true — a future event type is one appended entry in
+ * makes MUST-4.4 true: a future event type is one appended entry in
  * src/lib/notify/events.ts and nothing else. Unknown ids are ignored on read, never
  * deleted, so a downgrade-then-upgrade restores the user's choice.
  *
@@ -558,11 +558,11 @@ export const notificationPrefs = sqliteTable(
 );
 
 /**
- * Per-user knobs (spec §3.5). One row per user, created lazily on first save — an ABSENT
+ * Per-user knobs (spec §3.5). One row per user, created lazily on first save. An ABSENT
  * row means every default applies, so a user who never opens the page still behaves
  * correctly.
  *
- * NOT represented here — SQL only: the six range CHECKs. MUST-3.8: these are typed
+ * NOT represented here; SQL only: the six range CHECKs. MUST-3.8: these are typed
  * columns rather than a JSON blob because every one is read inside a query predicate or a
  * loop condition, and a CHECK is the cheapest defence against a stored 0 that would make
  * the scheduler nag every tick.
@@ -586,14 +586,14 @@ export const notificationUserSettings = sqliteTable('notification_user_settings'
 /**
  * The delivery queue AND the dedup guard (spec §3.6).
  *
- * NOT represented here — SQL only:
+ * NOT represented here; SQL only:
  *   - CHECK (channel IN ('telegram','email'))
  *   - CHECK (status IN ('pending','sent','failed'))
  *
  * MUST-3.9: `notification_outbox_dedup_uq` IS the dedup mechanism. Every enqueue is an
  * INSERT ... ON CONFLICT DO NOTHING and `changes === 0` means "already fired". There is no
  * separate dedup table, so the guard cannot drift from reality and a crash between
- * "decide to send" and "record that we sent" is impossible — they are one statement.
+ * "decide to send" and "record that we sent" is impossible: they are one statement.
  *
  * MUST-7.2: `subject` and `body` are rendered at ENQUEUE time, not send time.
  * MUST-3.10: sent/failed rows are retained as the "Recent deliveries" list and the dedup
@@ -628,7 +628,7 @@ export const notificationOutbox = sqliteTable(
 /**
  * Loan payment matching (spec 2026-08-17 §11.4). Mirrors drizzle/0007_loans.sql.
  *
- * NOT represented here — SQL only:
+ * NOT represented here; SQL only:
  *   - CHECK (length(trim(merchant_contains)) >= 3)
  *   - the coalesce(account_id, -1) EXPRESSION inside loan_matcher_rules_uq, which is what
  *     makes "the same rule twice" impossible in the account-agnostic case too. A plain
@@ -643,7 +643,7 @@ export const notificationOutbox = sqliteTable(
  *
  * MUST-11.11: merchant_contains is compared against transactions.normalized_merchant, which
  * normalizeMerchant() UPPERCASES. The stored value is uppercased on write and compared with
- * instr(...) > 0 against the uppercased parameter — no lower() wrapper on either side.
+ * instr(...) > 0 against the uppercased parameter, with no lower() wrapper on either side.
  */
 export const loanMatcherRules = sqliteTable(
   'loan_matcher_rules',
@@ -666,7 +666,7 @@ export const loanMatcherRules = sqliteTable(
  * The link row between a transaction and a loan (spec 2026-08-17 §11.5). Mirrors
  * drizzle/0007_loans.sql.
  *
- * NOT represented here — SQL only:
+ * NOT represented here; SQL only:
  *   - CHECK (amount_cents > 0)
  *   - CHECK (applied_cents >= 0 AND applied_cents <= amount_cents)
  *   - CHECK (source IN ('rule','manual'))
@@ -680,9 +680,9 @@ export const loanMatcherRules = sqliteTable(
  * notification_outbox_dedup_uq takes. Every link insert is INSERT ... ON CONFLICT DO
  * NOTHING and `changes === 0` means "already linked, do not decrement"; the decrement runs
  * in the same transaction, conditional on changes > 0, so a crash between "decide to apply"
- * and "record that we applied" is impossible — they are one statement.
+ * and "record that we applied" is impossible: they are one statement.
  *
- * MUST-11.16: (txn_id, item_id), not (txn_id) — one transaction may legitimately fund two
+ * MUST-11.16: (txn_id, item_id), not (txn_id): one transaction may legitimately fund two
  * loans. The rule path never exploits this (MUST-13.4); only a person can create the second.
  */
 export const loanPayments = sqliteTable(

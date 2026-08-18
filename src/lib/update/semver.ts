@@ -8,7 +8,7 @@
  * the client webpack build outright.
  *
  * MUST-4.11: severity is computed HERE, in the app, from two version strings. It is never
- * read from the release payload. GitHub has no concept of "is this breaking for you" — the
+ * read from the release payload. GitHub has no concept of "is this breaking for you": the
  * release title, the label set and the body are all free text a maintainer can get wrong.
  */
 export interface Semver {

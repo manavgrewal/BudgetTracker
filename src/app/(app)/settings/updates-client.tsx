@@ -150,7 +150,7 @@ export function UpdatesClient(props: UpdatesViewProps) {
           // MUST-7.8: the apply button is ABSENT, not disabled. A disabled button invites a
           // click and then explains itself, and there is nothing to explain away.
           // MUST-7.9: shipped verbatim. Every path and filename is plain text, never an
-          // <a href> — it keeps the zero-egress claim trivially auditable and it survives a
+          // <a href>. It keeps the zero-egress claim trivially auditable and it survives a
           // screenshot.
           <Notice tone="info" title="This install updates by hand.">
             <p>
@@ -173,8 +173,8 @@ export function UpdatesClient(props: UpdatesViewProps) {
             <div className="flex flex-wrap items-center gap-3">
               <form action={runReview}>
                 <input type="hidden" name="version" value={offered} />
-                {/* Review fix (MED): panelOpen is set from onClick — an ordinary, urgent
-                    event handler — rather than from inside the form's action. React does
+                {/* Review fix (MED): panelOpen is set from onClick, an ordinary, urgent
+                    event handler, rather than from inside the form's action. React does
                     not commit a state update made INSIDE a pending action/transition until
                     that action settles, so setting it there left the panel (and therefore
                     reviewPending's "Fetching release notes…" line) invisible for the whole
@@ -194,12 +194,12 @@ export function UpdatesClient(props: UpdatesViewProps) {
                 {reviewPending ? (
                   // Review fix (MED): this used to be indistinguishable from a genuinely
                   // failed fetch, because panelOpen flips true and review.release is still
-                  // undefined for the entire duration of the request — every review would
+                  // undefined for the entire duration of the request. Every review would
                   // flash the "could not be fetched" sentence before the real notes arrived.
                   <p className="text-sm text-muted">Fetching release notes…</p>
                 ) : review.release === undefined ? (
                   // MUST-9.6: a failed changelog read must not become a wall that stops an
-                  // admin updating — the confirm button below is still offered.
+                  // admin updating. The confirm button below is still offered.
                   <p className="text-sm text-muted">
                     The release notes for {offered} could not be fetched. You can read them on the project&apos;s
                     releases page before deciding.
