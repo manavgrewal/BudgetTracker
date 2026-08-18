@@ -1,5 +1,6 @@
 import { requireUser } from '@/lib/auth/session';
 import { listUsers } from '@/lib/auth/users';
+import { debtOverTime, listLoans } from '@/lib/loans';
 import { categoryBreakdown, categoryMonthOverMonth, personSpendSplit } from '@/lib/reports';
 import { currentMonth, isIsoDate, monthEnd, monthStart, addMonths } from '@/lib/dates';
 import { ReportsClient } from './reports-client';
@@ -33,6 +34,8 @@ export default async function ReportsPage({
       breakdown={categoryBreakdown({ from, to, attributedUserId: person, rollup: true })}
       monthOverMonth={categoryMonthOverMonth({ fromMonth: from.slice(0, 7), toMonth: to.slice(0, 7), attributedUserId: person, limit: 10 })}
       split={personSpendSplit({ from, to })}
+      debt={debtOverTime(24)}
+      hasLoans={listLoans().some((loan) => loan.currentBalanceCents !== null)}
     />
   );
 }

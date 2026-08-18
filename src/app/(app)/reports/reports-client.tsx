@@ -1,13 +1,15 @@
 'use client';
 
 import { CategoryBarChart } from '@/components/charts/CategoryBarChart';
-import { ReportsIcon } from '@/components/icons';
+import { DebtTrendChart } from '@/components/charts/DebtTrendChart';
+import { LoanIcon, ReportsIcon } from '@/components/icons';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Money } from '@/components/ui/Money';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { TableWrap } from '@/components/ui/Table';
 import { Field, inputClass, selectClass } from '@/components/ui/form';
+import type { DebtPoint } from '@/lib/loans';
 import type { CategoryBreakdownRow, CategoryMonthTrend, PersonSplitRow } from '@/lib/reports';
 
 export function ReportsClient({
@@ -18,6 +20,8 @@ export function ReportsClient({
   breakdown,
   monthOverMonth,
   split,
+  debt,
+  hasLoans,
 }: {
   from: string;
   to: string;
@@ -26,6 +30,8 @@ export function ReportsClient({
   breakdown: CategoryBreakdownRow[];
   monthOverMonth: { months: string[]; rows: CategoryMonthTrend[] };
   split: PersonSplitRow[];
+  debt: DebtPoint[];
+  hasLoans: boolean;
 }) {
   const exportHref = `/api/reports/export?from=${from}&to=${to}${person ? `&person=${person}` : ''}`;
 
@@ -130,6 +136,26 @@ export function ReportsClient({
           </ul>
         )}
       </Card>
+
+      {!hasLoans ? null : (
+        <Card>
+          <CardHeader title="Debt over time" description="Total owed across every loan with a balance." />
+          {debt.every((point) => point.owedCents === null) ? (
+            <EmptyState icon={LoanIcon} title="Not enough history to draw a line yet">
+              Record a balance on a loan and the line starts from that month.
+            </EmptyState>
+          ) : (
+            <CardBody className="flex flex-col gap-3">
+              <DebtTrendChart data={debt} />
+              {/* MUST-15.6: always visible, because a reader is entitled to know where a line comes from. */}
+              <p className="text-sm text-muted">
+                The line starts when you first recorded a balance for each loan, and is reconstructed by adding back the
+                payments you have linked since.
+              </p>
+            </CardBody>
+          )}
+        </Card>
+      )}
     </div>
   );
 }

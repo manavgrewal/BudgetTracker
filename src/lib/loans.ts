@@ -2,7 +2,7 @@ import { and, asc, eq, gte, inArray, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { loanMatcherRules, loanPayments, transactions, users, warrantyItemTypes, warrantyItems } from '@/db/schema';
 import { nowIso } from '@/lib/clock';
-import { addDaysIso, addMonthsClamped, todayIso } from '@/lib/dates';
+import { addDaysIso, addMonths, addMonthsClamped, monthEnd, monthOf, monthRange, todayIso } from '@/lib/dates';
 import type { RateVerdict } from '@/lib/notify/ratelimit';
 import type { BillingCycle } from '@/lib/warranty/constants';
 
@@ -667,4 +667,99 @@ export function listLoans(today: string = todayIso()): LoanSummary[] {
 
 export function loansTotalOwedCents(): number {
   return listLoans().reduce((sum, loan) => sum + (loan.currentBalanceCents ?? 0), 0);
+}
+
+// ---------------------------------------------------------------- read model (debt over time)
+
+export interface DebtPoint {
+  month: string;
+  owedCents: number | null;
+}
+
+/**
+ * MUST-15.7: the reconstruction, exactly. One point per calendar month, oldest first. For a
+ * month whose last day is E, each loan L contributes:
+ *   - E < date(L.created_at)                      -> 0        (the loan did not exist)
+ *   - L.current_balance_cents IS NULL, or
+ *     L.balance_updated_at IS NULL                -> 0        (no balance is being tracked)
+ *   - E < date(L.balance_updated_at)              -> UNKNOWN  (a person typed a balance after
+ *       this month, which discarded whatever it was before; anything plotted here would be
+ *       invented)
+ *   - otherwise -> L.current_balance_cents + SUM(the signed undo of applied_cents) over rows
+ *       with created_at > E
+ *
+ * The month's owedCents is the sum UNLESS any loan contributed unknown, in which case it is
+ * null and the line breaks. A total that silently drops a loan for some months and includes
+ * it for others is a chart that lies about a trend.
+ *
+ * MUST-15.9: the walk goes BACKWARDS from the present, never forwards from the principal. The
+ * present balance is the one number a person has verified; the principal is a figure from a
+ * contract that may never have matched the first statement.
+ *
+ * MUST-15.8: TWO queries, then a fold in memory over the month axis produced by the existing
+ * monthRange/addMonths helpers -- the same pair cashflowTrend uses. No per-month query, no N+1.
+ *
+ * Task 10's fix round established that loan_payments.applied_cents is UNSIGNED -- a link's
+ * direction is only recoverable from its transaction's amount sign, the same way
+ * reverseLoanLinksForTransactions reads it back (see that function's doc comment above).
+ * Undoing a payment (a negative transaction, which DECREMENTED the balance going forward) ADDS
+ * applied_cents back; undoing a disbursement (a positive transaction, which INCREMENTED it)
+ * SUBTRACTS applied_cents back. The join below folds that sign into the per-month sum, rather
+ * than summing applied_cents unsigned, so a disbursement walked backwards is not mistaken for
+ * a payment.
+ */
+export function debtOverTime(months: number, opts: { endMonth?: string; today?: string } = {}): DebtPoint[] {
+  const today = opts.today ?? todayIso();
+  const endMonth = opts.endMonth ?? monthOf(today);
+  const keys = monthRange(addMonths(endMonth, -(months - 1)), endMonth);
+
+  const loans = getDb()
+    .select({
+      itemId: warrantyItems.id,
+      createdAt: warrantyItems.createdAt,
+      balanceCents: warrantyItems.currentBalanceCents,
+      anchorAt: warrantyItems.balanceUpdatedAt,
+    })
+    .from(warrantyItems)
+    .innerJoin(warrantyItemTypes, eq(warrantyItemTypes.id, warrantyItems.typeId))
+    .where(eq(warrantyItemTypes.kind, 'loan'))
+    .all();
+  if (loans.length === 0) return keys.map((month) => ({ month, owedCents: null }));
+
+  const applied = getDb()
+    .select({
+      itemId: loanPayments.itemId,
+      month: sql<string>`substr(${loanPayments.createdAt}, 1, 7)`,
+      // Signed undo delta: +applied_cents for a payment (undo a decrement), -applied_cents
+      // for a disbursement (undo an increment) -- see the sign-recovery note above.
+      total: sql<number>`sum(case when ${transactions.amountCents} < 0 then ${loanPayments.appliedCents} else -${loanPayments.appliedCents} end)`,
+    })
+    .from(loanPayments)
+    .innerJoin(transactions, eq(transactions.id, loanPayments.txnId))
+    .groupBy(loanPayments.itemId, sql`substr(${loanPayments.createdAt}, 1, 7)`)
+    .all();
+
+  const byItem = new Map<number, Map<string, number>>();
+  for (const row of applied) {
+    const inner = byItem.get(row.itemId) ?? new Map<string, number>();
+    inner.set(row.month, (inner.get(row.month) ?? 0) + (row.total ?? 0));
+    byItem.set(row.itemId, inner);
+  }
+
+  return keys.map((month) => {
+    const end = monthEnd(month);
+    let total = 0;
+    for (const loan of loans) {
+      if (end < loan.createdAt.slice(0, 10)) continue;
+      if (loan.balanceCents === null || loan.anchorAt === null) continue;
+      if (end < loan.anchorAt.slice(0, 10)) return { month, owedCents: null };
+      let owed = loan.balanceCents;
+      for (const [paymentMonth, cents] of byItem.get(loan.itemId) ?? []) {
+        // "created_at > E" is the whole of every LATER month, since E is a month end.
+        if (paymentMonth > month) owed += cents;
+      }
+      total += owed;
+    }
+    return { month, owedCents: total };
+  });
 }

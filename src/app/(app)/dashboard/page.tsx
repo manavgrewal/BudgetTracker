@@ -6,11 +6,13 @@ import { budgetProgress, budgetTotals } from '@/lib/budgets';
 import { reviewQueueCount } from '@/lib/categorize/engine';
 import { currentMonth, monthEnd, monthLabel, monthStart, todayIso } from '@/lib/dates';
 import { listGoals } from '@/lib/goals';
+import { listLoans, loansTotalOwedCents } from '@/lib/loans';
 import { cashflowTrend, topMerchants } from '@/lib/reports';
 import { expiringSoonItems } from '@/lib/warranty/search';
 import { formatCents } from '@/lib/money';
 import { BudgetProgressBar } from '@/components/BudgetProgressBar';
 import { GoalCard } from '@/components/GoalCard';
+import { LoansCard } from '@/components/LoansCard';
 import { CashflowChart } from '@/components/charts/CashflowChart';
 import { AlertIcon, ArrowRightIcon, InfoIcon } from '@/components/icons';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
@@ -138,6 +140,9 @@ export default async function DashboardPage({
       </div>
 
       <ExpiringSoonCard items={expiring} today={today} />
+
+      {/* MUST-15.1: self-hiding. Rendered unconditionally; absent when there is nothing to say. */}
+      <LoansCard loans={listLoans(today)} totalOwedCents={loansTotalOwedCents()} />
 
       <Card>
         <CardHeader
