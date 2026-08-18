@@ -19,7 +19,8 @@ import * as evaluateModule from '@/lib/notify/evaluate';
 import { drainOutboxForTests } from '@/lib/notify/outbox';
 import * as raiseModule from '@/lib/notify/raise';
 import { resetNotifySenderForTests, setNotifySenderForTests } from '@/lib/notify/send';
-import { recordCheckOutcome, setUpdateChecksEnabled } from '@/lib/update/state';
+import * as checkModule from '@/lib/update/check';
+import { readUpdateState, recordCheckOutcome, setUpdateChecksEnabled } from '@/lib/update/state';
 import { APP_VERSION } from '@/lib/version';
 
 // M8: startScheduler() runs the OCR sweep once at boot, which calls getDb() via
@@ -158,8 +159,14 @@ describe('MUST-5.1 … MUST-5.4: the update tick', () => {
     try {
       runUpdateTick(new Date('2026-08-18T23:00:00.000Z'));
       expect(spy).not.toHaveBeenCalled();
-      runUpdateTick(new Date('2026-08-19T01:00:00.000Z'));
-      await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+      const at = new Date('2026-08-19T01:00:00.000Z');
+      runUpdateTick(at);
+      // Wait for the PERSISTED outcome, not just the fetch call: runUpdateCheck's fire-and-
+      // forget chain keeps writing (recordCheckOutcome, possibly the outbox) after the fetch
+      // promise resolves, and if the test returns as soon as the spy fires, that write can
+      // land after this test's db is torn down and land in the next test's db instead.
+      await vi.waitFor(() => expect(readUpdateState().lastCheckedAt).toBe(at.toISOString()));
+      expect(spy).toHaveBeenCalledTimes(1);
     } finally {
       globalThis.fetch = realFetch;
     }
@@ -180,6 +187,36 @@ describe('MUST-5.1 … MUST-5.4: the update tick', () => {
   it('MUST-5.4: stopScheduler resets the update single-flight guard', () => {
     const source = fs.readFileSync(path.join(process.cwd(), 'src/lib/scheduler.ts'), 'utf8');
     expect(source).toMatch(/bootExpiryDone = false;[\s\S]{0,200}updateTicking = false;/);
+  });
+
+  it('MUST-5.4 (behavioral): a rejected runUpdateCheck still clears the single-flight guard, so a second tick runs it again', async () => {
+    const userId = insertTestUser(current!.db, { username: 'sched-admin3', role: 'admin' });
+    setUpdateChecksEnabled({ enabled: true, userId });
+    const spy = vi.spyOn(checkModule, 'runUpdateCheck').mockRejectedValueOnce(new Error('boom'));
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      // state.lastCheckedAt is never written by a mocked runUpdateCheck, so dueForCheck stays
+      // true for both calls below regardless of the timestamps passed — the only thing under
+      // test is whether updateTicking's `finally` clears the flag after a REJECTION, not just
+      // after a normal resolution.
+      runUpdateTick(new Date('2026-08-18T00:00:00.000Z'));
+      await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+      await vi.waitFor(() => expect(errorSpy).toHaveBeenCalled());
+
+      spy.mockResolvedValueOnce({
+        severity: 'none',
+        currentVersion: APP_VERSION,
+        latestVersion: null,
+        applied: false,
+        notified: false,
+        error: null,
+      });
+      runUpdateTick(new Date('2026-08-18T00:05:00.000Z'));
+      await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(2));
+    } finally {
+      spy.mockRestore();
+      errorSpy.mockRestore();
+    }
   });
 
   it('a throwing runUpdateCheck does not prevent runNotifyTick from running', () => {

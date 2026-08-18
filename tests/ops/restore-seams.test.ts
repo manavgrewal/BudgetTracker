@@ -7,6 +7,20 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const read = (rel: string) => fs.readFileSync(path.join(root, rel), 'utf8');
 
+/**
+ * Strips block comments then line comments (same pattern as tests/ops/install.test.ts's
+ * stripComments), so a prose mention of a call site inside a comment — e.g. "...BEFORE the
+ * scheduler starts below" naming a function nearby — can never satisfy an indexOf/lastIndexOf
+ * ordering assertion by coincidence. This is what makes the "avoid this literal in a comment"
+ * discipline unnecessary: the assertions below only ever see the real call sites.
+ */
+function stripComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+}
+
+/** The code of a file with every comment removed — for ordering assertions only. */
+const readCode = (rel: string) => stripComments(read(rel));
+
 /** Every .ts/.tsx file under src/, recursively. */
 function srcFiles(dir = path.join(root, 'src'), acc: string[] = []): string[] {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -77,10 +91,8 @@ describe("MUST-20.4: type-only restore-core exports are always imported with 'ty
 
 describe('MUST-20.26: the restore runs before any database connection', () => {
   it('instrumentation-node calls applyStagedRestoreOnBoot() before getDb()', () => {
-    const source = read('src/instrumentation-node.ts');
+    const source = readCode('src/instrumentation-node.ts');
     const restore = source.indexOf('applyStagedRestoreOnBoot()');
-    // lastIndexOf: the actual call, not an earlier mention of "getDb()" inside a comment
-    // explaining WHY the 'restart' branch below must exit before reaching it.
     const openDb = source.lastIndexOf('getDb();');
     expect(restore).toBeGreaterThan(-1);
     expect(openDb).toBeGreaterThan(-1);
@@ -92,7 +104,7 @@ describe('MUST-20.26: the restore runs before any database connection', () => {
     // boot if the caller actually acts on it. This pins the wiring at the source level: the
     // exit call must be reachable, must use RESTART_EXIT_CODE, and must appear strictly
     // between the restore call and getDb().
-    const source = read('src/instrumentation-node.ts');
+    const source = readCode('src/instrumentation-node.ts');
     const restoreCall = source.indexOf('applyStagedRestoreOnBoot()');
     const restartCheck = source.indexOf(`restoreOutcome === 'restart'`);
     const exitCall = source.indexOf('process.exit(RESTART_EXIT_CODE)');
@@ -121,7 +133,7 @@ describe('MUST-20.26: the restore runs before any database connection', () => {
 });
 
 describe('MUST-14.2 / MUST-14.3: the notification raise sits between getDb and startScheduler', () => {
-  const source = read('src/instrumentation-node.ts');
+  const source = readCode('src/instrumentation-node.ts');
 
   it('calls raiseRestoreOutcome() after getDb() and before startScheduler()', () => {
     const getDbAt = source.indexOf('getDb();');
@@ -144,7 +156,7 @@ describe('MUST-14.2 / MUST-14.3: the notification raise sits between getDb and s
 });
 
 describe('MUST-7.6 / MUST-7.7: the update reconciler sits between getDb and startScheduler', () => {
-  const source = read('src/instrumentation-node.ts');
+  const source = readCode('src/instrumentation-node.ts');
 
   it('calls reconcileApplyOnBoot() after raiseRestoreOutcome() and before startScheduler()', () => {
     const raiseAt = source.indexOf('raiseRestoreOutcome()');

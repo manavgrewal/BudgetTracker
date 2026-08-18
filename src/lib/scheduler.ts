@@ -117,7 +117,9 @@ export function startScheduler(): void {
   // ...and once at boot, so a container restarted mid-job recovers immediately instead of
   // leaving a member's receipt unread for up to ten minutes.
   runOcrSweep();
-  // MUST-5.2: immediately before runNotifyTick, on the boot path too.
+  // MUST-6.1 / MUST-5.2: both run once immediately at boot, so a container that was off
+  // through a slot catches up in seconds rather than waiting up to five minutes for the
+  // next cron tick — the update check goes first, ahead of the notification tick.
   runUpdateTick();
   runNotifyTick();
 }

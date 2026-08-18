@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { NAME_MAX, USER_AGENT_MAX, renderEvent, truncateText } from '@/lib/notify/render';
+import { NOTIFICATION_EVENTS } from '@/lib/notify/events';
+import { NAME_MAX, USER_AGENT_MAX, renderEvent, truncateText, type RenderInput } from '@/lib/notify/render';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
@@ -246,21 +247,63 @@ describe('MUST-10.3: untrusted values are plain and truncated', () => {
   });
 });
 
+/**
+ * MUST-10.4, driven by the registry rather than a hand-copied list: every event id
+ * NOTIFICATION_EVENTS declares gets at least one sample input here, so an event added to
+ * the registry without an entry in this map fails the "covers every id" assertion below
+ * instead of silently never being checked for a URL. update_available gets all three body
+ * shapes (major / patch-with-apply-path / no-apply-path), because MUST-6.5's "no URL" claim
+ * has to hold for each one independently.
+ */
+const SAMPLES_BY_EVENT: Record<string, RenderInput[]> = {
+  coming_due: [
+    { event: 'coming_due', itemName: 'X', kind: 'warranty', expiryDate: '2026-09-01', todayIso: '2026-08-17', vendor: null, priceCents: null },
+  ],
+  budget_threshold: [
+    { event: 'budget_threshold', scope: 'household', categoryName: 'C', month: '2026-08', pct: 80, spentCents: 1, limitCents: 2 },
+  ],
+  budget_exceeded: [
+    { event: 'budget_exceeded', scope: 'personal', categoryName: 'C', month: '2026-08', spentCents: 3, limitCents: 2 },
+  ],
+  backup_failed: [{ event: 'backup_failed', dateIso: '2026-08-17', error: 'e' }],
+  weekly_digest: [
+    {
+      event: 'weekly_digest',
+      fromIso: '2026-08-10',
+      toIso: '2026-08-16',
+      householdSpentCents: 0,
+      personalSpentCents: 0,
+      topCategories: [],
+      topMerchants: [],
+      reviewCount: 0,
+      overBudget: [],
+    },
+  ],
+  new_signin: [{ event: 'new_signin', name: 'S', atLabel: 'x', tz: 'UTC', ip: '1.2.3.4', userAgent: null }],
+  restore_outcome: [
+    { event: 'restore_outcome', status: 'success', sourceName: 's', requestedByUsername: 'u', finishedAt: 'f', receiptsRestored: 0, missingReceiptRows: 0, error: null },
+  ],
+  stale_import: [{ event: 'stale_import', weeks: 3, lastImportIso: '2026-07-27', daysAgo: 21 }],
+  update_available: [
+    { event: 'update_available', currentVersion: '1.3.1', latestVersion: '1.4.0', severity: 'major', publishedAt: null, canApplyInApp: true },
+    { event: 'update_available', currentVersion: '1.3.1', latestVersion: '1.4.0', severity: 'patch', publishedAt: null, canApplyInApp: true },
+    { event: 'update_available', currentVersion: '1.3.1', latestVersion: '1.4.0', severity: 'minor', publishedAt: '2026-08-16T09:00:00Z', canApplyInApp: false },
+  ],
+};
+
 describe('MUST-10.4: no notification body contains a link', () => {
-  it('none of the eight bodies contains a URL scheme', () => {
-    const inputs: Parameters<typeof renderEvent>[0][] = [
-      { event: 'coming_due', itemName: 'X', kind: 'warranty', expiryDate: '2026-09-01', todayIso: '2026-08-17', vendor: null, priceCents: null },
-      { event: 'budget_threshold', scope: 'household', categoryName: 'C', month: '2026-08', pct: 80, spentCents: 1, limitCents: 2 },
-      { event: 'budget_exceeded', scope: 'personal', categoryName: 'C', month: '2026-08', spentCents: 3, limitCents: 2 },
-      { event: 'backup_failed', dateIso: '2026-08-17', error: 'e' },
-      { event: 'weekly_digest', fromIso: '2026-08-10', toIso: '2026-08-16', householdSpentCents: 0, personalSpentCents: 0, topCategories: [], topMerchants: [], reviewCount: 0, overBudget: [] },
-      { event: 'new_signin', name: 'S', atLabel: 'x', tz: 'UTC', ip: '1.2.3.4', userAgent: null },
-      { event: 'restore_outcome', status: 'success', sourceName: 's', requestedByUsername: 'u', finishedAt: 'f', receiptsRestored: 0, missingReceiptRows: 0, error: null },
-      { event: 'stale_import', weeks: 3, lastImportIso: '2026-07-27', daysAgo: 21 },
-    ];
-    for (const input of inputs) {
-      const { subject, body } = renderEvent(input);
-      expect(`${subject}\n${body}`).not.toMatch(/https?:\/\//);
+  it('every registry event id has a sample input registered here', () => {
+    expect(Object.keys(SAMPLES_BY_EVENT).sort()).toEqual(NOTIFICATION_EVENTS.map((e) => e.id).sort());
+  });
+
+  it('renders with no URL scheme, for every registered event and every update_available variant', () => {
+    for (const def of NOTIFICATION_EVENTS) {
+      const samples = SAMPLES_BY_EVENT[def.id];
+      expect(samples, `no sample input registered for event id "${def.id}"`).toBeDefined();
+      for (const input of samples!) {
+        const { subject, body } = renderEvent(input);
+        expect(`${subject}\n${body}`, `event ${def.id}`).not.toMatch(/https?:\/\//);
+      }
     }
   });
 });

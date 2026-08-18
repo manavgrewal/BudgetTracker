@@ -57,10 +57,11 @@ try {
   console.error('[notify] restore outcome raise failed', error);
 }
 
-// MUST-7.6: AFTER getDb() above (the outcome is written into the restored database) and
-// BEFORE the scheduler starts below. reconcileApplyOnBoot is internally guarded (MUST-7.7)
-// and never throws today; this catch is the same belt-and-braces the raise above carries,
-// so a future change to that guarantee cannot take the boot down with it.
+// update spec MUST-7.6: AFTER getDb() above (the outcome is written into the restored
+// database) and BEFORE the scheduler starts below. reconcileApplyOnBoot is internally
+// guarded (update spec MUST-7.7) and never throws today; this catch is the same
+// belt-and-braces the raise above carries, so a future change to that guarantee cannot
+// take the boot down with it.
 try {
   reconcileApplyOnBoot();
 } catch (error) {

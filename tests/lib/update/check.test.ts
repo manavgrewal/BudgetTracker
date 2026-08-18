@@ -88,11 +88,21 @@ describe('MUST-5.7: the five outcomes', () => {
   it('patch with auto-apply on and Watchtower present — applies, and enqueues NOTHING', async () => {
     withWatchtower(true);
     setAutoApply(true);
-    stubRelease('v99.0.0'.replace('99', String(Number(APP_VERSION.split('.')[0])))); // same major
-    // Use an explicit patch bump rather than string surgery:
     stubRelease(`v${APP_VERSION.split('.').slice(0, 2).join('.')}.${Number(APP_VERSION.split('.')[2]) + 1}`);
     const result = await runUpdateCheck({ now: new Date() });
     expect(result.severity).toBe('patch');
+    expect(result.applied).toBe(true);
+    expect(result.notified).toBe(false);
+    expect(watchtowerCalls).toBe(1);
+    expect(outboxRows()).toEqual([]);
+  });
+
+  it('minor with auto-apply on and Watchtower present — applies, and enqueues NOTHING', async () => {
+    withWatchtower(true);
+    setAutoApply(true);
+    stubRelease(`v${APP_VERSION.split('.')[0]}.${Number(APP_VERSION.split('.')[1]) + 1}.0`);
+    const result = await runUpdateCheck({ now: new Date() });
+    expect(result.severity).toBe('minor');
     expect(result.applied).toBe(true);
     expect(result.notified).toBe(false);
     expect(watchtowerCalls).toBe(1);
@@ -138,7 +148,10 @@ describe('MUST-5.7: the five outcomes', () => {
     }
   });
 
-  it('AC8: over 200 generated pairs, classify major implies zero Watchtower requests', () => {
+  it('documents classify()\'s own property over 200 generated pairs: major severity implies remote.major > current.major', () => {
+    // NOT an AC8 proof by itself — classify() never touches Watchtower, so this can't show
+    // zero requests on its own. It pins the classifier's definition (semver.test.ts owns the
+    // full contract); the test below is what actually exercises the Watchtower call count.
     const current = parseSemver(APP_VERSION)!;
     let majors = 0;
     for (let i = 0; i < 200; i += 1) {
@@ -153,6 +166,25 @@ describe('MUST-5.7: the five outcomes', () => {
       }
     }
     expect(majors).toBeGreaterThan(0);
+  });
+
+  it('AC8: a spread of generated major pairs run through the REAL check make zero Watchtower calls', async () => {
+    withWatchtower(true);
+    setAutoApply(true);
+    const current = parseSemver(APP_VERSION)!;
+    let checked = 0;
+    for (let i = 0; i < 12; i += 1) {
+      const remote = { major: current.major + 1 + (i % 3), minor: (i * 7) % 12, patch: (i * 13) % 20 };
+      expect(classify(current, remote)).toBe('major');
+      watchtowerCalls = 0;
+      stubRelease(`v${remote.major}.${remote.minor}.${remote.patch}`);
+      const result = await runUpdateCheck({ now: new Date() });
+      expect(result.severity, `pair ${JSON.stringify(remote)}`).toBe('major');
+      expect(result.applied).toBe(false);
+      expect(watchtowerCalls).toBe(0);
+      checked += 1;
+    }
+    expect(checked).toBe(12);
   });
 });
 
