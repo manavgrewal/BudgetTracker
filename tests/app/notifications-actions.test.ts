@@ -40,7 +40,7 @@ vi.mock('@/lib/notify/send/telegram', async (importOriginal) => ({
 }));
 
 const actions = await import('@/app/(app)/settings/notifications/actions');
-const { NO_RELAY_ERROR } = actions;
+const NO_RELAY_ERROR = 'An admin needs to set up outbound email before this can send.';
 
 let t: TestDb;
 

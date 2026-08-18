@@ -39,7 +39,9 @@ export interface DetectChatIdState {
 
 const TOKEN_FIRST = 'Save your bot token first.';
 const PATH = '/settings/notifications';
-export const NO_RELAY_ERROR = 'An admin needs to set up outbound email before this can send.';
+// Next's compiler restricts 'use server' files to async-function exports, so this stays
+// module-private; the test asserts the literal sentence.
+const NO_RELAY_ERROR = 'An admin needs to set up outbound email before this can send.';
 
 /** MUST-12.5: a host, not a URL. No scheme, no whitespace, no path. */
 const hostSchema = z
