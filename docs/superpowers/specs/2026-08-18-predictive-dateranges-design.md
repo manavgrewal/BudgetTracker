@@ -382,7 +382,7 @@ export function suggestBudget(input: {
 3. **Trend.** With `trend.direction` of `'rising'` or `'falling'`, `value = base + divRound(trend.deltaCents, TREND_DAMPING_DIVISOR)`. With `'flat'` or `'unknown'`, `value = base`.
 4. **Seasonality.** With a non-null clamped factor, `value = divRound(value * num, den)`.
 5. **Cap.** `value = Math.min(value, base * SUGGESTION_CAP_MULTIPLE)`.
-6. **Round.** `value = ceilToDollar(value)`.
+6. **Round.** If `value <= 0` after steps 1 through 5, stop here and report below-floor; `ceilToDollar` throws on negatives by design (MUST-3.4) and a non-positive pre-round value can only mean the trend adjustment consumed the whole median. Otherwise `value = ceilToDollar(value)`. (Amended after Task 3 review: the earlier unconditional wording made a falling-trend series throw instead of reporting below-floor.)
 7. **Floor.** `value < SUGGESTION_FLOOR_CENTS` gives `{ reason: 'below-floor' }`.
 
 **MUST-6.2 (why the trend is halved).** Step 3 applies **half** the observed move, not all of it. Six months of one household's data is a small sample, and a budget that chases the last three months will overshoot on both sides. Halving is a damping choice, it is stated in `constants.ts` as `TREND_DAMPING_DIVISOR`, and it is the single number to change if the owner wants the suggestion more or less reactive.
