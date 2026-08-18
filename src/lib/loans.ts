@@ -21,6 +21,16 @@ export const MAX_RULES_PER_LOAN = 5;
 export const LOAN_BACKFILL_DAYS = 365;
 export const LOAN_BACKFILL_MAX = 500;
 
+/** F6 fix-round: the repo's chunking convention (src/lib/import/commit.ts, categorize/engine.ts)
+ * applied to the id lists this file receives from callers, which are never capped in advance. */
+const ID_CHUNK = 400;
+
+function chunkIds(ids: number[]): number[][] {
+  const out: number[][] = [];
+  for (let offset = 0; offset < ids.length; offset += ID_CHUNK) out.push(ids.slice(offset, offset + ID_CHUNK));
+  return out;
+}
+
 /**
  * MUST-14.12 / MUST-14.13: the third in-memory bucket in the codebase (notify's, update's,
  * this one). They stay separate because their windows, scopes and reset semantics differ and
@@ -136,25 +146,28 @@ export interface LoanLink {
 export function loanLinksForTransactions(txnIds: number[]): Map<number, LoanLink[]> {
   const out = new Map<number, LoanLink[]>();
   if (txnIds.length === 0) return out;
-  const rows = getDb()
-    .select({
-      id: loanPayments.id,
-      txnId: loanPayments.txnId,
-      itemId: loanPayments.itemId,
-      itemName: warrantyItems.name,
-      amountCents: loanPayments.amountCents,
-      appliedCents: loanPayments.appliedCents,
-      source: loanPayments.source,
-    })
-    .from(loanPayments)
-    .innerJoin(warrantyItems, eq(warrantyItems.id, loanPayments.itemId))
-    .where(inArray(loanPayments.txnId, txnIds))
-    .orderBy(asc(loanPayments.id))
-    .all();
-  for (const row of rows) {
-    const list = out.get(row.txnId) ?? [];
-    list.push(row);
-    out.set(row.txnId, list);
+  const db = getDb();
+  for (const chunk of chunkIds(txnIds)) {
+    const rows = db
+      .select({
+        id: loanPayments.id,
+        txnId: loanPayments.txnId,
+        itemId: loanPayments.itemId,
+        itemName: warrantyItems.name,
+        amountCents: loanPayments.amountCents,
+        appliedCents: loanPayments.appliedCents,
+        source: loanPayments.source,
+      })
+      .from(loanPayments)
+      .innerJoin(warrantyItems, eq(warrantyItems.id, loanPayments.itemId))
+      .where(inArray(loanPayments.txnId, chunk))
+      .orderBy(asc(loanPayments.id))
+      .all();
+    for (const row of rows) {
+      const list = out.get(row.txnId) ?? [];
+      list.push(row);
+      out.set(row.txnId, list);
+    }
   }
   return out;
 }
@@ -196,26 +209,40 @@ function activeRules(tx: ReturnType<typeof getDb>): ActiveRule[] {
 }
 
 /**
- * MUST-11.15: the link row IS the guard. INSERT ... ON CONFLICT DO NOTHING, and the
- * decrement runs in the SAME statement sequence, conditional on changes > 0 — so a crash
- * between "decide to apply" and "record that we applied" is impossible.
+ * MUST-11.15: the link row IS the guard. INSERT ... ON CONFLICT DO NOTHING, and the balance
+ * move runs in the SAME statement sequence, conditional on changes > 0 — so a crash between
+ * "decide to apply" and "record that we applied" is impossible.
  *
- * MUST-11.14 / MUST-13.6: applied_cents records the CLAMPED figure, so a reversal restores
- * the balance exactly, with no drift, in every clamping case. A payment against a loan
- * already at zero produces a link row with applied_cents = 0 — the payment is recorded, the
- * balance stays at zero, and nothing is silently swallowed.
+ * F1 fix-round (sign-aware apply): `signedAmountCents` carries the transaction's real sign.
+ * A NEGATIVE transaction is a PAYMENT — money left the household — and DECREMENTS the
+ * balance, clamped at zero exactly as before (MUST-11.14 / MUST-13.6). A POSITIVE
+ * transaction is a DISBURSEMENT or an adjustment — money arrived — and INCREMENTS the
+ * balance by its full magnitude; there is no ceiling to clamp against on that side.
+ *
+ * `applied_cents` always stores the UNSIGNED size of the move (never negative, so the
+ * existing `applied_cents >= 0 AND applied_cents <= amount_cents` CHECK in drizzle/0007
+ * needs no migration). The DIRECTION is therefore never read back off this row — it is
+ * recovered at reversal time from the linked transaction's own (immutable) sign instead, by
+ * `unassignTransactionFromLoan` and `reverseLoanLinksForTransactions` below. A payment
+ * against a loan already at zero still produces a link row with applied_cents = 0 — the
+ * payment is recorded, the balance stays at zero, and nothing is silently swallowed.
  */
 function link(
   tx: ReturnType<typeof getDb>,
-  input: { txnId: number; itemId: number; amountCents: number; balanceCents: number; source: 'rule' | 'manual'; at: string },
+  input: { txnId: number; itemId: number; signedAmountCents: number; balanceCents: number; source: 'rule' | 'manual'; at: string },
 ): number | null {
-  const applied = Math.max(0, Math.min(input.amountCents, input.balanceCents));
+  const magnitude = Math.abs(input.signedAmountCents);
+  const isPayment = input.signedAmountCents < 0;
+  // Payments clamp at zero; disbursements/adjustments apply in full (no ceiling exists for
+  // how much can be added back onto an outstanding balance).
+  const applied = isPayment ? Math.max(0, Math.min(magnitude, input.balanceCents)) : magnitude;
+  const delta = isPayment ? -applied : applied;
   const result = tx
     .insert(loanPayments)
     .values({
       txnId: input.txnId,
       itemId: input.itemId,
-      amountCents: input.amountCents,
+      amountCents: magnitude,
       appliedCents: applied,
       source: input.source,
       createdAt: input.at,
@@ -223,9 +250,9 @@ function link(
     .onConflictDoNothing()
     .run();
   if (result.changes === 0) return null;
-  if (applied > 0) {
+  if (delta !== 0) {
     tx.update(warrantyItems)
-      .set({ currentBalanceCents: sql`${warrantyItems.currentBalanceCents} - ${applied}` })
+      .set({ currentBalanceCents: sql`${warrantyItems.currentBalanceCents} + ${delta}` })
       // MUST-11.8: balance_updated_at is NOT touched. It is the human anchor.
       .where(eq(warrantyItems.id, input.itemId))
       .run();
@@ -242,24 +269,34 @@ interface Candidate {
 }
 
 function candidates(tx: ReturnType<typeof getDb>, txnIds: number[]): Candidate[] {
-  return tx
-    .select({
-      id: transactions.id,
-      accountId: transactions.accountId,
-      normalizedMerchant: transactions.normalizedMerchant,
-      amountCents: transactions.amountCents,
-      isTransfer: transactions.isTransfer,
-    })
-    .from(transactions)
-    .where(inArray(transactions.id, txnIds))
-    .orderBy(asc(transactions.id))
-    .all();
+  const out: Candidate[] = [];
+  for (const chunk of chunkIds(txnIds)) {
+    out.push(
+      ...tx
+        .select({
+          id: transactions.id,
+          accountId: transactions.accountId,
+          normalizedMerchant: transactions.normalizedMerchant,
+          amountCents: transactions.amountCents,
+          isTransfer: transactions.isTransfer,
+        })
+        .from(transactions)
+        .where(inArray(transactions.id, chunk))
+        .orderBy(asc(transactions.id))
+        .all(),
+    );
+  }
+  return out;
 }
 
 function alreadyLinked(tx: ReturnType<typeof getDb>, txnIds: number[]): Set<number> {
-  if (txnIds.length === 0) return new Set();
-  const rows = tx.select({ txnId: loanPayments.txnId }).from(loanPayments).where(inArray(loanPayments.txnId, txnIds)).all();
-  return new Set(rows.map((row) => row.txnId));
+  const out = new Set<number>();
+  for (const chunk of chunkIds(txnIds)) {
+    for (const row of tx.select({ txnId: loanPayments.txnId }).from(loanPayments).where(inArray(loanPayments.txnId, chunk)).all()) {
+      out.add(row.txnId);
+    }
+  }
+  return out;
 }
 
 /**
@@ -273,8 +310,15 @@ function alreadyLinked(tx: ReturnType<typeof getDb>, txnIds: number[]): Set<numb
  *
  * MUST-13.5: this function NEVER throws into its caller. A loan-matching failure may not
  * break an import, a SimpleFIN sync, a manual entry or a category confirmation.
+ *
+ * F5 fix-round: the optional `report` out-param is how a caller learns the catch below fired,
+ * without widening this function's own return type (still a plain `number`, unchanged for
+ * the many call sites and tests that only care about the count). Only import/flow.ts and
+ * simplefin/sync.ts pass one, to surface `loanMatchFailed` alongside `engineFailed` — the
+ * other three call sites (createManualTransaction, confirmCategory) have nowhere spec'd for
+ * that signal to go and don't need it.
  */
-export function applyLoanMatchers(txnIds: number[], at: Date = new Date()): number {
+export function applyLoanMatchers(txnIds: number[], at: Date = new Date(), report?: { failed: boolean }): number {
   if (txnIds.length === 0) return 0;
   try {
     const stamp = nowIso(at);
@@ -287,7 +331,11 @@ export function applyLoanMatchers(txnIds: number[], at: Date = new Date()): numb
       let created = 0;
       for (const txn of candidates(tx, txnIds)) {
         if (txn.isTransfer) continue;
-        if (txn.amountCents >= 0) continue; // a loan payment is money out
+        // F1 ruling: rules auto-link PAYMENTS only. A positive transaction (a disbursement or
+        // an adjustment) is manual-assign only (assignTransactionToLoan, below) — a rule
+        // silently deciding that an unrelated deposit is a loan disbursement would be a much
+        // worse mistake than a household having to link one by hand.
+        if (txn.amountCents >= 0) continue;
         if (linked.has(txn.id)) continue;
 
         const match = rules.find(
@@ -297,11 +345,10 @@ export function applyLoanMatchers(txnIds: number[], at: Date = new Date()): numb
         );
         if (match === undefined) continue;
 
-        const amount = Math.abs(txn.amountCents);
         const applied = link(tx, {
           txnId: txn.id,
           itemId: match.itemId,
-          amountCents: amount,
+          signedAmountCents: txn.amountCents,
           balanceCents: balances.get(match.itemId) ?? 0,
           source: 'rule',
           at: stamp,
@@ -315,6 +362,7 @@ export function applyLoanMatchers(txnIds: number[], at: Date = new Date()): numb
     });
   } catch (error) {
     console.error('[loans] matcher failed', error);
+    if (report) report.failed = true;
     return 0;
   }
 }
@@ -364,10 +412,12 @@ export function backfillLoanRule(
       let linked = 0;
       let appliedTotal = 0;
       for (const row of rows) {
+        // The query above already filters to amount_cents < 0 (payments only, same rule as
+        // applyLoanMatchers), so row.amountCents is always negative here.
         const applied = link(tx, {
           txnId: row.id,
           itemId: rule.itemId,
-          amountCents: Math.abs(row.amountCents),
+          signedAmountCents: row.amountCents,
           balanceCents: balance,
           source: 'rule',
           at: stamp,
@@ -413,12 +463,13 @@ export function assignTransactionToLoan(input: { txnId: number; itemId: number; 
       .get();
     if (!item) throw new Error('That loan no longer exists.');
 
-    const amount = Math.abs(txn.amountCents);
-    if (amount === 0) throw new Error('A zero-amount transaction cannot be a loan payment.');
+    if (txn.amountCents === 0) throw new Error('A zero-amount transaction cannot be a loan payment.');
+    // F1 ruling: manual assign supports BOTH signs — a negative txn decrements the balance
+    // (a payment), a positive one increments it (a disbursement or an adjustment).
     const applied = link(tx, {
       txnId: input.txnId,
       itemId: input.itemId,
-      amountCents: amount,
+      signedAmountCents: txn.amountCents,
       balanceCents: item.balance ?? 0,
       source: 'manual',
       at: stamp,
@@ -428,14 +479,25 @@ export function assignTransactionToLoan(input: { txnId: number; itemId: number; 
 }
 
 /**
- * MUST-13.12: deletes the link row and adds applied_cents back to current_balance_cents in
- * the SAME transaction. Neither operation touches balance_updated_at (MUST-11.8).
+ * MUST-13.12: deletes the link row and restores current_balance_cents in the SAME
+ * transaction. Neither operation touches balance_updated_at (MUST-11.8).
+ *
+ * F1 fix-round: undoes the SIGNED delta `link()` applied, recovered from the linked
+ * transaction's own (immutable) sign, not from this row — a payment link (a decrement) is
+ * restored by adding applied_cents back; a disbursement link (an increment) is restored by
+ * subtracting it back.
+ *
+ * F2 fix-round: an UNKNOWN balance must stay unknown. The old `coalesce(..., 0)` fabricated
+ * a balance out of NULL the moment any link was reversed; the `is not null` guard instead
+ * makes the update match zero rows when the balance is already unknown, same as every other
+ * read here treating NULL as "we don't track this loan's balance", not "it is zero".
  */
 export function unassignTransactionFromLoan(input: { txnId: number; itemId: number }): boolean {
   return getDb().transaction((tx) => {
     const row = tx
-      .select({ appliedCents: loanPayments.appliedCents })
+      .select({ appliedCents: loanPayments.appliedCents, txnAmountCents: transactions.amountCents })
       .from(loanPayments)
+      .innerJoin(transactions, eq(transactions.id, loanPayments.txnId))
       .where(and(eq(loanPayments.txnId, input.txnId), eq(loanPayments.itemId, input.itemId)))
       .get();
     if (!row) return false;
@@ -443,9 +505,10 @@ export function unassignTransactionFromLoan(input: { txnId: number; itemId: numb
       .where(and(eq(loanPayments.txnId, input.txnId), eq(loanPayments.itemId, input.itemId)))
       .run();
     if (row.appliedCents > 0) {
+      const restore = row.txnAmountCents < 0 ? row.appliedCents : -row.appliedCents;
       tx.update(warrantyItems)
-        .set({ currentBalanceCents: sql`coalesce(${warrantyItems.currentBalanceCents}, 0) + ${row.appliedCents}` })
-        .where(eq(warrantyItems.id, input.itemId))
+        .set({ currentBalanceCents: sql`${warrantyItems.currentBalanceCents} + ${restore}` })
+        .where(and(eq(warrantyItems.id, input.itemId), sql`${warrantyItems.currentBalanceCents} is not null`))
         .run();
     }
     return true;
@@ -457,27 +520,45 @@ export function unassignTransactionFromLoan(input: { txnId: number; itemId: numb
  *
  * The ON DELETE CASCADE on loan_payments.txn_id would remove the rows anyway — but a cascade
  * cannot restore a balance, so the explicit reversal must run first. Returns rows reversed.
+ *
+ * F1 fix-round: joins back to the (still-existing, not-yet-deleted) transaction to recover
+ * each link's sign, same as unassignTransactionFromLoan, and sums SIGNED restores per item
+ * before applying — a batch can legitimately reverse a payment and a disbursement on the
+ * same loan in one undo.
+ *
+ * F2 fix-round: same "don't fabricate a balance out of NULL" guard as unassign.
  */
 export function reverseLoanLinksForTransactions(txnIds: number[]): number {
   if (txnIds.length === 0) return 0;
   const db = getDb();
-  const rows = db
-    .select({ itemId: loanPayments.itemId, appliedCents: loanPayments.appliedCents })
-    .from(loanPayments)
-    .where(inArray(loanPayments.txnId, txnIds))
-    .all();
+  const rows: { itemId: number; appliedCents: number; txnAmountCents: number }[] = [];
+  for (const chunk of chunkIds(txnIds)) {
+    rows.push(
+      ...db
+        .select({ itemId: loanPayments.itemId, appliedCents: loanPayments.appliedCents, txnAmountCents: transactions.amountCents })
+        .from(loanPayments)
+        .innerJoin(transactions, eq(transactions.id, loanPayments.txnId))
+        .where(inArray(loanPayments.txnId, chunk))
+        .all(),
+    );
+  }
   if (rows.length === 0) return 0;
 
   const byItem = new Map<number, number>();
-  for (const row of rows) byItem.set(row.itemId, (byItem.get(row.itemId) ?? 0) + row.appliedCents);
-  for (const [itemId, applied] of byItem) {
-    if (applied === 0) continue;
+  for (const row of rows) {
+    const restore = row.txnAmountCents < 0 ? row.appliedCents : -row.appliedCents;
+    byItem.set(row.itemId, (byItem.get(row.itemId) ?? 0) + restore);
+  }
+  for (const [itemId, restore] of byItem) {
+    if (restore === 0) continue;
     db.update(warrantyItems)
-      .set({ currentBalanceCents: sql`coalesce(${warrantyItems.currentBalanceCents}, 0) + ${applied}` })
-      .where(eq(warrantyItems.id, itemId))
+      .set({ currentBalanceCents: sql`${warrantyItems.currentBalanceCents} + ${restore}` })
+      .where(and(eq(warrantyItems.id, itemId), sql`${warrantyItems.currentBalanceCents} is not null`))
       .run();
   }
-  db.delete(loanPayments).where(inArray(loanPayments.txnId, txnIds)).run();
+  for (const chunk of chunkIds(txnIds)) {
+    db.delete(loanPayments).where(inArray(loanPayments.txnId, chunk)).run();
+  }
   return rows.length;
 }
 

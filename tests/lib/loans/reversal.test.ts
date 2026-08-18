@@ -91,6 +91,24 @@ describe('MUST-13.14 / MUST-13.15: import undo', () => {
     applyLoanMatchers(second.insertedTransactionIds);
     expect(ctx.balanceOf(itemId)).toBe(moved);
   });
+
+  it('F8: undoing an import whose match CLAMPED restores the balance exactly, including the zero it clamped to', () => {
+    const { itemId } = ctx.seedLoan({ balanceCents: 30_000 });
+    saveLoanRule({ itemId, merchantContains: 'HONDA FIN', accountId: null, enabled: true });
+    const row = candidateRow({ rawDescription: 'HONDA FIN SVC', amountCents: -45_000 });
+
+    const start = ctx.balanceOf(itemId);
+    const first = commitOne('clamped.csv', row);
+    expect(applyLoanMatchers(first.insertedTransactionIds)).toBe(1);
+    expect(ctx.balanceOf(itemId)).toBe(0);
+    const link = loanLinksForTransactions(first.insertedTransactionIds).get(first.insertedTransactionIds[0])![0]!;
+    expect(link.amountCents).toBe(45_000);
+    expect(link.appliedCents).toBe(30_000);
+
+    const result = undoImport(first.importId);
+    expect(result.loanLinksReversed).toBe(1);
+    expect(ctx.balanceOf(itemId)).toBe(start);
+  });
 });
 
 describe('MUST-13.11 / MUST-11.16: manual assign', () => {
@@ -100,6 +118,9 @@ describe('MUST-13.11 / MUST-11.16: manual assign', () => {
     const txnId = ctx.spend('COMBINED PAYMENT', -60_000);
     expect(assignTransactionToLoan({ txnId, itemId: car.itemId })).toEqual({ linked: true, appliedCents: 60_000 });
     expect(assignTransactionToLoan({ txnId, itemId: car.itemId })).toEqual({ linked: false, appliedCents: 0 });
+    // F7: pin the conflict-skip branch itself, not just its return value — the second
+    // (refused) attempt must not have decremented the balance a second time.
+    expect(ctx.balanceOf(car.itemId)).toBe(1_940_000);
     expect(assignTransactionToLoan({ txnId, itemId: boat.itemId })).toEqual({ linked: true, appliedCents: 60_000 });
   });
 
@@ -107,5 +128,73 @@ describe('MUST-13.11 / MUST-11.16: manual assign', () => {
     const { itemId } = ctx.seedLoan({ balanceCents: 2_000_000 });
     const txnId = ctx.spend('LOAN DISBURSEMENT', 60_000);
     expect(assignTransactionToLoan({ txnId, itemId }).linked).toBe(true);
+  });
+});
+
+describe('F1: sign-aware apply — a disbursement/adjustment INCREMENTS the balance', () => {
+  it('a positive transaction increments the balance by its full magnitude, with no clamp', () => {
+    const { itemId } = ctx.seedLoan({ balanceCents: 20_000_00 });
+    const txnId = ctx.spend('LOAN DISBURSEMENT', 600_00);
+    expect(assignTransactionToLoan({ txnId, itemId })).toEqual({ linked: true, appliedCents: 600_00 });
+    expect(ctx.balanceOf(itemId)).toBe(20_600_00);
+  });
+
+  it('unassigning a disbursement link restores the balance by subtracting it back', () => {
+    const { itemId } = ctx.seedLoan({ balanceCents: 20_000_00 });
+    const txnId = ctx.spend('LOAN DISBURSEMENT', 600_00);
+    assignTransactionToLoan({ txnId, itemId });
+    expect(ctx.balanceOf(itemId)).toBe(20_600_00);
+    expect(unassignTransactionFromLoan({ txnId, itemId })).toBe(true);
+    expect(ctx.balanceOf(itemId)).toBe(20_000_00);
+  });
+
+  it('a clamped payment is unchanged by the sign-aware refactor', () => {
+    const { itemId } = ctx.seedLoan({ balanceCents: 30_000 });
+    const txnId = ctx.spend('HONDA FIN SVC', -45_000);
+    expect(assignTransactionToLoan({ txnId, itemId })).toEqual({ linked: true, appliedCents: 30_000 });
+    expect(ctx.balanceOf(itemId)).toBe(0);
+    expect(unassignTransactionFromLoan({ txnId, itemId })).toBe(true);
+    expect(ctx.balanceOf(itemId)).toBe(30_000);
+  });
+});
+
+describe('F2: reverse paths never fabricate a balance out of NULL', () => {
+  it('unassign leaves an unknown balance unknown', () => {
+    const { itemId } = ctx.seedLoan({ balanceCents: 2_000_000 });
+    const txnId = ctx.spend('HONDA FIN SVC', -45_000);
+    assignTransactionToLoan({ txnId, itemId });
+    expect(ctx.balanceOf(itemId)).toBe(1_955_000);
+
+    // Simulate the balance being cleared back to "unknown" directly (e.g. a later edit that
+    // clears principal/balance), independent of the loans.ts write paths.
+    ctx.t.sqlite.prepare('update warranty_items set current_balance_cents = null, balance_updated_at = null where id = ?').run(itemId);
+    expect(ctx.balanceOf(itemId)).toBeNull();
+
+    expect(unassignTransactionFromLoan({ txnId, itemId })).toBe(true);
+    expect(ctx.balanceOf(itemId)).toBeNull();
+  });
+
+  it('import-undo leaves an unknown balance unknown', () => {
+    const { itemId } = ctx.seedLoan({ balanceCents: 2_000_000 });
+    saveLoanRule({ itemId, merchantContains: 'HONDA FIN', accountId: null, enabled: true });
+    const row: CandidateRow = {
+      rowIndex: 0,
+      rawDate: '2026-08-01',
+      date: '2026-08-01',
+      rawDescription: 'HONDA FIN SVC',
+      amountCents: -45_000,
+      cells: [],
+    };
+    const hashed = computeRowHashes(ctx.accountId, [row]);
+    const first = commitImport({ accountId: ctx.accountId, profileId: null, filename: 'f2.csv', importedBy: ctx.userId, rows: hashed, errors: [] });
+    applyLoanMatchers(first.insertedTransactionIds);
+    expect(ctx.balanceOf(itemId)).toBe(1_955_000);
+
+    ctx.t.sqlite.prepare('update warranty_items set current_balance_cents = null, balance_updated_at = null where id = ?').run(itemId);
+    expect(ctx.balanceOf(itemId)).toBeNull();
+
+    const result = undoImport(first.importId);
+    expect(result.loanLinksReversed).toBe(1);
+    expect(ctx.balanceOf(itemId)).toBeNull();
   });
 });

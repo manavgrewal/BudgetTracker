@@ -74,6 +74,8 @@ export interface SyncResult {
   /** true when runEngine threw after the rows were already committed — same contract as import/flow.ts. */
   engineFailed: boolean;
   loanLinksCreated: number;
+  /** F5 fix-round: true when applyLoanMatchers's own internal catch (MUST-13.5) fired. */
+  loanMatchFailed: boolean;
 }
 
 function syncLabel(at: Date): string {
@@ -215,7 +217,9 @@ export async function runSync(input: { userId: number; fetcher?: Fetcher; now?: 
     engine = { processed: 0, categorized: 0, transfers: 0, skipped: 0 };
   }
   // MUST-13.7: same post-commit slot as import/flow.ts, on the sync's own inserted ids.
-  const loanLinksCreated = applyLoanMatchers(insertedIds);
+  // Same out-param pattern as flow.ts for F5's loanMatchFailed.
+  const loanMatchReport = { failed: false };
+  const loanLinksCreated = applyLoanMatchers(insertedIds, undefined, loanMatchReport);
   markSynced(now);
 
   return {
@@ -227,5 +231,6 @@ export async function runSync(input: { userId: number; fetcher?: Fetcher; now?: 
     engine,
     engineFailed,
     loanLinksCreated,
+    loanMatchFailed: loanMatchReport.failed,
   };
 }

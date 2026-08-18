@@ -23,6 +23,8 @@ export interface CommitFlowResult {
   /** true when runEngine threw after the rows were already committed (review-review finding 2). */
   engineFailed: boolean;
   loanLinksCreated: number;
+  /** F5 fix-round: true when applyLoanMatchers's own internal catch (MUST-13.5) fired. */
+  loanMatchFailed: boolean;
 }
 
 export function commitStagedImport(input: {
@@ -107,8 +109,11 @@ export function commitStagedImport(input: {
 
   // MUST-13.7: a post-commit side effect outside the commit transaction, exactly as
   // runEngine already is. applyLoanMatchers is internally guarded (MUST-13.5) and returns 0
-  // on failure rather than throwing an import away.
-  const loanLinksCreated = applyLoanMatchers(committed.insertedTransactionIds);
+  // on failure rather than throwing an import away; the loanMatchReport out-param is how
+  // this caller learns that happened (F5 fix-round) without applyLoanMatchers's own return
+  // type changing for every other call site.
+  const loanMatchReport = { failed: false };
+  const loanLinksCreated = applyLoanMatchers(committed.insertedTransactionIds, undefined, loanMatchReport);
 
   return {
     importId: committed.importId,
@@ -120,5 +125,6 @@ export function commitStagedImport(input: {
     engine,
     engineFailed,
     loanLinksCreated,
+    loanMatchFailed: loanMatchReport.failed,
   };
 }

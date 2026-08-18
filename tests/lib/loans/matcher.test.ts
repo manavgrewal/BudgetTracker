@@ -1,3 +1,4 @@
+import BetterSqlite3 from 'better-sqlite3';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../../helpers/db';
 import { applyLoanMatchers, loanLinksForTransactions, saveLoanRule } from '@/lib/loans';
@@ -164,6 +165,32 @@ describe('MUST-13.3 … MUST-13.6: the rule matcher', () => {
     expect(spy).toHaveBeenCalled();
   });
 
+  it('F5: the optional report out-param flags a swallowed failure for callers that need to know', () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    t.sqlite.prepare('drop table loan_matcher_rules').run();
+    const report = { failed: false };
+    expect(applyLoanMatchers([1, 2, 3], undefined, report)).toBe(0);
+    expect(report.failed).toBe(true);
+  });
+
+  it('F5: the report is left untouched on a genuinely-empty-but-successful run', () => {
+    const { itemId } = seedLoan({ balanceCents: 2_000_000 });
+    saveLoanRule({ itemId, merchantContains: 'HONDA FIN', accountId: null, enabled: true });
+    const report = { failed: false };
+    // No candidate transaction matches, but nothing threw.
+    expect(applyLoanMatchers([spend('GROCERY', -5_000)], undefined, report)).toBe(0);
+    expect(report.failed).toBe(false);
+  });
+
+  it('F1 ruling: a rule never links a positive (disbursement/adjustment) transaction, even on a merchant match', () => {
+    const { itemId } = seedLoan({ balanceCents: 2_000_000 });
+    saveLoanRule({ itemId, merchantContains: 'HONDA FIN', accountId: null, enabled: true });
+    const txnId = spend('HONDA FIN SVC', 60_000); // positive: a disbursement, not a payment
+    expect(applyLoanMatchers([txnId])).toBe(0);
+    expect(balanceOf(itemId)).toBe(2_000_000);
+    expect(loanLinksForTransactions([txnId]).get(txnId)).toBeUndefined();
+  });
+
   it('AC5: with zero loan rules it performs exactly ONE query and writes nothing', () => {
     const txnId = spend('GROCERY', -5_000);
     const before = queryCount();
@@ -185,5 +212,30 @@ describe('MUST-13.2: a linked payment stays in its category and in every budget'
     // ...and nothing on the transaction itself moved.
     const row = t.sqlite.prepare('select is_transfer, category_id, attributed_user_id from transactions where id = ?').get(txnId);
     expect(row).toEqual({ is_transfer: 0, category_id: groceries, attributed_user_id: null });
+  });
+});
+
+describe('F4: the duplicate-rule contract stays a raw driver error', () => {
+  /**
+   * task-11-brief.md's saveLoanRuleAction wraps `saveLoanRule` in a try/catch that checks
+   * `error instanceof BetterSqlite3.SqliteError && error.code === 'SQLITE_CONSTRAINT_UNIQUE'`
+   * before translating it to "That rule already exists on this loan." -- the same pattern
+   * src/app/(app)/warranties/actions.ts already uses for the FK-constraint translation on
+   * item-type deletes, and src/app/(app)/settings/item-types/actions.ts uses for its own
+   * unique-name translation. If saveLoanRule caught and pre-translated this error itself, that
+   * `instanceof` check at the action layer would never match and Task 11's exact message would
+   * never surface. This test locks in the raw-error contract Task 11 depends on, rather than
+   * "fixing" it into a friendlier throw here and quietly breaking that already-authored catch.
+   */
+  it('saveLoanRule lets the unique-index violation surface as a raw SqliteError', () => {
+    const { itemId } = seedLoan({ balanceCents: 2_000_000 });
+    saveLoanRule({ itemId, merchantContains: 'HONDA FIN', accountId: null, enabled: true });
+    expect.assertions(2);
+    try {
+      saveLoanRule({ itemId, merchantContains: 'HONDA FIN', accountId: null, enabled: true });
+    } catch (error) {
+      expect(error).toBeInstanceOf(BetterSqlite3.SqliteError);
+      if (error instanceof BetterSqlite3.SqliteError) expect(error.code).toBe('SQLITE_CONSTRAINT_UNIQUE');
+    }
   });
 });
