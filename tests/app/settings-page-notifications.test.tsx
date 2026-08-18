@@ -1,10 +1,28 @@
-import { describe, it, expect } from 'vitest';
+// @vitest-environment jsdom
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { render, cleanup, screen } from '@testing-library/react';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const settingsPage = fs.readFileSync(path.join(root, 'src/app/(app)/settings/page.tsx'), 'utf8');
+
+const currentUser = vi.hoisted(() => ({
+  value: { id: 1, name: 'Sam', username: 'sam', role: 'member' as 'admin' | 'member' },
+}));
+
+vi.mock('@/lib/auth/session', () => ({
+  requireUser: async () => currentUser.value,
+}));
+vi.mock('@/lib/auth/users', () => ({
+  findUserByUsername: () => null,
+}));
+vi.mock('@/lib/auth/totp', () => ({
+  countUnusedRecoveryCodes: () => 0,
+}));
+
+afterEach(cleanup);
 
 describe('MUST-11.1: the Settings entry point', () => {
   it('links to /settings/notifications with the specified blurb', () => {
@@ -30,5 +48,14 @@ describe('MUST-11.1: the Settings entry point', () => {
       if (!/\.tsx?$/.test(entry)) continue;
       expect(fs.readFileSync(path.join(dir, entry), 'utf8')).not.toMatch(/\bfetch\s*\(/);
     }
+  });
+});
+
+describe('MUST-9.1: the Updates card', () => {
+  it('a member sees no Updates card', async () => {
+    currentUser.value.role = 'member';
+    const { default: SettingsPage } = await import('@/app/(app)/settings/page');
+    render(await SettingsPage());
+    expect(screen.queryByText('Updates')).toBeNull();
   });
 });

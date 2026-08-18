@@ -17,6 +17,7 @@ import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { AboutPanel } from './about-panel';
 import { ProfileForms } from './profile-forms';
+import { UpdatesCard } from './updates-card';
 
 export const dynamic = 'force-dynamic';
 
@@ -119,6 +120,9 @@ export default async function SettingsPage() {
           </div>
         </section>
       ) : null}
+
+      {/* MUST-9.1: admin only. A member's Settings page is byte-identical to v1.3.0's. */}
+      {user.role === 'admin' ? <UpdatesCard /> : null}
 
       {/* Last: the version and revision log are reference material, not a task. */}
       <AboutPanel />
