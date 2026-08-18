@@ -7,6 +7,7 @@ import { evaluateAnomalies, evaluateSubscriptionCreep } from '@/lib/notify/evalu
 import { evaluateBudgets } from '@/lib/notify/evaluate/budget';
 import { evaluateComingDue } from '@/lib/notify/evaluate/coming-due';
 import { evaluateWeeklyDigest } from '@/lib/notify/evaluate/digest';
+import { evaluateMonthBoundary } from '@/lib/notify/evaluate/monthly';
 import { evaluateBudgetPace } from '@/lib/notify/evaluate/pace';
 import { evaluateStaleImport } from '@/lib/notify/evaluate/stale';
 import { dailySlot, weeklySlot } from '@/lib/notify/evaluate/slots';
@@ -80,6 +81,7 @@ export function runScheduledEvaluation(now: Date = new Date()): void {
         evaluateStaleImport({ userId: user.id, now, tz });
         evaluateBudgetPace({ userId: user.id, now, tz });
         evaluateSubscriptionCreep({ userId: user.id, now, tz });
+        evaluateMonthBoundary({ userId: user.id, now, tz });
       } else {
         logSlotSkipOnce('daily', user.id, daily.slotDate, daily.hoursSince);
       }

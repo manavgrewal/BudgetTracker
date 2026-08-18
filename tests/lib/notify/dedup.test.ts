@@ -8,11 +8,17 @@ import { saveEmailTarget, saveSmtp, setPref } from '@/lib/notify/config';
 import {
   backupFailedKey,
   budgetExceededKey,
+  budgetPaceKey,
   budgetThresholdKey,
   comingDueKey,
+  duplicateChargeKey,
   newSigninKey,
+  predictedVsActualKey,
   restoreOutcomeKey,
   staleImportKey,
+  subscriptionCreepKey,
+  suggestedBudgetRefreshKey,
+  unusualTransactionKey,
   updateAvailableKey,
   weeklyDigestKey,
 } from '@/lib/notify/events';
@@ -295,5 +301,28 @@ describe('MUST-6.3: update:<version> and the one condition under which it regene
     t.sqlite.prepare(`delete from notification_outbox where dedup_key = ?`).run(key);
     const afterPrune = enqueue({ userId, eventId: 'update_available', dedupKey: key, subject: 's', body: 'b', at: new Date('2027-10-01T00:00:00Z') });
     expect(afterPrune.inserted.length).toBeGreaterThan(0);
+  });
+});
+
+describe('AC5: every v1.4.0 dedup key is idempotent through enqueue()', () => {
+  it('inserts one row per channel however many times it is enqueued', () => {
+    const userId = emailUser();
+    const cases: { eventId: string; dedupKey: string }[] = [
+      { eventId: 'budget_pace', dedupKey: budgetPaceKey('household', 7, '2026-08') },
+      { eventId: 'unusual_transaction', dedupKey: unusualTransactionKey(4211) },
+      { eventId: 'subscription_creep', dedupKey: subscriptionCreepKey(4211) },
+      { eventId: 'duplicate_charge', dedupKey: duplicateChargeKey(31, 44) },
+      { eventId: 'predicted_vs_actual', dedupKey: predictedVsActualKey('2026-07') },
+      { eventId: 'suggested_budget_refresh', dedupKey: suggestedBudgetRefreshKey('2026-08') },
+    ];
+    for (const { eventId, dedupKey } of cases) {
+      setPref(userId, eventId, 'email', true);
+      const first = enqueue({ userId, eventId, dedupKey, subject: 's', body: 'b' });
+      const second = enqueue({ userId, eventId, dedupKey, subject: 's', body: 'b' });
+      expect(first.inserted).toEqual(['email']);
+      expect(second.inserted).toEqual([]);
+    }
+    const rows = t.sqlite.prepare('select count(*) as n from notification_outbox').get() as { n: number };
+    expect(rows.n).toBe(cases.length);
   });
 });
