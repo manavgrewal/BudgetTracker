@@ -261,7 +261,7 @@ group by 1, 2
 
 served by the existing `transactions_date_idx`. `windowStart` is `monthStart(first window month)` and `windowEnd` is `monthEnd(last window month)`.
 
-**MUST-4.9** `netSpentCents()` is applied per (month, category) cell, and then the **rollup rule of MUST-3.1** is applied in TypeScript over `listCategories({ includeArchived: true })`: a parent's value for a month is its own cell plus every child's cell for that month, archived children included. Income categories are dropped after the rollup, never before, so an income child under a spend parent cannot silently change a parent's total in a way that disagrees with `budgetProgress()`. The result is:
+**MUST-4.9** `netSpentCents()` is applied per (month, category) cell, and then the **rollup rule of MUST-3.1** is applied in TypeScript over `listCategories({ includeArchived: true })`: a parent's value for a month is its own cell plus every child's cell for that month, archived children included. Income categories are dropped before the rollup, exactly as `budgetProgress()` drops them, so an income child under a spend parent cannot silently change a parent's total in a way that disagrees with `budgetProgress()`. (Amended after the pre-flight ruling on F4: the earlier "after the rollup" wording contradicted both `budgetProgress()` and the test named in section 17.2.) The result is:
 
 ```ts
 export interface CategorySeries {
@@ -282,7 +282,7 @@ export function categorySeries(input: {
 export function firstDataMonth(): string | null;
 ```
 
-**MUST-4.10** `categorySeries()` returns a row for **every** non-income category in `listCategories({ includeArchived: true })`, including ones with an all-zero series. Filtering is the caller's job, so the pure functions downstream never have to distinguish "absent" from "zero".
+**MUST-4.10** `categorySeries()` returns exactly the row set `budgetProgress()` reports, flattened: every non-archived top-level non-income category with one level of rollup (archived children included in the sum), every non-archived child as its own own-spend row, and archived top-level categories only when their own cells are non-zero. Rows the Budgets page does not draw get no series. Present rows with no spend carry an all-zero series, so the pure functions downstream never have to distinguish "absent" from "zero". (Amended after the pre-flight ruling on F4: the earlier "a row for every non-income category" wording would have produced suggestions for rows the budgets UI cannot apply them to.)
 
 **MUST-4.11** Seasonality needs a longer read than the six-month window. `history.ts` exports a second function, `seasonalReference()`, which reads the 12 calendar months ending at `addMonths(targetMonth, -12)` inclusive using the same single grouped query shape and the same rollup rule. It is called **only** when `monthsBetween(firstDataMonth, targetMonth) >= SEASONAL_MIN_MONTHS`, so a household with under 15 months of history never pays for the second query.
 
