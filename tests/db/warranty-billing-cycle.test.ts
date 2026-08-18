@@ -88,9 +88,13 @@ describe('migration 0005 — fresh database', () => {
     expect(amountCol).toBeDefined();
     expect(cycleCol!.notnull).toBe(0);
     expect(amountCol!.notnull).toBe(0);
-    // ALTER TABLE ADD COLUMN appends physically: both land at the very end, in the order added.
-    expect(cols[cols.length - 2]!.name).toBe('billing_cycle');
-    expect(cols[cols.length - 1]!.name).toBe('billing_amount_cents');
+    // ALTER TABLE ADD COLUMN appends physically, in the order added: billing_cycle before
+    // billing_amount_cents. Asserted by relative index, not absolute offset, because appended
+    // columns from later migrations must not break this test.
+    const cycleIdx = cols.findIndex((c) => c.name === 'billing_cycle');
+    const amountIdx = cols.findIndex((c) => c.name === 'billing_amount_cents');
+    expect(cycleIdx).toBeGreaterThanOrEqual(0);
+    expect(amountIdx).toBeGreaterThan(cycleIdx);
   });
 
   it('accepts NULL for both columns (the default, pre-existing-row shape)', () => {

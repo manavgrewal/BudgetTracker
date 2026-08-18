@@ -118,12 +118,15 @@ describe('migration 0003 — objects and seeds', () => {
     expect(typeCol).toBeDefined();
     expect(typeCol!.notnull).toBe(0);
     expect(typeCol!.dflt_value).toBeNull();
-    // ALTER TABLE ADD COLUMN appends physically: type_id was last as of 0003, and stays
-    // exactly where 0003 put it -- 0005's billing_cycle/billing_amount_cents append AFTER
-    // it, not before, so type_id is now third-from-last rather than last.
-    expect(cols[cols.length - 3]!.name).toBe('type_id');
-    expect(cols[cols.length - 2]!.name).toBe('billing_cycle');
-    expect(cols[cols.length - 1]!.name).toBe('billing_amount_cents');
+    // ALTER TABLE ADD COLUMN appends physically: type_id (0003) lands before billing_cycle and
+    // billing_amount_cents (0005), which append after it. Asserted by relative index, not
+    // absolute offset, because appended columns from later migrations must not break this test.
+    const typeIdx = cols.findIndex((c) => c.name === 'type_id');
+    const cycleIdx = cols.findIndex((c) => c.name === 'billing_cycle');
+    const amountIdx = cols.findIndex((c) => c.name === 'billing_amount_cents');
+    expect(typeIdx).toBeGreaterThanOrEqual(0);
+    expect(cycleIdx).toBeGreaterThan(typeIdx);
+    expect(amountIdx).toBeGreaterThan(cycleIdx);
   });
 });
 

@@ -1,10 +1,12 @@
 # Installing Budget Tracker
 
 Budget Tracker runs as one Docker container with one SQLite file. There is no cloud account, no
-sign-up, and no network traffic at runtime beyond two opt-in exceptions: the optional SimpleFIN
-bank sync, and notifications, dormant until a channel is configured and then reaching only
-`api.telegram.org` and the SMTP relay you enter. Pick your platform below; each path ends with a
-URL you can open.
+sign-up, and no network traffic at runtime beyond three opt-in exceptions: the optional SimpleFIN
+bank sync, notifications, dormant until a channel is configured and then reaching only
+`api.telegram.org` and the SMTP relay you enter, and update checks (2026-08-17 spec), dormant
+until an admin enables them and then reaching only `api.github.com`, one host and two endpoints,
+with no authentication and nothing about the install in the request. Pick your platform below;
+each path ends with a URL you can open.
 
 ---
 
@@ -78,6 +80,13 @@ taken verbatim, so stray leading/trailing whitespace in `.env` is significant th
 > passwords are unaffected. `data/secret.key` is deliberately excluded from backup archives (see
 > "Keeping backups on a separate NAS" below), so back it up separately once — a password manager
 > entry works well.
+
+**`WATCHTOWER_URL` and `WATCHTOWER_TOKEN` are optional, and only for the prebuilt-image install.**
+`install/synology-compose-pull.yml` sets both for you; a build-from-source install does not need
+them and leaves them unset. They are what lets Settings → About ask Watchtower to update on
+request instead of Watchtower polling on its own timer. The Watchtower endpoint sits on the
+compose project's private network and is never published to the host, so it is not a fourth
+egress destination beyond the three named above.
 
 ---
 

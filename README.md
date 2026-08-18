@@ -6,10 +6,12 @@ column-mapping wizard), the app categorizes spending and learns from corrections
 monthly budgets per category and savings goals.
 
 It runs as a single Docker container on a Synology NAS (or any Docker host), stays on your LAN,
-stores everything in one SQLite file, and makes **no network calls at runtime** beyond two opt-in
-exceptions: the optional SimpleFIN bank sync, and notifications, which stays dormant until you
-configure a channel and then reaches only `api.telegram.org` and the SMTP relay you typed in. No
-telemetry, no cloud account, no mandatory bank API.
+stores everything in one SQLite file, and makes **no network calls at runtime** beyond three
+opt-in exceptions: the optional SimpleFIN bank sync, notifications, which stays dormant until you
+configure a channel and then reaches only `api.telegram.org` and the SMTP relay you typed in, and
+update checks (2026-08-17 spec), dormant until an admin enables them and then reaching only
+`api.github.com`, one host and two endpoints, with no authentication and nothing about the install
+in the request. No telemetry, no cloud account, no mandatory bank API.
 
 > **Installing?** Go to **[INSTALL.md](INSTALL.md)** — prerequisites, one command per platform
 > (Linux, Windows, macOS, Raspberry Pi), a no-SSH Synology walkthrough, and update, uninstall,
@@ -256,6 +258,13 @@ This app is not designed for exposure to the public internet. Do not port-forwar
 
 `data/receipts/` holds the receipt files. They are part of the nightly backup archive, and an
 image update never touches them.
+
+**`WATCHTOWER_URL` and `WATCHTOWER_TOKEN` are optional, and only matter for the prebuilt-image
+install.** `install/synology-compose-pull.yml` sets both of these for you; a build-from-source
+install (this `docker-compose.yml`) never needs them and leaves them unset. They let the app ask
+its Watchtower companion to update on your say-so from Settings → About, instead of Watchtower
+polling on a timer. The Watchtower endpoint lives on the compose project's private network and is
+never published to the host, so it is not a fourth egress destination — see the note above.
 
 ---
 

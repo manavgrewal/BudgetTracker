@@ -21,6 +21,56 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.3.1] - 2026-08-18
+
+### Changed
+
+- **The prebuilt-image compose file now drives Watchtower from the app instead of polling
+  daily.** If you replace your compose file with the new one, updates are OFF until you turn
+  them on: open Settings -> About and press "Enable update checks", once. Existing installs
+  that keep their current compose keep their daily poll and carry on exactly as before; the
+  app notices, and tells you how to move over. docs/INSTALL-SYNOLOGY.md has the three steps.
+
+### Added
+
+- **In-app update checks, off until you ask for them.** Settings -> About gains an Updates
+  card. Switch it on and once a day the app asks GitHub whether a newer version of Budget
+  Tracker has been published. That request carries the version you are running and nothing
+  else: not your data, not your address, not how many people use this install. Until you
+  press the button it makes no such request at all.
+- **Small updates install themselves; a major version never does.** Bug-fix and feature
+  releases are applied unattended through the Watchtower companion. A major version is parked
+  behind a screen that shows that version's own release notes, a plain warning that your data
+  is not touched, and a confirm button with the version number in its label. There is no
+  setting that changes this.
+- **A notification when an update is waiting**, for admins, on whichever channel they already
+  use. It fires only when the app will not apply the update itself.
+- **Loan money-tracking.** A loan item in Contracts & Coverage now carries what you borrowed,
+  the interest rate (shown for reference, never used in a calculation), the balance still
+  owed, and its regular payment. The form says "Payment" and "per month" for a loan, where a
+  subscription says "Billing" and "/ month".
+- **Payment matching.** Tell a loan what its payments look like on your statement and the
+  balance goes down on its own as they land, with an opt-in pass over the last twelve months
+  for the case where the balance you typed predates them. The payment still counts in your
+  budget and in your reports, because it is money that left the household.
+- **A Loans card on the dashboard** showing the total owed, a payoff bar and the next payment
+  date, and a **Debt over time** line on the Reports page. The line breaks where a loan's
+  history is unknown rather than inventing a number.
+
+### Fixed
+
+- **Telegram setup no longer forces you to have a chat ID before you can save a bot token.**
+  Pasting a token and pressing Save used to be rejected outright if the chat ID field was
+  still empty. It now saves the token on its own, tells you to press Detect chat ID (or type
+  one in) and save again, and only refuses the save if Enabled is ticked with no chat ID set.
+- The release workflow moves to actions/checkout@v5 and actions/setup-node@v5, clearing the
+  Node 24 deprecation warnings.
+- The Docker build no longer warns about the build-stage SECRET_KEY placeholder.
+- Two notification tests were passing without exercising the rule they named, and a third
+  asserted less than its title claimed. All three now prove what they say.
+- An unreachable third relay check in the notifications test-send path is gone, and the one
+  in the outbox that IS load-bearing now says so.
+
 ## [1.3.0] - 2026-08-17
 
 ### Added

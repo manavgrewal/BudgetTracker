@@ -36,7 +36,7 @@ Self-hosted household budget tracker replacing Mint. Family members import bank 
 - **UI:** Tailwind CSS, Recharts for charts. Responsive (phone/tablet/desktop browsers). Next image optimization disabled (`images.unoptimized`) — no remote images, avoids runtime cache writes.
 - **Runtime:** Node 22, single Docker container, **`node:22-bookworm-slim`** base (glibc — better-sqlite3 and argon2 ship glibc prebuilds; Alpine/musl would force slow source compiles, catastrophic under ARM64 QEMU emulation). Multi-stage build with Next `standalone` output; compiled native `.node` binaries copied explicitly into the runtime stage (output tracing does not reliably include them). Non-root user. Multi-arch: x86_64 + ARM64.
 - **Scheduler:** in-process nightly job (node-cron) for backups and maintenance sweeps.
-- **No runtime network calls** to any external service — with two opt-in exceptions: user-initiated sync requests to the user's own configured SimpleFIN bridge (§12), and notifications (2026-08-17 spec), dormant until a channel is configured and then reaching only `api.telegram.org` and the SMTP relay an admin entered. No telemetry ever.
+- **No runtime network calls** to any external service — with three opt-in exceptions: user-initiated sync requests to the user's own configured SimpleFIN bridge (§12), notifications (2026-08-17 spec), dormant until a channel is configured and then reaching only `api.telegram.org` and the SMTP relay an admin entered, and update checks (2026-08-17 spec), dormant until an admin enables them and then reaching only `api.github.com`. No telemetry ever.
 - **Validation:** zod on all inputs (API + forms + CSV rows).
 
 ### Deployment targets

@@ -160,6 +160,30 @@ describe('version and changelog', () => {
     expect(section).toMatch(/older `?\.db`? backups still restore|still restore/i);
     expect(section).toContain('Warranty');
   });
+
+  it('MUST-18.1 / MUST-18.3: the 1.3.1 release', () => {
+    const pkg = JSON.parse(read('package.json')) as { version: string };
+    expect(pkg.version).toBe('1.3.1');
+    const changelog = read('CHANGELOG.md');
+    expect(changelog).toMatch(/^## \[1\.3\.1\] - 2026-08-18$/m);
+    // An empty Unreleased section is left in place for the next session.
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.3.1]'));
+    // MUST-18.2: the compose change leads, because auto-apply installs this release unattended.
+    const section = changelog.slice(changelog.indexOf('## [1.3.1]'), changelog.indexOf('## [1.3.0]'));
+    expect(section.indexOf('### Changed')).toBeLessThan(section.indexOf('### Added'));
+  });
+
+  it('MUST-8.3 / MUST-18.5: the docs name the third egress exception and the two new variables', () => {
+    for (const doc of ['README.md', 'INSTALL.md']) {
+      const source = read(doc);
+      expect(source).toContain('api.github.com');
+      expect(source).toContain('WATCHTOWER_URL');
+      expect(source).toContain('WATCHTOWER_TOKEN');
+    }
+    const example = read('.env.example');
+    expect(example).toMatch(/^# WATCHTOWER_URL=/m);
+    expect(example).toMatch(/^# WATCHTOWER_TOKEN=/m);
+  });
 });
 
 describe('docker-compose.yml', () => {
