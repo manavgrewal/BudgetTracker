@@ -20,8 +20,13 @@ export const PREPROCESS_MAX_INPUT_PIXELS = 50_000_000;
 export const PREPROCESS_MIN_LONG_SIDE_PX = 1280;
 /** Ours. Beyond 3x there is no information left to recover. */
 export const PREPROCESS_MAX_UPSCALE = 3.0;
-/** Ours. Bounds the deskew rotate and the crop buffer. */
-export const PREPROCESS_MAX_LONG_SIDE_PX = 4000;
+/** Ours. Corrected here (Task 3 controller ruling) from 4000 to 1600. DET_LIMIT_TYPE is
+ *  'min' (see below), which raises a small image's short side but supplies no upper bound
+ *  of its own, so this constant is the only cap standing between a full resolution phone
+ *  photo and the detector. 1600 bounds that worst case on NAS hardware; the deskew rotate
+ *  and any later crop buffer inherit the same bound because nothing downstream ever sees a
+ *  larger image. See the spec's MUST-4.43 and its revision history, Task 3 correction. */
+export const PREPROCESS_MAX_LONG_SIDE_PX = 1600;
 /** Ours, sharp's normalise option. */
 export const NORMALISE_LOWER_PERCENTILE = 1;
 /** Ours, sharp's normalise option. */
