@@ -50,6 +50,28 @@ describe('MUST-8.4: assertGithubUrl requires all five conditions', () => {
   it('rejects a fragment', () => {
     expect(() => assertGithubUrl(`${GITHUB_API_ORIGIN}${GITHUB_RELEASES_PATH}#x`)).toThrowError(/refusing/);
   });
+
+  it('rejects percent-encoded path traversal — %2e%2e collapses via URL normalisation to an unpinned path, %2F stays literal and never matches', () => {
+    for (const bad of [
+      `${GITHUB_API_ORIGIN}/repos/VibeLogicCode/BudgetTracker/releases/%2e%2e/latest`,
+      `${GITHUB_API_ORIGIN}/repos/VibeLogicCode/BudgetTracker%2Freleases/latest`,
+    ]) {
+      expect(() => assertGithubUrl(bad), bad).toThrowError(/refusing a GitHub request/);
+    }
+  });
+
+  it('rejects a protocol-relative URL', () => {
+    expect(() => assertGithubUrl(`//api.github.com${GITHUB_RELEASES_PATH}`)).toThrowError(/refusing a GitHub request/);
+  });
+
+  it('rejects a duplicate ref and a reordered, non-leading ref in the query', () => {
+    for (const bad of [
+      `${GITHUB_API_ORIGIN}${GITHUB_CHANGELOG_PATH}?ref=v1.0.0&ref=main`,
+      `${GITHUB_API_ORIGIN}${GITHUB_CHANGELOG_PATH}?x=1&ref=v1.0.0`,
+    ]) {
+      expect(() => assertGithubUrl(bad), bad).toThrowError(/refusing a GitHub request/);
+    }
+  });
 });
 
 describe('MUST-8.6: assertWatchtowerUrl makes "internal" enforceable', () => {
@@ -96,5 +118,13 @@ describe('MUST-8.6: assertWatchtowerUrl makes "internal" enforceable', () => {
     ]) {
       expect(() => assertWatchtowerUrl(bad), bad).toThrowError(/refusing a Watchtower request/);
     }
+  });
+
+  it('rejects an alternate IPv4 encoding — decimal 134744072 normalises to the public 8.8.8.8', () => {
+    expect(() => assertWatchtowerUrl('http://134744072/v1/update')).toThrowError(/non-internal host/);
+  });
+
+  it('rejects userinfo-based host smuggling — the real host is evil.com, not the bare label before the @', () => {
+    expect(() => assertWatchtowerUrl('http://watchtower@evil.com/v1/update')).toThrowError(/refusing a Watchtower request/);
   });
 });

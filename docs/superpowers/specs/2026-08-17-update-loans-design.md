@@ -548,7 +548,7 @@ Pinning the **exact** pathnames rather than a prefix is deliberate: a prefix che
    - an IPv4 literal inside `127.0.0.0/8`, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16` or `169.254.0.0/16`;
    - `[::1]`, or an IPv6 literal inside `fc00::/7` or `fe80::/10`.
 
-Any hostname containing a dot that is not one of those IP literals is refused with `refusing a Watchtower request to a non-internal host`. A dotted name could resolve anywhere, and this function is pure — it cannot and must not resolve DNS to find out. The shipped default (`http://watchtower:8080/v1/update`) is a bare label and passes; `http://evil.example.com/v1/update` does not; `http://watchtower:8080/v1/update?x=1` does not; `http://user@watchtower:8080/v1/update` does not.
+Any hostname containing a dot that is not one of those IP literals is refused with `refusing a Watchtower request to a non-internal host`. A dotted name could resolve anywhere, and this function is pure — it cannot and must not resolve DNS to find out. The shipped default (`http://watchtower:8080/v1/update`) is a bare label and passes; `http://evil.example.com/v1/update` does not; `http://watchtower:8080/v1/update?x=1` does not; `http://user@watchtower:8080/v1/update` does not. The accepted bare-label branch carries the same residual limitation honestly, not hidden: a dotless name could still resolve publicly, via resolv.conf search domains or a dotless TLD, but `WATCHTOWER_URL` is operator-set env, not attacker input.
 
 **MUST-8.7** A `WATCHTOWER_URL` that fails this guard makes `watchtowerConfig()` return `null`, which puts the install on the §7.4 fallback path and surfaces `The WATCHTOWER_URL in your compose file is not a valid internal address.` on the card. It is never a 500 and never a silent no-op.
 

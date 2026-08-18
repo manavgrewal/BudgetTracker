@@ -79,7 +79,8 @@ function isPrivateIpv4(hostname: string): boolean {
 }
 
 function isPrivateIpv6(hostname: string): boolean {
-  // URL.hostname keeps the brackets off but lowercases the literal.
+  // URL.hostname keeps the brackets ON for an IPv6 literal (and lowercases it), unlike a
+  // dotted hostname or an IPv4 literal, which never carry brackets.
   if (hostname === '[::1]') return true;
   const inner = hostname.startsWith('[') && hostname.endsWith(']') ? hostname.slice(1, -1) : hostname;
   if (inner === '::1') return true;
@@ -97,7 +98,9 @@ function isPrivateIpv6(hostname: string): boolean {
  * A dotted name could resolve anywhere, and this function is PURE — it cannot and must not
  * resolve DNS to find out. So any dotted hostname that is not one of the IP literals below
  * is refused outright, which is stricter than "is it actually internal" and is the correct
- * direction to err in.
+ * direction to err in. The accepted bare-label branch has the same residual limitation, honestly
+ * acknowledged rather than hidden: a dotless name could still resolve publicly, via resolv.conf
+ * search domains or a dotless TLD, but WATCHTOWER_URL is operator-set env, not attacker input.
  */
 export function assertWatchtowerUrl(url: string): void {
   let parsed: URL;
