@@ -466,6 +466,17 @@ describe('MUST-14.1 / MUST-14.3 / MUST-14.5 / MUST-14.6 / MUST-12.3: the loan su
     expect(screen.getByText(/removing an old payment can push the balance/i)).toBeTruthy();
     // Plain voice: no em dash in the hint itself.
     expect(screen.getByText(/removing an old payment can push the balance/i).textContent).not.toContain('—');
+    cleanup();
+
+    // Micro round: a null balance isn't rendered anywhere on the page, so a hint pointing at
+    // "the balance" has nothing to point at -- gated on currentBalanceCents too, not just
+    // paymentCount. principalCents is set here so the money block itself still renders (it is
+    // omitted only when BOTH principal and balance are null).
+    renderDetail({
+      item: item({ kind: 'loan', principalCents: 3_000_000, currentBalanceCents: null, balanceUpdatedAt: null }),
+      paymentCount: 3,
+    });
+    expect(screen.queryByText(/removing an old payment can push the balance/i)).toBeNull();
   });
 
   // F11 fix-round: the money block's Detail rows are dt/dd pairs and must live inside a real

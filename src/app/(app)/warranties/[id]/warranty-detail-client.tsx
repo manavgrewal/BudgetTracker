@@ -348,8 +348,10 @@ export function WarrantyDetailClient({
                       unassign a payment from -- removing an old link doesn't just undo one
                       transaction in isolation, it can leave the balance ahead of what the
                       household's latest paper statement says, and that's worth saying before
-                      someone clicks Unassign expecting a plain undo. */}
-                  {paymentCount === 0 ? null : (
+                      someone clicks Unassign expecting a plain undo. Gated on currentBalanceCents
+                      too (micro round): a null balance isn't shown at all above, so a hint about
+                      "the balance" would be pointing at a number that isn't even on the page. */}
+                  {item.currentBalanceCents === null || paymentCount === 0 ? null : (
                     <p className="text-xs text-subtle">
                       Removing an old payment can push the balance above your latest statement figure.
                     </p>

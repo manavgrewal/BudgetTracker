@@ -672,16 +672,28 @@ describe('MUST-14.4 / MUST-14.7 / MUST-14.14: the loan readers and the rule acti
     expect(calls).toContain('/reports');
   });
 
-  // Task 9 review finding (MED), carried into this task: the edit form used to omit the
-  // four loan money fields entirely, and readItemInput() normalises an absent field to null
-  // -- so editing only the item's NAME used to silently wipe principal/rate/balance/anchor on
-  // every loan. The Loan fieldset now round-trips the item's existing values (seeded into the
-  // edit form's controlled inputs), so an edit that resubmits them unchanged must leave them
-  // unchanged too. F6 fix-round: balanceUpdatedAt is asserted BYTE-IDENTICAL, not merely
-  // non-null -- readItemInput() now only re-stamps the anchor when the parsed balance actually
-  // DIFFERS from what's already stored, so an unrelated edit that resubmits the same figure
-  // must not move it at all.
-  it('regression (Task 9 review, MED / F6 fix-round): editing only the name of a loan with a live balance leaves principal/rate/balance/anchor byte-identical', async () => {
+  // Task 9 review finding (MED), carried into this task: the edit form used to omit the four
+  // loan money fields entirely, and readItemInput() normalises an absent field to null -- so
+  // editing only the item's NAME used to silently wipe principal/rate/balance/anchor on every
+  // loan.
+  //
+  // F7 fix-round: what THIS test actually proves is narrower than the fix as a whole. The
+  // FormData below is hand-built with principal/interestRate/currentBalance already populated
+  // -- exactly what a FIXED edit form would submit -- so this is an ACTION-layer round-trip
+  // proof: given a resubmission that carries the values forward, updateWarrantyAction does not
+  // wipe them and (F6 fix-round) does not move the anchor when the balance is unchanged. It
+  // would pass just as well against the PRE-fix client, because the bug lived entirely in
+  // EditForm never rendering/submitting these fields in the first place -- that half of the
+  // fix (the fieldset is actually seeded from the item, so a real edit form really does
+  // resubmit them) is proven separately, by warranty-detail-client.test.tsx's "seeds the edit
+  // form's loan fields from the item's existing values" test, which reads the rendered
+  // <input>s' own values rather than constructing FormData by hand.
+  //
+  // balanceUpdatedAt is asserted BYTE-IDENTICAL, not merely non-null (F6 fix-round):
+  // readItemInput() only re-stamps the anchor when the parsed balance actually DIFFERS from
+  // what's already stored, so an unrelated edit that resubmits the same figure must not move
+  // it at all.
+  it('regression (Task 9 review, MED / F6 fix-round): the ACTION round-trips principal/rate/balance/anchor when an edit resubmits them unchanged', async () => {
     const to = await redirectPath(() =>
       createWarrantyAction({}, formData(loanForm({ principal: '30,000.00', interestRate: '5.49', currentBalance: '25,000.00' }))),
     );
