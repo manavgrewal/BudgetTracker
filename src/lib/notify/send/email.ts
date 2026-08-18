@@ -20,15 +20,15 @@ function responseCodeOf(error: unknown): number | null {
 }
 
 /**
- * MUST-8.12 — the exact option set the spec specifies, and nothing more. `secure` is
+ * MUST-8.12: the exact option set the spec specifies, and nothing more. `secure` is
  * implicit TLS (port 465), `requireTLS` is a mandatory STARTTLS upgrade (port 587), and
  * 'none' is plain socket with neither.
  *
- * MUST-8.13 — pool: false, and the transport is created per batch and closed after it. A
+ * MUST-8.13: pool: false, and the transport is created per batch and closed after it. A
  * household sends a handful of messages a day; a pooled connection to a third-party relay
  * would spend its life idle-timing-out and reconnecting.
  *
- * MUST-8.17 — the transport's built-in connection-check method is deliberately NEVER
+ * MUST-8.17: the transport's built-in connection-check method is deliberately NEVER
  * called anywhere: a relay that accepts a connection but rejects the send is a false
  * green light. Only a real Send test counts.
  */
@@ -56,7 +56,7 @@ export async function sendEmail(input: {
       tls: { minVersion: 'TLSv1.2' },
     });
 
-    // MUST-8.14: `text` only — no `html`. Same untrusted-input reasoning as MUST-8.2, and
+    // MUST-8.14: `text` only, no `html`. Same untrusted-input reasoning as MUST-8.2, and
     // it removes the entire HTML-email test surface.
     await transporter.sendMail({
       from: `"${input.smtp.fromName}" <${input.smtp.fromEmail}>`,

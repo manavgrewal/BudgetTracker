@@ -18,14 +18,14 @@ function overBudgetNames(rows: BudgetRow[], acc: string[] = []): string[] {
 }
 
 /**
- * §10.2 — the digest covers the 7 days ENDING THE DAY BEFORE the slot date:
+ * §10.2: the digest covers the 7 days ENDING THE DAY BEFORE the slot date:
  * from = addDaysIso(slotDate, -7), to = addDaysIso(slotDate, -1). A fixed trailing window
- * rather than a fixed Monday–Sunday week, so any chosen digest_weekday yields a complete
- * week with no stale tail (decision 8).
+ * rather than a fixed calendar week running Monday to Sunday, so any chosen digest_weekday
+ * yields a complete week with no stale tail (decision 8).
  *
- * Composed from EXISTING helpers only — categoryBreakdown() and topMerchants() in
+ * Composed from EXISTING helpers only: categoryBreakdown() and topMerchants() in
  * reports.ts, budgetProgress() in budgets.ts, reviewQueueCount() in categorize/engine.ts
- * (a count, not listReviewQueue()'s hydrated rows — accurate above 1000 and no row
+ * (a count, not listReviewQueue()'s hydrated rows: accurate above 1000 and no row
  * hydration for a number nothing else in this message needs).
  * Transfers and income are excluded by the report helpers themselves.
  *
@@ -47,7 +47,7 @@ export function evaluateWeeklyDigest(input: { userId: number; slotDate: string; 
     .slice(0, TOP_CATEGORIES)
     .map((row) => ({ name: row.categoryName, cents: row.spentCents }));
 
-  // TopMerchantRow's field is `normalizedMerchant` (src/lib/reports.ts) — the merchant name
+  // TopMerchantRow's field is `normalizedMerchant` (src/lib/reports.ts): the merchant name
   // as stored, which normalizeMerchant() UPPERCASES (src/lib/categorize/normalize.ts), so
   // production digests show e.g. "LOBLAWS", not a title-cased or lowercase variant.
   const topMerchantLines: DigestLine[] = topMerchants({ from, to, limit: TOP_MERCHANTS }).map((row) => ({

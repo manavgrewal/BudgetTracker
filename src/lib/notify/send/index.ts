@@ -3,14 +3,14 @@ import type { SmtpSecurity } from '@/lib/notify/config';
 export type NotifyErrorScope = 'target' | 'relay';
 
 /**
- * MUST-7.7 — `permanent` means the request will never succeed unchanged: HTTP 400/401/403/404
+ * MUST-7.7: `permanent` means the request will never succeed unchanged: HTTP 400/401/403/404
  * from Telegram (bad token, bad chat id, bot blocked or deleted) and an SMTP 5xx. HTTP 429
  * and 5xx, DNS failures, connect timeouts and SMTP 4xx are transient.
  *
- * MUST-7.10 — `scope` decides which row records the failure: 'relay' for a connection or
+ * MUST-7.10: `scope` decides which row records the failure: 'relay' for a connection or
  * authentication problem with the household's SMTP server (recorded on notification_smtp),
  * 'target' for anything specific to one recipient (recorded on notification_targets).
- * Telegram failures are always 'target' — there is one bot per person.
+ * Telegram failures are always 'target': there is one bot per person.
  *
  * `retryAfterMs` carries Telegram's `parameters.retry_after` when present; it overrides the
  * computed backoff (MUST-7.7).
@@ -51,7 +51,7 @@ export type DeliveryRequest =
 export type NotifySender = (request: DeliveryRequest) => Promise<void>;
 
 /**
- * MUST-17.1 — the seam. Mirrors the OCR engine seam (warranty MUST-7.17): every
+ * MUST-17.1: the seam. Mirrors the OCR engine seam (warranty MUST-7.17): every
  * evaluation, outbox and integration test installs a fake here, so nodemailer is never
  * constructed and `fetch` is never called outside the two transport unit tests.
  */
@@ -66,7 +66,7 @@ export function resetNotifySenderForTests(): void {
 }
 
 async function realSender(request: DeliveryRequest): Promise<void> {
-  // Dynamic imports keep the transports — and nodemailer — out of the module graph until
+  // Dynamic imports keep the transports (and nodemailer) out of the module graph until
   // a message is actually being delivered, which is what makes the dormancy rule
   // structural rather than conventional (MUST-1.1).
   if (request.channel === 'telegram') {

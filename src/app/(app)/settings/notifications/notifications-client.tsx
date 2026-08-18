@@ -30,9 +30,9 @@ import { EmailGuide, GuidePanel, TelegramGuide } from './guides';
 
 export interface NotificationsPageData {
   role: 'admin' | 'member';
-  /** Admins only — a member never receives the relay record (§11.3). */
+  /** Admins only: a member never receives the relay record (§11.3). */
   smtp: SmtpRecord | null;
-  /** Everyone — whether an enabled relay exists, so a member's email card explains itself. */
+  /** Everyone: whether an enabled relay exists, so a member's email card explains itself. */
   relayConfigured: boolean;
   targets: { telegram: TargetRecord | null; email: TargetRecord | null };
   events: readonly NotificationEventDef[];
@@ -41,7 +41,7 @@ export interface NotificationsPageData {
   settings: UserSettings;
   /**
    * Review fix (MED): `subject` and `attempts` are stripped server-side (page.tsx's
-   * `toDeliveryForClient`) — neither is ever rendered here, and for an admin's household-wide
+   * `toDeliveryForClient`): neither is ever rendered here, and for an admin's household-wide
    * view `subject` would otherwise carry other members' warranty/category names into a payload
    * nothing displays.
    */
@@ -61,14 +61,14 @@ const BACKUP_SENTENCE =
   'The SMTP password and every bot token are stored encrypted in the database, which means they are inside the unencrypted backup archive along with everything else.'; // MUST-5.8
 const DORMANT =
   'Notifications are off. This app makes no outbound connection until you configure a channel here.'; // §11.2
-/** Could not reach the server at all (network drop, dev-server restart) — distinct from the
+/** Could not reach the server at all (network drop, dev-server restart), distinct from the
  * server-returned `{ error }` shape DetectChatIdState already carries. */
 const DETECT_UNREACHABLE = 'Could not reach the server. Check your connection and try again.';
 
 /**
  * Review fix (LOW): the app's one timestamp convention (see settings/backups/backups-client.tsx),
  * applied everywhere this page shows a raw ISO string. §11.4's "relative time" wording is
- * amended to this fixed format — see the note beside MUST-11.2 in the design spec.
+ * amended to this fixed format: see the note beside MUST-11.2 in the design spec.
  */
 function formatStamp(iso: string): string {
   return iso.slice(0, 16).replace('T', ' ');
@@ -80,7 +80,7 @@ const STATUS_BADGE: Record<DeliveryRow['status'], { label: string; className: st
   pending: { label: 'Pending', className: 'badge--amber' },
 };
 
-/** §11.6: "status badge" — sent/failed/pending are visually distinct, not bare text. */
+/** §11.6: "status badge": sent/failed/pending are visually distinct, not bare text. */
 function DeliveryStatusBadge({ status }: { status: DeliveryRow['status'] }) {
   const { label, className } = STATUS_BADGE[status];
   return <span className={`badge ${className}`}>{label}</span>;
@@ -88,8 +88,8 @@ function DeliveryStatusBadge({ status }: { status: DeliveryRow['status'] }) {
 
 /**
  * Review fix (LOW): after a successful Remove, `data.smtp` flips to `null` on the next
- * server render, but this component's own `host`/`port`/`security`/`preset` state — seeded
- * once from the OLD `data.smtp` at mount — has no reason to re-run, so the form would keep
+ * server render, but this component's own `host`/`port`/`security`/`preset` state (seeded
+ * once from the OLD `data.smtp` at mount) has no reason to re-run, so the form would keep
  * showing the deleted relay's values. The parent renders this with
  * `key={data.smtp ? 'set' : 'unset'}`, so a Remove (or a first Save) remounts it and every
  * `useState` initializer re-reads the current `data.smtp`.
@@ -388,7 +388,7 @@ export function NotificationsClient(data: NotificationsPageData) {
   const [emailState, saveEmail] = useActionState<NotificationsState, FormData>(saveEmailTargetAction, {});
   const [prefsState, savePrefs] = useActionState<NotificationsState, FormData>(savePreferencesAction, {});
   // The various runXAction() functions below only ever appear as a <form action={...}>, never
-  // as an event handler — so `useActionState`'s dispatch (a plain (payload) => void) is what
+  // as an event handler, so `useActionState`'s dispatch (a plain (payload) => void) is what
   // gets bound, not the underlying async server action (which resolves to NotificationsState,
   // a shape `<form action>` cannot accept). This is the same wrapping every other form on this
   // page already needs for save/dispatch.
@@ -428,7 +428,7 @@ export function NotificationsClient(data: NotificationsPageData) {
         </Notice>
       ))}
 
-      {/* §11.3 — admins only. A member never sees this card at all. */}
+      {/* §11.3: admins only. A member never sees this card at all. */}
       {data.role === 'admin' ? (
         <Card>
           <CardHeader title="Outbound email (SMTP)" description="One relay for the whole household." />
@@ -451,7 +451,7 @@ export function NotificationsClient(data: NotificationsPageData) {
         </Card>
       ) : null}
 
-      {/* §11.4 — everyone. Two sub-cards; each shows its own last_error, last_success_at,
+      {/* §11.4: everyone. Two sub-cards; each shows its own last_error, last_success_at,
           and an Unverified badge until verified_at is set. */}
       <Card>
         <CardHeader title="Telegram" description="Your own bot, messaging your own chat." />
@@ -531,7 +531,7 @@ export function NotificationsClient(data: NotificationsPageData) {
         </CardBody>
       </Card>
 
-      {/* §11.5 — the matrix, generated from data.events. NO event is named in JSX. */}
+      {/* §11.5: the matrix, generated from data.events. NO event is named in JSX. */}
       <Card>
         <CardHeader title="What you get told about" description="Per event, per channel." />
         <CardBody className="flex flex-col gap-4">
@@ -606,7 +606,7 @@ export function NotificationsClient(data: NotificationsPageData) {
         </CardBody>
       </Card>
 
-      {/* §11.6 — read-only. No retry button: the pump owns retries. */}
+      {/* §11.6: read-only. No retry button: the pump owns retries. */}
       <Card>
         <CardHeader title="Recent deliveries" description="The last twenty messages this app tried to send." />
         {data.deliveries.length === 0 ? (

@@ -439,7 +439,7 @@ export function clearPref(userId: number, eventId: string, channel: Channel): vo
 }
 
 /**
- * MUST-3.7 (sparse storage) — a row exists ONLY where a user has actively changed a
+ * MUST-3.7 (sparse storage): a row exists ONLY where a user has actively changed a
  * toggle. Saving a value that equals the registry default deletes the row instead of
  * storing a redundant one, so a later change to a default propagates to everyone who never
  * expressed an opinion. An unknown event id is ignored entirely (MUST-3.6): the stored row
@@ -471,12 +471,12 @@ export function effectivePref(userId: number, eventId: string, channel: Channel)
 }
 
 /**
- * §4.3 — all five conditions, in this order, in ONE function. No caller re-implements any
+ * §4.3: all five conditions, in this order, in ONE function. No caller re-implements any
  * part of it:
  *   1. the effective toggle (MUST-3.7),
  *   2. the user is active (MUST-14.6),
  *   3. the user's role satisfies the event's audience (MUST-4.3 / MUST-14.7),
- *   4. an ENABLED notification_targets row exists for (userId, channel) — MUST-4.2,
+ *   4. an ENABLED notification_targets row exists for (userId, channel), per MUST-4.2,
  *   5. for channel 'email', an ENABLED notification_smtp row exists.
  */
 export function isEventEnabled(userId: number, eventId: string, channel: Channel): boolean {

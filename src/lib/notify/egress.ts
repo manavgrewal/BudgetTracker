@@ -1,5 +1,5 @@
 /**
- * MUST-9.1 / MUST-9.2 — the egress policy, in code. PURE (MUST-2.1).
+ * MUST-9.1 / MUST-9.2: the egress policy, in code. PURE (MUST-2.1).
  *
  * Exactly two destinations are permitted, and only once configured: this origin (two
  * endpoints on it, sendMessage and getUpdates) and the SMTP host an admin typed in.
@@ -15,8 +15,8 @@ export const TELEGRAM_API_ORIGIN = 'https://api.telegram.org';
 
 /**
  * Only these two Bot API methods are ever called (send/telegram.ts). Anchoring the
- * pathname to exactly `/bot<token>/<method>` — no extra segments, no trailing slash —
- * is what actually stops a path-traversal token: `new URL()` resolves `../` dot-segments
+ * pathname to exactly `/bot<token>/<method>` (no extra segments, no trailing slash) is
+ * what actually stops a path-traversal token: `new URL()` resolves `../` dot-segments
  * *before* this check ever runs, so a token like `123:abc/../../@evil.com` collapses
  * `/bot123:abc/../../@evil.com/sendMessage` down to `/@evil.com/sendMessage` while the
  * origin stays `api.telegram.org` the whole time. An origin check alone would wave that

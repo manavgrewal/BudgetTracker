@@ -3,12 +3,12 @@ import { formatCents } from '@/lib/money';
 import { ITEM_KIND_LABELS, expiryPhraseForKind, type ItemKind } from '@/lib/warranty/constants';
 
 /**
- * MUST-10.1 — ONE channel-agnostic renderer. Telegram sends `subject + '\n\n' + body`;
+ * MUST-10.1: ONE channel-agnostic renderer. Telegram sends `subject + '\n\n' + body`;
  * email sends `subject` as the Subject header and `body` as the text part. One renderer,
  * two envelopes: the two channels can never drift apart in wording, and every message is
  * testable as a pure function.
  *
- * PURE (MUST-2.1). Every value arrives already resolved — the evaluators do the querying.
+ * PURE (MUST-2.1). Every value arrives already resolved: the evaluators do the querying.
  *
  * MUST-10.4: no body contains a link. The server has no reliable idea of the URL the
  * family uses (LAN IP, reverse-proxy hostname, Tailscale name), and a wrong link is worse
@@ -151,7 +151,7 @@ export function renderEvent(input: RenderInput): { subject: string; body: string
       const label = monthLabel(input.month);
       const remainingCents = input.limitCents - input.spentCents;
       // MUST-6.17: a single import can jump straight past 100%, firing this message
-      // alongside budget_exceeded. When that happens remainingCents is negative — "$X
+      // alongside budget_exceeded. When that happens remainingCents is negative, and "$X
       // left" would read as still having room, so the remaining clause is omitted here
       // entirely; budget_exceeded is the message that talks about being over.
       const remainingClause = remainingCents >= 0 ? `, ${money(remainingCents)} left` : '';

@@ -9,7 +9,7 @@ import { enqueue } from '@/lib/notify/outbox';
 import { renderEvent } from '@/lib/notify/render';
 
 /**
- * MUST-6.18 — the fingerprint guard. Budget events are evaluated on EVERY tick so an
+ * MUST-6.18: the fingerprint guard. Budget events are evaluated on EVERY tick so an
  * afternoon import is reported in minutes rather than tomorrow morning (decision 6); the
  * fingerprint is what keeps that cheap.
  *
@@ -26,7 +26,7 @@ interface Participant {
   thresholdPct: number;
 }
 
-/** Flatten budgetProgress()'s parent/child tree — parents and children are independent rows. */
+/** Flatten budgetProgress()'s parent/child tree: parents and children are independent rows. */
 function flatten(rows: BudgetRow[], acc: BudgetRow[] = []): BudgetRow[] {
   for (const row of rows) {
     acc.push(row);
@@ -47,7 +47,7 @@ function fingerprint(month: string, participants: Participant[]): string {
     .where(and(gte(transactions.date, monthStart(month)), lte(transactions.date, monthEnd(month))))
     .get();
 
-  // The budgets table has no updated_at column (schema.ts), so — unlike transactions above —
+  // The budgets table has no updated_at column (schema.ts), so, unlike transactions above,
   // an in-place amount UPDATE to an already-existing (scope, user, category, month) row is
   // not distinguishable from no change here; count(*) + max(id) does catch a NEW budget row
   // (an insert), which is the case that matters for "set a budget mid-month" firing on the
@@ -57,8 +57,8 @@ function fingerprint(month: string, participants: Participant[]): string {
     .from(budgets)
     .get();
 
-  // max(updated_at) is in the fingerprint so that RE-CATEGORISING an existing transaction —
-  // which changes neither the count nor the max id — still triggers re-evaluation. The
+  // max(updated_at) is in the fingerprint so that RE-CATEGORISING an existing transaction
+  // (which changes neither the count nor the max id) still triggers re-evaluation. The
   // participant/threshold part is in it so a user who has just enabled the event or moved
   // their threshold is evaluated on the very next tick.
   const people = participants
@@ -73,13 +73,13 @@ function fingerprint(month: string, participants: Participant[]): string {
 }
 
 /**
- * The participant set is the union of both budget events — the threshold value only
+ * The participant set is the union of both budget events: the threshold value only
  * matters for budget_threshold, but a user who has only budget_exceeded on still has to
  * appear in the fingerprint so enabling it re-evaluates on the next tick.
  *
  * Single pass over notifiableUsers(): the original two-loop version (once per event id)
  * called notifiableUsers() twice and, for a user enabled on both events, getUserSettings()
- * twice — this walks the list once and resolves both events' enabled-ness per user before
+ * twice. This walks the list once and resolves both events' enabled-ness per user before
  * deciding whether to include them, so neither is ever queried more than once per user.
  */
 function computeParticipants(): Map<number, Participant> {
@@ -106,9 +106,9 @@ function fireFor(input: {
 
   let fired = 0;
 
-  // MUST-6.16: both use the pct budgetProgress() already computed — including its $0-limit
-  // branch — so the notification can never disagree with the progress bar the user is
-  // looking at. MUST-6.17: both may fire in the same evaluation — a single import that
+  // MUST-6.16: both use the pct budgetProgress() already computed, including its $0-limit
+  // branch, so the notification can never disagree with the progress bar the user is
+  // looking at. MUST-6.17: both may fire in the same evaluation: a single import that
   // jumps straight past 100% still owes the threshold message, so pct is deliberately NOT
   // capped below 100 here; the exceeded check below is independent.
   if (row.pct >= thresholdPct) {
@@ -156,7 +156,7 @@ function fireFor(input: {
 }
 
 /**
- * MUST-6.15 — evaluated on every tick, for the CURRENT MONTH only, over:
+ * MUST-6.15: evaluated on every tick, for the CURRENT MONTH only, over:
  *   - household scope: budgetProgress(month, 'household', null), delivered to every user
  *     with the event enabled;
  *   - personal scope: budgetProgress(month, 'personal', userId), delivered only to that user.

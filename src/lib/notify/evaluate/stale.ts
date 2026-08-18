@@ -9,15 +9,15 @@ import { enqueue } from '@/lib/notify/outbox';
 import { renderEvent } from '@/lib/notify/render';
 
 /**
- * Decision 10 — an install with ZERO imports never fires. A brand-new install must not nag
+ * Decision 10: an install with ZERO imports never fires. A brand-new install must not nag
  * before it has anything to be stale about.
  *
- * MUST-14.8 — SimpleFIN syncs create `imports` rows too, so a household on SimpleFIN is
+ * MUST-14.8: SimpleFIN syncs create `imports` rows too, so a household on SimpleFIN is
  * never nagged by this event. The query deliberately looks at every import in the
- * household, not only the ones this user made: staleness is a property of the data, not of
- * who last pressed the button.
+ * household rather than only the ones this user made. Staleness is a property of the
+ * data, not of who last pressed the button.
  *
- * MUST-3.11 — one message per calendar week while stale, keyed on the Monday of the
+ * MUST-3.11: one message per calendar week while stale, keyed on the Monday of the
  * current week, so the key advances every week and never repeats.
  */
 export function evaluateStaleImport(input: { userId: number; now: Date; tz: string }): number {

@@ -43,9 +43,9 @@ export function encryptSecret(plain: string, info: string, secretKey?: string): 
 }
 
 /**
- * MUST-5.4: a rotated SECRET_KEY, a truncated column, a tampered tag — every one of them
- * surfaces as NotifyCredentialError carrying CREDENTIAL_UNREADABLE. The underlying error
- * is logged WITHOUT the payload, exactly as attemptLogin handles a TOTP decrypt failure.
+ * MUST-5.4: a rotated SECRET_KEY, a truncated column, or a tampered tag all surface as
+ * NotifyCredentialError carrying CREDENTIAL_UNREADABLE. The underlying error is logged
+ * WITHOUT the payload, exactly as attemptLogin handles a TOTP decrypt failure.
  */
 export function decryptSecret(payload: string, info: string, secretKey?: string): string {
   const raw = Buffer.from(payload, 'base64');
@@ -67,7 +67,7 @@ export function decryptSecret(payload: string, info: string, secretKey?: string)
 /**
  * The exact bytes an SMTP relay sees for AUTH PLAIN, base64-encoded. nodemailer's
  * authentication errors routinely quote the failing command line back, and on some relays
- * that line contains this string — so it is scrubbed alongside the raw password (MUST-5.5).
+ * that line contains this string, so it is scrubbed alongside the raw password (MUST-5.5).
  */
 export function authPlainBase64(username: string, password: string): string {
   return Buffer.from(`\0${username}\0${password}`, 'utf8').toString('base64');

@@ -102,7 +102,7 @@ function firstIssue(error: z.ZodError): string {
 }
 
 async function guard(): Promise<NotificationsState | null> {
-  // MUST-12.1: FIRST — before auth, before validation, before any read.
+  // MUST-12.1: FIRST, before auth, before validation, before any read.
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
   return null;
 }
@@ -212,7 +212,7 @@ export async function testTargetAction(formData: FormData): Promise<Notification
 }
 
 /**
- * MUST-12.7 — Send test bypasses the outbox: it calls the sender directly and returns the
+ * MUST-12.7: Send test bypasses the outbox: it calls the sender directly and returns the
  * outcome synchronously, because immediate feedback is the entire point of the button. It
  * writes no outbox row, but it DOES update last_error / last_success_at / verified_at.
  */
@@ -223,7 +223,7 @@ async function runTest(userId: number, channel: Channel, opts: { relayOnly: bool
     return { error: 'An admin needs to set up outbound email before this can send.' };
   }
 
-  // Quota is spent only once a send is actually about to be attempted — checked AFTER the
+  // Quota is spent only once a send is actually about to be attempted: checked AFTER the
   // target/relay guards above, so pressing the button against an unconfigured destination
   // or a missing relay cannot burn per-user or global tokens while sending nothing.
   const verdict = checkTestSend(userId, channel);
@@ -261,7 +261,7 @@ async function runTest(userId: number, channel: Channel, opts: { relayOnly: bool
     }
   } catch (error) {
     const raw = error instanceof Error ? error.message : 'The test could not be sent.';
-    // MUST-5.5: belt and braces — the transports scrub already; this is a real second net
+    // MUST-5.5: belt and braces: the transports scrub already; this is a real second net
     // keyed on the credential actually in play for this attempt (undefined, harmlessly, if
     // the failure happened before either credential read completed).
     const message = scrubSecrets(raw, credential ? [credential] : []);
@@ -301,7 +301,7 @@ export async function savePreferencesAction(_prev: NotificationsState, formData:
   // MUST-4.3: only the events this role may see are writable, so a forged field for an
   // admin-only event from a member is ignored rather than stored.
   // MUST-3.7: applyPref writes a row only where the value differs from the registry
-  // default, and deletes the row when it matches — the table stays sparse.
+  // default, and deletes the row when it matches: the table stays sparse.
   for (const event of eventsFor(user.role)) {
     for (const channel of CHANNELS) {
       applyPref(user.id, event.id, channel, checkbox(formData, `pref:${event.id}:${channel}`));
@@ -313,15 +313,15 @@ export async function savePreferencesAction(_prev: NotificationsState, formData:
 }
 
 /**
- * MUST-12.8 — the helper's security posture. It takes NO ARGUMENTS AT ALL: not a token,
+ * MUST-12.8: the helper's security posture. It takes NO ARGUMENTS AT ALL: not a token,
  * not a user id. It calls isSameOrigin() then requireUser(), loads THAT user's own
  * notification_targets row, decrypts the token server-side, calls fetchTelegramChats(),
  * and returns only TelegramChat[]. There is consequently no parameter through which a
  * member could aim it at another member's bot, and no response field through which a
  * token could escape.
  *
- * It is still MUTATING-SHAPED for CSRF purposes — it causes outbound network egress on the
- * server — so it takes the strict isSameOrigin() check, not isSameOriginOrHeaderless().
+ * It is still MUTATING-SHAPED for CSRF purposes: it causes outbound network egress on the
+ * server, so it takes the strict isSameOrigin() check, not isSameOriginOrHeaderless().
  *
  * It mutates nothing and therefore does not revalidate (MUST-12.6).
  */

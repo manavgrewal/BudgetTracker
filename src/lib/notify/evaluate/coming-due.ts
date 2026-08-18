@@ -9,7 +9,7 @@ import { renderEvent } from '@/lib/notify/render';
 import { isItemKind, type ItemKind } from '@/lib/warranty/constants';
 
 /**
- * MUST-6.13 — the flood guard. A single evaluation creates at most this many new outbox
+ * MUST-6.13: the flood guard. A single evaluation creates at most this many new outbox
  * ROWS for one user. Anything over the cap is simply not enqueued; the items are still
  * inside the window tomorrow and are picked up at the next slot. This bounds the first-run
  * backfill when somebody with a large library configures a channel for the first time.
@@ -17,15 +17,15 @@ import { isItemKind, type ItemKind } from '@/lib/warranty/constants';
 export const MAX_NEW_ROWS_PER_USER_PER_EVALUATION = 20;
 
 /**
- * MUST-6.10 — at the user's daily slot: items where is_lifetime = 0, expiry_date IS NOT
+ * MUST-6.10: at the user's daily slot: items where is_lifetime = 0, expiry_date IS NOT
  * NULL, and expiry_date BETWEEN todayIso AND addDaysIso(todayIso, coming_due_days).
  *
- * MUST-6.11 — a user is notified about items where owner_user_id is that user.
+ * MUST-6.11: a user is notified about items where owner_user_id is that user.
  * warranty_items.owner_user_id is NOT NULL and defaults to the creator, so every item
  * notifies exactly one person and nothing is orphaned. Broadcasting every member's
  * expiring items to everybody is nagging, not visibility.
  *
- * MUST-6.12 — one outbox row PER ITEM, key `due:<itemId>:<expiryDate>`, so an item is
+ * MUST-6.12: one outbox row PER ITEM, key `due:<itemId>:<expiryDate>`, so an item is
  * announced once and then never again rather than nagging daily for the whole window.
  */
 export function evaluateComingDue(input: { userId: number; now: Date; tz: string }): number {

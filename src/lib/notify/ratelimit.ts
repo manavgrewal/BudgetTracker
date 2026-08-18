@@ -1,10 +1,10 @@
 import type { Channel } from '@/lib/notify/events';
 
 /**
- * MUST-13.1 / MUST-13.1a — in-memory token buckets for the two user-triggered egress
+ * MUST-13.1 / MUST-13.1a: in-memory token buckets for the two user-triggered egress
  * buttons.
  *
- * MUST-13.2 — in-memory rather than DB-backed, unlike src/lib/auth/ratelimit.ts. Different
+ * MUST-13.2: in-memory rather than DB-backed, unlike src/lib/auth/ratelimit.ts. Different
  * threat: the login limiter defends against an unauthenticated attacker who can retry
  * across restarts, while these bound an authenticated household member's misclicks and a
  * stuck form. A restart resetting the bucket is acceptable, and a member cannot restart
@@ -75,7 +75,7 @@ export function checkTestSend(userId: number, channel: Channel, now: number = cl
 }
 
 /**
- * MUST-13.1a — a separate, LOOSER bucket. Detect chat ID is genuinely expected to be
+ * MUST-13.1a: a separate, LOOSER bucket. Detect chat ID is genuinely expected to be
  * pressed several times in a row ("press it, realise you never messaged the bot, message
  * the bot, press it again"), so a cap of three would punish correct use. No global cap:
  * each user's presses hit their own bot, so there is no shared resource to protect.

@@ -21,7 +21,7 @@ export const MAX_ATTEMPTS = 8;
 export const MAX_BACKOFF_MS = 6 * 60 * 60 * 1000;
 export const PENDING_MAX_AGE_HOURS = 24;
 /**
- * MUST-3.14/R3 — must exceed the maximum `comingDueDays` window (365, the top of the 1-365
+ * MUST-3.14/R3: must exceed the maximum `comingDueDays` window (365, the top of the 1-365
  * range in notification_user_settings) with margin. A shorter retention would let the sweep
  * delete a 'sent' coming_due row while the item is still inside the user's lookahead window,
  * resurrecting its dedup key and re-alerting on the same item every retention period.
@@ -39,12 +39,12 @@ export function backoffMs(attempts: number): number {
 }
 
 /**
- * MUST-7.1 — resolves the user's enabled channels for the event via isEventEnabled() and
+ * MUST-7.1: resolves the user's enabled channels for the event via isEventEnabled() and
  * inserts ONE ROW PER CHANNEL, each with ON CONFLICT DO NOTHING. Enqueueing is the only
  * place channel fan-out happens, so per-channel isolation is structural: two rows, two
  * independent lifecycles.
  *
- * MUST-7.2 — subject and body are rendered by the CALLER, at evaluation time. Re-rendering
+ * MUST-7.2: subject and body are rendered by the CALLER, at evaluation time. Re-rendering
  * at send time after three retries would produce a "budget at 82%" alert that says 91%.
  */
 export function enqueue(input: {
@@ -62,7 +62,7 @@ export function enqueue(input: {
   for (const channel of CHANNELS) {
     if (!isEventEnabled(input.userId, input.eventId, channel)) continue;
     // MUST-3.9: the row that was sent IS the dedup guard. `changes === 0` means
-    // "already fired" — there is no separate bookkeeping that could drift.
+    // "already fired": there is no separate bookkeeping that could drift.
     const result = db
       .insert(notificationOutbox)
       .values({
@@ -96,11 +96,11 @@ export function countPendingOutbox(): number {
 }
 
 /**
- * MUST-7.8 — on the first tick after boot, every pending row older than 24 hours is
- * abandoned. This covers a container that was off for a week and, importantly, a RESTORED
- * OLDER DATABASE whose outbox still holds rows that were pending when the backup was
- * taken; without it a restore would emit a flood of stale alerts about a world that no
- * longer exists.
+ * MUST-7.8: on the first tick after boot, every pending row older than 24 hours is
+ * abandoned. This covers a container that was off for a week, and also a RESTORED OLDER
+ * DATABASE whose outbox still holds rows that were pending when the backup was taken;
+ * without it a restore would emit a flood of stale alerts about a world that no longer
+ * exists.
  */
 export function expireStalePending(now: Date = new Date()): number {
   const cutoff = nowIso(new Date(now.getTime() - PENDING_MAX_AGE_HOURS * 60 * 60 * 1000));
@@ -169,7 +169,7 @@ type PendingRow = {
 };
 
 /**
- * MUST-7.5 — pre-send revalidation. Re-reads the row's target immediately before sending.
+ * MUST-7.5: pre-send revalidation. Re-reads the row's target immediately before sending.
  * If the target is gone or disabled, or (for email) the relay is gone or disabled, NOTHING
  * IS SENT. Removing a channel therefore stops egress at once, including for rows already
  * in the queue: the dormancy rule holds even with a full outbox.
@@ -264,7 +264,7 @@ function deferRow(id: number, nextAt: string): void {
 }
 
 /**
- * MUST-6.3 — single-flight, the pump: Promise<void> | null pattern of
+ * MUST-6.3: single-flight, the pump: Promise<void> | null pattern of
  * src/lib/warranty/ocr/queue.ts, verbatim. A tick that arrives while the previous one is
  * still draining returns immediately.
  */

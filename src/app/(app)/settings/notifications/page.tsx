@@ -10,8 +10,8 @@ import { NotificationsClient, type NotificationsPageData } from './notifications
 export const dynamic = 'force-dynamic';
 
 /**
- * Review fix (MED): `subject` is a rendered message line — for coming_due it names the
- * warranty/subscription, for budget events the category — and `attempts` is internal retry
+ * Review fix (MED): `subject` is a rendered message line (for coming_due it names the
+ * warranty/subscription, for budget events the category) and `attempts` is internal retry
  * bookkeeping. Neither is ever displayed by the client (see NotificationsClient's Recent
  * deliveries table), yet an admin's "household-wide view" spread every OTHER member's row
  * wholesale into their own RSC flight payload, leaking other members' subjects to the admin's

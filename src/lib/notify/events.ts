@@ -1,15 +1,15 @@
 /**
- * The event registry (spec §4) — PURE and client-safe (MUST-2.1). No @/db import, no
+ * The event registry (spec §4): PURE and client-safe (MUST-2.1). No @/db import, no
  * @/lib/env import, no node builtin: this module is imported by the client-side toggle
  * matrix, and importing @/db here fails the client webpack build outright (Ruling P4, the
  * same constraint that governs src/lib/warranty/constants.ts).
  *
- * MUST-4.4 — the extension point. Adding an event type is: append one entry below, add
- * one case to renderEvent() in render.ts, and — for a scheduled event — one evaluator
- * call. No migration. No src/db/schema.ts change. No UI change: the matrix is generated
- * from this array.
+ * MUST-4.4: the extension point. Adding an event type is: append one entry below, add one
+ * case to renderEvent() in render.ts, and (for a scheduled event) one evaluator call. No
+ * migration. No src/db/schema.ts change. No UI change: the matrix is generated from this
+ * array.
  *
- * MUST-4.5 — an `id` is PERMANENT once shipped. notification_prefs keys on the string, so
+ * MUST-4.5: an `id` is PERMANENT once shipped. notification_prefs keys on the string, so
  * renaming one silently resets every user's stored preference for it.
  */
 export type Channel = 'telegram' | 'email';
@@ -37,7 +37,7 @@ export interface NotificationEventDef {
 }
 
 /**
- * MUST-4.1: the defaults split on one line — ON for "something is wrong, or a deadline is
+ * MUST-4.1: the defaults split on one line: ON for "something is wrong, or a deadline is
  * near"; OFF for the chattier informational events a person should opt into. new_signin
  * is on because a security event nobody switched on protects nobody.
  *
@@ -128,12 +128,12 @@ export function eventsFor(role: 'admin' | 'member'): readonly NotificationEventD
 }
 
 /**
- * MUST-3.11 — the dedup keys, exactly. user_id and channel are already part of the unique
+ * MUST-3.11: the dedup keys, exactly. user_id and channel are already part of the unique
  * index (MUST-3.9) and are never repeated inside a key.
  *
  * MUST-3.12 (pruning safety): every key below is either bounded to a calendar period that
  * evaluation only visits within the current few days, or derived from a monotonically
- * increasing timestamp that never recurs — so the 90-day retention sweep can never
+ * increasing timestamp that never recurs, so the 90-day retention sweep can never
  * resurrect an already-delivered event.
  */
 function scopeLetter(scope: BudgetScopeKey): 'h' | 'p' {

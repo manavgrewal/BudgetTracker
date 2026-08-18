@@ -10,18 +10,18 @@ import { enqueue, kickOutbox } from '@/lib/notify/outbox';
 import { renderEvent } from '@/lib/notify/render';
 
 /**
- * §6.6 — the three immediate raisers.
+ * §6.6: the three immediate raisers.
  *
- * MUST-6.19 — each MUST NEVER THROW into its caller and each is wrapped internally in
+ * MUST-6.19: each MUST NEVER THROW into its caller and each is wrapped internally in
  * try/catch: a notification failure may not break a login, a boot, or a backup.
  *
- * MUST-6.2 — each enqueues (a synchronous SQLite insert) and then kicks the sender pump
+ * MUST-6.2: each enqueues (a synchronous SQLite insert) and then kicks the sender pump
  * WITHOUT awaiting it, so a sign-in alert leaves the box in seconds rather than waiting up
  * to five minutes for the tick.
  */
 
 /**
- * MUST-14.2 — result.json persists on disk across boots, so without this guard an
+ * MUST-14.2: result.json persists on disk across boots, so without this guard an
  * outbox row aging out under the 90-day sweep would let a months-old restore re-notify.
  * This is the single case where MUST-3.12's pruning-safety argument needs an explicit
  * guard rather than following from the key's shape.
@@ -78,7 +78,7 @@ function signinName(userId: number): string {
 }
 
 /**
- * MUST-14.1 — raised from the SCHEDULER's existing catch around runNightlyJob, not from
+ * MUST-14.1: raised from the SCHEDULER's existing catch around runNightlyJob, not from
  * src/lib/backup.ts, so the backup module acquires no notify import and its tests are
  * untouched. Settings → Backups' "run now" deliberately does NOT notify: an admin standing
  * in front of the result page does not need to be emailed about it.
@@ -115,7 +115,7 @@ export function raiseBackupFailed(input: { error: unknown; at: Date }): void {
 }
 
 /**
- * MUST-14.2 — called from src/instrumentation-node.ts, AFTER getDb() (the outcome has to be
+ * MUST-14.2: called from src/instrumentation-node.ts, AFTER getDb() (the outcome has to be
  * written into the restored database) and BEFORE startScheduler() (whose immediate boot
  * tick then drains the row).
  */

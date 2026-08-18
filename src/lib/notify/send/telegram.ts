@@ -17,7 +17,7 @@ export const TELEGRAM_TOKEN_REJECTED =
 export interface TelegramChat {
   /** A string: supergroup ids exceed Number.MAX_SAFE_INTEGER territory. */
   chatId: string;
-  /** Untrusted display text — a person can name a Telegram group anything (MUST-8.8). */
+  /** Untrusted display text: a person can name a Telegram group anything (MUST-8.8). */
   title: string;
   kind: 'private' | 'group' | 'supergroup' | 'channel';
   lastMessageAt: string | null;
@@ -46,11 +46,11 @@ async function readFailure(response: Response): Promise<TelegramFailure> {
 }
 
 /**
- * MUST-8.1 — POST https://api.telegram.org/bot<token>/sendMessage, raw fetch, no SDK.
- * MUST-8.2 — NO parse_mode. Messages are plain text, so a merchant name, an OCR-derived
+ * MUST-8.1: POST https://api.telegram.org/bot<token>/sendMessage, raw fetch, no SDK.
+ * MUST-8.2: NO parse_mode. Messages are plain text, so a merchant name, an OCR-derived
  * warranty title or a user-supplied description can never be interpreted as markup or a
  * link. That is why §10 renders one plain-text body for both channels.
- * MUST-9.3 — redirect: 'error'. A 3xx from api.telegram.org is a failure, not a hop.
+ * MUST-9.3: redirect: 'error'. A 3xx from api.telegram.org is a failure, not a hop.
  */
 export async function sendTelegram(input: {
   botToken: string;
@@ -81,8 +81,8 @@ export async function sendTelegram(input: {
   if (response.ok) return;
 
   const failure = await readFailure(response);
-  // MUST-8.4: Telegram's own descriptions — "chat not found", "bot was blocked by the
-  // user", "Unauthorized" — are exactly what the user needs to see in Settings.
+  // MUST-8.4: Telegram's own descriptions ("chat not found", "bot was blocked by the
+  // user", "Unauthorized") are exactly what the user needs to see in Settings.
   const description = typeof failure.description === 'string' ? failure.description : `Telegram returned ${response.status}.`;
   const message = clean(description, input.botToken);
 
@@ -116,12 +116,12 @@ function chatTitle(chat: RawChat, chatId: string): string {
 }
 
 /**
- * MUST-8.5/8.6 — the second and LAST Telegram endpoint the app may ever call. Same origin,
+ * MUST-8.5/8.6: the second and LAST Telegram endpoint the app may ever call. Same origin,
  * same assertTelegramUrl() guard, same redirect: 'error', same 15 s abort as sendMessage.
  *
- * MUST-8.7 — it MUST NOT consume the update queue: no `offset` parameter is passed, so
+ * MUST-8.7: it MUST NOT consume the update queue: no `offset` parameter is passed, so
  * Telegram leaves the updates in place and the helper can be pressed repeatedly. Passing
- * an offset would acknowledge the updates and make the second press return nothing — the
+ * an offset would acknowledge the updates and make the second press return nothing, the
  * exact confusing failure the helper exists to prevent.
  */
 export async function fetchTelegramChats(botToken: string): Promise<TelegramChat[]> {

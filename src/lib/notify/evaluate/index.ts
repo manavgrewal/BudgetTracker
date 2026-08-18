@@ -12,7 +12,7 @@ import { weeklyDigestKey } from '@/lib/notify/events';
 
 /**
  * Slot-skip logging is deduped by (kind, userId) so a family sitting outside every slot's
- * catch-up window — the common case between ticks — does not write ~1000 identical "skipped"
+ * catch-up window (the common case between ticks) does not write ~1000 identical "skipped"
  * lines a day (every 5-minute tick, times every user, times two slot kinds). A line is
  * emitted only when the SKIPPED SLOT DATE changes from the last one logged for that
  * (kind, userId); the slot advancing to a new day is still visible, just not every 5 minutes.
@@ -34,7 +34,7 @@ function logSlotSkipOnce(kind: 'daily' | 'weekly', userId: number, slotDate: str
  * MUST-3.11's dedup key already contains the slot date, so a digest already sent for this
  * user's current slot means every tick for the rest of the 48h catch-up window would
  * otherwise recompute categoryBreakdown/topMerchants/budgetProgress/reviewQueueCount only to
- * have enqueue() discard the result — this indexed existence check (served by
+ * have enqueue() discard the result. This indexed existence check (served by
  * notification_outbox_dedup_uq's (user_id, ...) prefix) skips that recompute entirely once
  * the real send has already happened. coming_due has no equivalent check: its own query is
  * already a single cheap read, so the extra existence check would cost more than it saves.
@@ -50,16 +50,16 @@ function digestAlreadySent(userId: number, slotDate: string): boolean {
 }
 
 /**
- * §6.2 — what is evaluated when:
+ * §6.2: what is evaluated when:
  *   coming_due, stale_import  → the user's DAILY slot
  *   weekly_digest             → the user's WEEKLY slot
  *   budget_threshold/exceeded → EVERY tick, fingerprint-guarded (§6.5)
  *   backup_failed, new_signin, restore_outcome → immediate (§6.6), never here
  *
- * MUST-6.7 — a slot outside its catch-up window is skipped, logging exactly one line PER
+ * MUST-6.7: a slot outside its catch-up window is skipped, logging exactly one line PER
  * SLOT (see logSlotSkipOnce) rather than once per five-minute tick for as long as the
  * install stays outside every window.
- * MUST-6.9 — firing a slot twice is harmless: every key contains the slot date or the item
+ * MUST-6.9: firing a slot twice is harmless: every key contains the slot date or the item
  * id, so a second evaluation inserts nothing.
  *
  * This function never throws into the scheduler: each user's evaluation is wrapped so one
