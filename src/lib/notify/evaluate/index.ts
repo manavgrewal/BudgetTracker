@@ -3,6 +3,7 @@ import { getDb } from '@/db/client';
 import { notificationOutbox } from '@/db/schema';
 import { readEnv } from '@/lib/env';
 import { getUserSettings, notifiableUsers } from '@/lib/notify/config';
+import { evaluateAnomalies, evaluateSubscriptionCreep } from '@/lib/notify/evaluate/anomalies';
 import { evaluateBudgets } from '@/lib/notify/evaluate/budget';
 import { evaluateComingDue } from '@/lib/notify/evaluate/coming-due';
 import { evaluateWeeklyDigest } from '@/lib/notify/evaluate/digest';
@@ -78,6 +79,7 @@ export function runScheduledEvaluation(now: Date = new Date()): void {
         evaluateComingDue({ userId: user.id, now, tz });
         evaluateStaleImport({ userId: user.id, now, tz });
         evaluateBudgetPace({ userId: user.id, now, tz });
+        evaluateSubscriptionCreep({ userId: user.id, now, tz });
       } else {
         logSlotSkipOnce('daily', user.id, daily.slotDate, daily.hoursSince);
       }
@@ -103,5 +105,11 @@ export function runScheduledEvaluation(now: Date = new Date()): void {
     evaluateBudgets({ now, tz });
   } catch (error) {
     console.error('[notify] budget evaluation failed', error);
+  }
+
+  try {
+    evaluateAnomalies({ now, tz });
+  } catch (error) {
+    console.error('[notify] anomaly evaluation failed', error);
   }
 }

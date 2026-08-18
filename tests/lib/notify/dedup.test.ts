@@ -17,6 +17,7 @@ import {
   weeklyDigestKey,
 } from '@/lib/notify/events';
 import { resetSlotSkipLogForTests, runScheduledEvaluation } from '@/lib/notify/evaluate';
+import { resetAnomalyFingerprintForTests } from '@/lib/notify/evaluate/anomalies';
 import { resetBudgetFingerprintForTests } from '@/lib/notify/evaluate/budget';
 import { evaluateComingDue } from '@/lib/notify/evaluate/coming-due';
 import { enqueue, OUTBOX_RETENTION_DAYS, purgeOldOutboxRows, pumpOutbox, resetOutboxPumpForTests } from '@/lib/notify/outbox';
@@ -49,6 +50,7 @@ beforeEach(() => {
   process.env.TZ = 'UTC';
   resetOutboxPumpForTests();
   resetBudgetFingerprintForTests();
+  resetAnomalyFingerprintForTests();
   resetSlotSkipLogForTests();
   setNotifySenderForTests(async () => {});
 });
@@ -58,6 +60,7 @@ afterEach(() => {
   resetNotifySenderForTests();
   resetOutboxPumpForTests();
   resetBudgetFingerprintForTests();
+  resetAnomalyFingerprintForTests();
   resetSlotSkipLogForTests();
   t.cleanup();
 });

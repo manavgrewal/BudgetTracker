@@ -5,6 +5,7 @@ import { nowIso } from '@/lib/clock';
 import { weeklyDigestKey } from '@/lib/notify/events';
 import * as digestModule from '@/lib/notify/evaluate/digest';
 import { runScheduledEvaluation, resetSlotSkipLogForTests } from '@/lib/notify/evaluate';
+import { resetAnomalyFingerprintForTests } from '@/lib/notify/evaluate/anomalies';
 
 let t: TestDb;
 const originalTz = process.env.TZ;
@@ -13,11 +14,13 @@ beforeEach(() => {
   t = createTestDb();
   process.env.TZ = 'UTC';
   resetSlotSkipLogForTests();
+  resetAnomalyFingerprintForTests();
 });
 
 afterEach(() => {
   process.env.TZ = originalTz;
   resetSlotSkipLogForTests();
+  resetAnomalyFingerprintForTests();
   t.cleanup();
 });
 
