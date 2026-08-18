@@ -285,8 +285,12 @@ export async function applyUpdateAction(formData: FormData): Promise<UpdateActio
     };
   } catch (error) {
     revalidatePath(UPDATE_PATH);
-    // MUST-7.3 / MUST-10.11: applyUpdate already scrubbed this with the token in the secret
-    // list before it was written to update.last_apply_error; it is returned as-is.
+    // MUST-7.3 / MUST-10.11: this is the ORIGINAL error applyUpdate() re-throws, not a
+    // scrubbed copy — applyUpdate() only scrubs the copy it persists to
+    // update.last_apply_error, before re-throwing the error it caught unchanged. The actual
+    // guarantee lives further upstream, in watchtower.ts's triggerUpdate(): every message it
+    // can throw already passed through its clean()/scrubSecrets call at the point of the
+    // throw, so nothing reaching here ever carried the token to begin with.
     return { error: error instanceof Error ? error.message : 'The update could not be requested.' };
   }
 }
@@ -304,6 +308,11 @@ export async function dismissUpdateAction(formData: FormData): Promise<UpdateAct
   }
   const parsed = versionSchema.safeParse(raw);
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Invalid request.' };
+  // Fix round finding 2: the same stale-version check applyUpdateAction runs. Without it, a
+  // stale tab (or a forged field) could pre-dismiss a version that has not been offered yet
+  // — including one not yet published — which would silently swallow MUST-5.9's notice the
+  // moment that version actually became current.
+  if (readUpdateState().latestVersion !== parsed.data) return { error: STALE_VERSION_ERROR };
   dismissVersion(parsed.data);
   revalidatePath(UPDATE_PATH);
   return { message: `Skipping ${parsed.data} for now. You will still be told when a newer version is published.` };

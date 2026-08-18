@@ -109,6 +109,16 @@ describe('MUST-3.2: every key round-trips', () => {
     expect(state.autoApply).toBe(false);
     expect(state.dismissedVersion).toBe('1.4.0');
   });
+
+  it('fix round finding 3: dismissVersion(\'\') deletes the key rather than writing an empty string', () => {
+    const userId = insertTestUser(t.db, { username: 'admin4b' });
+    setUpdateChecksEnabled({ enabled: true, userId });
+    dismissVersion('1.4.0');
+    expect(readUpdateState().dismissedVersion).toBe('1.4.0');
+
+    dismissVersion('');
+    expect(readUpdateState().dismissedVersion).toBeNull();
+  });
 });
 
 describe('MUST-3.5: autoApply is forced false while disabled', () => {

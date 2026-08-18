@@ -170,9 +170,18 @@ export function recordApplyOutcome(input: { at: Date; error?: string | null }): 
   setSetting(KEY_LAST_APPLIED_AT, iso(input.at));
 }
 
-/** MUST-5.9: suppresses only the card's prominence, never the check and never the dedup. */
+/**
+ * MUST-5.9: suppresses only the card's prominence, never the check and never the dedup.
+ *
+ * Fix round finding 3: routed through writeOrDelete rather than a bare setSetting, so
+ * dismissVersion('') — the "Show again" un-dismiss call — DELETES the key instead of writing
+ * an empty-string row. getSetting() returns exactly what was stored, never coercing '' to
+ * null, so a bare setSetting('') would have left readUpdateState().dismissedVersion as '' —
+ * a falsy-but-not-null value the About panel and Task 8's card logic would have had to guard
+ * against separately, and easily wouldn't.
+ */
 export function dismissVersion(version: string): void {
-  setSetting(KEY_DISMISSED_VERSION, version);
+  writeOrDelete(KEY_DISMISSED_VERSION, version);
 }
 
 /**

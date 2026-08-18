@@ -101,11 +101,31 @@ describe('MUST-10.2 / MUST-10.4: origin and role, in that order', () => {
     await expect(actions.applyUpdateAction(form({ version: '1.4.0' }))).rejects.toThrow(/redirect/);
   });
 
+  it('fix round finding 1: all seven actions reject a member, with zero state change', async () => {
+    // A settings-row snapshot rather than one field, so ANY write by ANY of the seven —
+    // not just the ones this suite happens to assert on individually — would fail this.
+    const rowCount = (): number => (t.sqlite.prepare(`select count(*) as n from settings`).get() as { n: number }).n;
+    currentUser.value.role = 'member';
+    const before = rowCount();
+
+    await expect(actions.enableUpdateChecksAction()).rejects.toThrow(/redirect/);
+    await expect(actions.disableUpdateChecksAction()).rejects.toThrow(/redirect/);
+    await expect(actions.setAutoApplyAction({}, form({ autoApply: 'on' }))).rejects.toThrow(/redirect/);
+    await expect(actions.checkForUpdateNowAction()).rejects.toThrow(/redirect/);
+    await expect(actions.reviewUpdateAction(form({ version: '1.4.0' }))).rejects.toThrow(/redirect/);
+    await expect(actions.applyUpdateAction(form({ version: '1.4.0' }))).rejects.toThrow(/redirect/);
+    await expect(actions.dismissUpdateAction(form({ version: '1.4.0' }))).rejects.toThrow(/redirect/);
+
+    expect(rowCount()).toBe(before);
+    expect(fetchCalls).toHaveLength(0);
+  });
+
   it('MUST-10.3: no action accepts a userId', async () => {
     const other = insertTestUser(t.db, { username: 'other', role: 'admin' });
     await actions.enableUpdateChecksAction();
     expect(readUpdateState().enabledBy).toBe(currentUser.value.id);
     expect(readUpdateState().enabledBy).not.toBe(other);
+    recordCheckOutcome({ at: new Date(), latestVersion: '1.4.0' });
     // The forged field is simply never read.
     await actions.dismissUpdateAction(form({ version: '1.4.0', userId: String(other) }));
     expect(readUpdateState().dismissedVersion).toBe('1.4.0');
@@ -119,6 +139,28 @@ describe("MUST-9.7: a stale version is refused against the server's own state", 
     const result = await actions.applyUpdateAction(form({ version: '1.3.9' }));
     expect(result.error).toBe('That version is no longer the one on offer. Press Check now and read the notes again.');
     expect(fetchCalls).toHaveLength(0);
+  });
+});
+
+describe('Fix round finding 2 / 3: dismissUpdateAction hygiene', () => {
+  it('refuses to pre-dismiss a version that is not update.latest_version', async () => {
+    await actions.enableUpdateChecksAction();
+    recordCheckOutcome({ at: new Date(), latestVersion: '1.4.0' });
+    const result = await actions.dismissUpdateAction(form({ version: '1.5.0' }));
+    expect(result.error).toBe('That version is no longer the one on offer. Press Check now and read the notes again.');
+    expect(readUpdateState().dismissedVersion).toBeNull();
+  });
+
+  it('"Show again" (an empty version) deletes the key rather than writing an empty string', async () => {
+    await actions.enableUpdateChecksAction();
+    recordCheckOutcome({ at: new Date(), latestVersion: '1.4.0' });
+    await actions.dismissUpdateAction(form({ version: '1.4.0' }));
+    expect(readUpdateState().dismissedVersion).toBe('1.4.0');
+
+    await actions.dismissUpdateAction(form({}));
+    expect(readUpdateState().dismissedVersion).toBeNull();
+    const row = t.sqlite.prepare(`select value from settings where key = 'update.dismissed_version'`).get();
+    expect(row).toBeUndefined();
   });
 });
 
@@ -186,6 +228,7 @@ describe('WATCH ITEM (Task 5 review): no action response ever echoes the configu
     stubRelease(`v${APP_VERSION}`);
     responses.push(await actions.checkForUpdateNowAction());
 
+    recordCheckOutcome({ at: new Date(), latestVersion: '1.4.0' });
     responses.push(await actions.dismissUpdateAction(form({ version: '1.4.0' })));
     responses.push(await actions.disableUpdateChecksAction());
 

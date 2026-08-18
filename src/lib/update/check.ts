@@ -4,6 +4,7 @@ import { updateAvailableKey } from '@/lib/notify/events';
 import { enqueue, kickOutbox } from '@/lib/notify/outbox';
 import { renderEvent } from '@/lib/notify/render';
 import { UpdateCheckError, fetchLatestRelease } from '@/lib/update/github';
+import { checkUpdateApply } from '@/lib/update/ratelimit';
 import { classify, parseSemver, type UpdateSeverity } from '@/lib/update/semver';
 import {
   readUpdateState,
@@ -121,7 +122,13 @@ export async function runUpdateCheck(input: { now?: Date; manual?: boolean }): P
   // records unattended on a NAS.
   if (severity === 'major') autoApply = false;
 
-  if (autoApply && config !== null) {
+  // Fix round finding 4: the APPLY bucket must bound EVERY triggerUpdate call, not only the
+  // one applyUpdateAction's Apply button gates — this is the path a spammed Check-now button
+  // reaches too, and without a token check here it drives an unbounded run of real /v1/update
+  // requests against a container that is (by definition, once the first one lands) already
+  // mid-replacement. A refusal here is not an error: it falls through to the same notify path
+  // Watchtower-absent installs take, exactly as if this attempt simply couldn't reach it.
+  if (autoApply && config !== null && checkUpdateApply().allowed) {
     try {
       await applyUpdate({ version: release.version, now: at });
       // MUST-5.7 row 2: NO notification. The container is about to be replaced and Settings

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createTestDb, insertTestUser, type TestDb } from '../../helpers/db';
 import { UPDATE_CHECK_INTERVAL_MS, dueForCheck, runUpdateCheck } from '@/lib/update/check';
+import { APPLY_MAX, resetUpdateRateLimitsForTests } from '@/lib/update/ratelimit';
 import { classify, parseSemver } from '@/lib/update/semver';
 import { readUpdateState, setAutoApply, setUpdateChecksEnabled } from '@/lib/update/state';
 import { saveEmailTarget, saveSmtp } from '@/lib/notify/config';
@@ -47,6 +48,10 @@ beforeEach(() => {
   t = createTestDb();
   githubCalls = 0;
   watchtowerCalls = 0;
+  // Fix round finding 4: the apply rate-limit bucket is now consulted from inside
+  // runUpdateCheck's auto-apply branch, so it must be reset per test the same way the DB is —
+  // otherwise an earlier test's successful auto-apply would silently eat into this one's quota.
+  resetUpdateRateLimitsForTests();
   adminId = insertTestUser(t.db, { username: 'admin', role: 'admin' });
   setUpdateChecksEnabled({ enabled: true, userId: adminId });
   // A configured channel, so an enqueue actually produces a row (notify MUST-4.2).
@@ -62,6 +67,7 @@ afterEach(() => {
   globalThis.fetch = realFetch;
   withWatchtower(false);
   resetNotifySenderForTests();
+  resetUpdateRateLimitsForTests();
   t.cleanup();
   vi.restoreAllMocks();
 });
@@ -208,5 +214,41 @@ describe('MUST-5.5 / MUST-5.9: the stamp and the dismissal', () => {
     await runUpdateCheck({ now: new Date('2026-08-19T12:00:00.000Z'), manual: true });
     expect(outboxRows().length).toBe(first);
     expect(outboxRows()[0]!.dedup_key).toBe(`update:${next.slice(1)}`);
+  });
+});
+
+describe('Fix round finding 4: the APPLY bucket bounds the internal auto-apply path too', () => {
+  it('auto-apply on, 5 rapid manual checks — Watchtower is triggered at most APPLY_MAX times', async () => {
+    withWatchtower(true);
+    setAutoApply(true);
+    const next = `v${APP_VERSION.split('.').slice(0, 2).join('.')}.${Number(APP_VERSION.split('.')[2]) + 1}`;
+    stubRelease(next);
+
+    for (let i = 0; i < 5; i += 1) {
+      await runUpdateCheck({ now: new Date(), manual: true });
+    }
+
+    // Without the internal gate, a spammed Check-now button would drive one real
+    // /v1/update request per call — five, here — against a container that is (once the
+    // first one lands) already mid-replacement.
+    expect(watchtowerCalls).toBeLessThanOrEqual(APPLY_MAX);
+    expect(watchtowerCalls).toBe(APPLY_MAX);
+  });
+
+  it('a rate-limited auto-apply attempt falls through to the notify path rather than erroring', async () => {
+    withWatchtower(true);
+    setAutoApply(true);
+    const next = `v${APP_VERSION.split('.').slice(0, 2).join('.')}.${Number(APP_VERSION.split('.')[2]) + 1}`;
+    stubRelease(next);
+
+    for (let i = 0; i < APPLY_MAX; i += 1) {
+      const result = await runUpdateCheck({ now: new Date(), manual: true });
+      expect(result.applied).toBe(true);
+    }
+    const refused = await runUpdateCheck({ now: new Date(), manual: true });
+    expect(refused.applied).toBe(false);
+    expect(refused.error).toBeNull();
+    expect(refused.notified).toBe(true);
+    expect(watchtowerCalls).toBe(APPLY_MAX);
   });
 });
