@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createSeededTestDb, insertTestAccount, insertTestUser, type TestDb } from '../../helpers/db';
-import { debtOverTime } from '@/lib/loans';
+import { assignTransactionToLoan, debtOverTime, unassignTransactionFromLoan } from '@/lib/loans';
 
 let t: TestDb;
 let userId = 0;
@@ -69,6 +69,24 @@ function link(itemId: number, opts: { signedAmountCents: number; appliedCents: n
  *  in the write path this test file does not otherwise exercise. */
 function updateBalance(itemId: number, balanceCents: number, at: string): void {
   t.sqlite.prepare(`update warranty_items set current_balance_cents = ?, balance_updated_at = ? where id = ?`).run(balanceCents, at, itemId);
+}
+
+/** A bare transaction row, with no loan_payments row of its own -- for tests that link it
+ *  through the real write path (assignTransactionToLoan) rather than seeding the link row
+ *  directly, so the write path's own dating and clamping behavior is what's under test. */
+function insertTxn(opts: { signedAmountCents: number; date: string }): number {
+  const row = t.sqlite
+    .prepare(
+      `insert into transactions
+         (account_id, date, raw_description, normalized_merchant, amount_cents, is_transfer, created_by, created_at, updated_at)
+       values (?, ?, 'Payment', 'PAYMENT', ?, 0, ?, ?, ?) returning id`,
+    )
+    .get(accountId, opts.date, opts.signedAmountCents, userId, `${opts.date}T00:00:00.000Z`, `${opts.date}T00:00:00.000Z`) as { id: number };
+  return row.id;
+}
+
+function balanceOf(itemId: number): number | null {
+  return (t.sqlite.prepare('select current_balance_cents as b from warranty_items where id = ?').get(itemId) as { b: number | null }).b;
 }
 
 /** better-sqlite3 exposes no counter, so count prepares through the driver's own hook. */
@@ -155,5 +173,42 @@ describe('MUST-15.7: the reconstruction, clause by clause', () => {
     const series = debtOverTime(3, { endMonth: '2026-08', today: '2026-08-18' });
     expect(series.every((p) => p.owedCents === null)).toBe(true);
     expect(series.map((p) => p.month)).toEqual(['2026-06', '2026-07', '2026-08']);
+  });
+});
+
+describe('Task 10 carry (a): the documented drift after a clamped unassign', () => {
+  it('the exact probe: 10,000 +60,000 disb June -> 70,000; -70,000 payment July -> 0; unassign disb clamps -- pre-June reconstructs 70,000, not the true 10,000, while the CURRENT month stays exact', () => {
+    const itemId = seedItem({ name: 'Drift loan', createdAt: '2024-01-01T00:00:00.000Z', balanceCents: 10_000, balanceUpdatedAt: '2024-01-01T00:00:00.000Z' });
+
+    const disbTxn = insertTxn({ signedAmountCents: 60_000, date: '2026-06-15' });
+    expect(assignTransactionToLoan({ txnId: disbTxn, itemId, at: new Date('2026-06-15T00:00:00.000Z') })).toEqual({
+      linked: true,
+      appliedCents: 60_000,
+    });
+    expect(balanceOf(itemId)).toBe(70_000);
+
+    const paymentTxn = insertTxn({ signedAmountCents: -70_000, date: '2026-07-15' });
+    expect(assignTransactionToLoan({ txnId: paymentTxn, itemId, at: new Date('2026-07-15T00:00:00.000Z') })).toEqual({
+      linked: true,
+      appliedCents: 70_000,
+    });
+    expect(balanceOf(itemId)).toBe(0);
+
+    // The clamp: naively this restore asks for 0 - 60,000 = -60,000. It clamps at zero instead
+    // of crashing (NEW-1 fix-round) -- and the June link row is deleted along with it, so its
+    // effect leaves no trace for debtOverTime's backward walk to re-add.
+    expect(unassignTransactionFromLoan({ txnId: disbTxn, itemId })).toBe(true);
+    expect(balanceOf(itemId)).toBe(0);
+
+    const series = debtOverTime(6, { endMonth: '2026-08', today: '2026-08-18' });
+    // Documented drift, not a bug to fix here: the deleted June row can no longer be added back
+    // on the walk backwards, so every month before the clamped event reconstructs as if the
+    // disbursement had never happened at all -- 70,000 (the July payment's own undo, with
+    // nothing left to cancel it), not the true pre-disbursement balance of 10,000.
+    expect(series.find((p) => p.month === '2026-04')!.owedCents).toBe(70_000);
+    expect(series.find((p) => p.month === '2026-05')!.owedCents).toBe(70_000);
+    // The CURRENT month is exact: it anchors on current_balance_cents directly, which the
+    // clamp kept honestly at zero rather than fabricating a negative number.
+    expect(series.find((p) => p.month === '2026-08')!.owedCents).toBe(0);
   });
 });

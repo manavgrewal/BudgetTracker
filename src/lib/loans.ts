@@ -740,6 +740,24 @@ export interface DebtPoint {
  * SUBTRACTS applied_cents back. The join below folds that sign into the per-month sum, rather
  * than summing applied_cents unsigned, so a disbursement walked backwards is not mistaken for
  * a payment.
+ *
+ * Task 10 carry (a) -- KNOWN, DOCUMENTED drift after a clamped unassign: unassignTransactionFromLoan
+ * and reverseLoanLinksForTransactions clamp their restore at zero (NEW-1 fix-round) rather than
+ * ever driving current_balance_cents negative. That clamp is correct for the CURRENT balance --
+ * it is the number a person can see and it must never go negative -- but the clamped link row is
+ * then DELETED, so the amount the clamp swallowed leaves no trace for this function's backward
+ * walk to re-add. Concretely: balance 10,000; a +60,000 disbursement in June takes it to 70,000;
+ * a -70,000 payment in July takes it to exactly 0; unassigning the June disbursement afterwards
+ * asks for 0 - 60,000 = -60,000, which clamps to 0 and deletes the June link row entirely. The
+ * CURRENT month is still exact (0, matching current_balance_cents precisely, because this
+ * function anchors every reconstruction on that column). Every month BEFORE the clamped event
+ * is off by exactly the amount the clamp swallowed -- here, the reconstructed pre-June balance
+ * comes back as 70,000, not the true 10,000, because the deleted June row can no longer be added
+ * back on the walk backwards. This is a chart-history inexactness, not a balance-correctness bug
+ * (MUST-13.12's own guarantee -- the CURRENT balance is always exactly restored -- still holds);
+ * tests/lib/loans/debt-over-time.test.ts pins the exact numbers above as the documented behavior,
+ * so a future change to either clamp cannot silently make the drift worse without that test
+ * being touched on purpose.
  */
 export function debtOverTime(months: number, opts: { endMonth?: string; today?: string } = {}): DebtPoint[] {
   const today = opts.today ?? todayIso();

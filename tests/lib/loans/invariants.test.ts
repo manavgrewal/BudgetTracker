@@ -53,6 +53,21 @@ function transactionsSetBlocks(source: string): string[] {
 }
 
 describe('NEW-4 fix-round: transactions.amount_cents stays immutable after insert', () => {
+  // Task 10 carry (b): this scanner covers the Drizzle .update(transactions).set({...}) idiom
+  // specifically -- the ONLY idiom this codebase actually uses to write a column. No raw-SQL
+  // `sql\`...\`` template anywhere under src/ writes amount_cents (grep-asserted below, since
+  // checking is cheap); if one is ever added, this invariant is the conversation to have first.
+  it('sanity check: no raw-SQL sql`` template runs an UPDATE that touches amount_cents', () => {
+    const offenders: { file: string; snippet: string }[] = [];
+    for (const file of filesUnder(srcDir)) {
+      const source = fs.readFileSync(file, 'utf8');
+      for (const match of source.match(/sql`[\s\S]*?`/g) ?? []) {
+        if (/\bupdate\b/i.test(match) && /amount_cents/.test(match)) offenders.push({ file: rel(file), snippet: match.slice(0, 160) });
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
   it('no .update(transactions).set({...}) anywhere under src/ writes amountCents', () => {
     // src/lib/loans.ts's sign-recovery reversal (unassignTransactionFromLoan,
     // reverseLoanLinksForTransactions) and debtOverTime() all re-derive a loan_payments

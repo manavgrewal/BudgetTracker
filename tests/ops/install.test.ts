@@ -276,11 +276,17 @@ describe('update.sh — manual-only, semver-safe, self-rolling-back', () => {
   });
 });
 
-describe('no auto-update anywhere in the codebase', () => {
-  it('does not schedule the updater from the app scheduler', () => {
+describe("the updater is opt-in and never bypasses the scheduler's gate", () => {
+  it('does not shell out to the updater scripts or drive Docker from the scheduler', () => {
     const scheduler = read('src/lib/scheduler.ts');
     expect(scheduler).not.toMatch(/update\.(sh|ps1)/);
     expect(scheduler).not.toMatch(/npm update|docker (pull|compose)/);
+  });
+
+  it('MUST-8.9: the tick cannot lose its dormancy gate while the tick stays', () => {
+    const scheduler = read('src/lib/scheduler.ts');
+    expect(scheduler).toContain('runUpdateTick');
+    expect(scheduler).toContain('isUpdateCheckEnabled');
   });
 });
 
@@ -724,6 +730,13 @@ describe('the app makes no network call unless SimpleFIN is configured', () => {
       // both in send/telegram.ts, and one URL literal — will live in
       // tests/ops/notify-egress.test.ts (MUST-9.4), added by a later task.
       path.join(srcRoot, 'lib', 'notify', 'send', 'telegram.ts'),
+      // v1.3.1: the third opt-in egress exception (update spec MUST-8.1). Dormant until an
+      // admin presses Enable update checks; one host, two pinned endpoints, no auth.
+      path.join(srcRoot, 'lib', 'update', 'github.ts'),
+      // v1.3.1: NOT an internet destination (update spec MUST-8.2). A compose service name on
+      // the project's private bridge network, with assertWatchtowerUrl refusing every public
+      // host structurally -- the same category as the healthcheck's 127.0.0.1 call.
+      path.join(srcRoot, 'lib', 'update', 'watchtower.ts'),
     ];
     const offenders: string[] = [];
     const clientComponentHits: string[] = [];
