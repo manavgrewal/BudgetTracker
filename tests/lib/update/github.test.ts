@@ -11,6 +11,7 @@ import {
 } from '@/lib/update/github';
 import { parseChangelog } from '@/lib/changelog';
 import { APP_VERSION } from '@/lib/version';
+import * as egress from '@/lib/update/egress';
 
 const realFetch = globalThis.fetch;
 let calls: { url: string; init: RequestInit }[] = [];
@@ -128,6 +129,29 @@ describe('MUST-4.2 endpoint 2 / MUST-4.6: the changelog read is pinned to the re
   it('refuses a version string that is not a bare semver, before any fetch', async () => {
     stub(() => contents('x'));
     await expect(fetchRemoteChangelog('main')).rejects.toMatchObject({ permanent: true });
+    expect(calls).toHaveLength(0);
+  });
+});
+
+describe('MUST-8.5: the guard is actually invoked, not merely imported', () => {
+  it('fetchLatestRelease never reaches fetch when assertGithubUrl throws', async () => {
+    stub(() => json({ tag_name: 'v1.4.0', published_at: '2026-08-16T09:00:00Z' }));
+    vi.spyOn(egress, 'assertGithubUrl').mockImplementation(() => {
+      throw new Error('blocked by guard');
+    });
+
+    await expect(fetchLatestRelease()).rejects.toThrow();
+    expect(calls).toHaveLength(0);
+  });
+
+  it('fetchRemoteChangelog never reaches fetch when assertGithubUrl throws', async () => {
+    const content = Buffer.from('# Changelog', 'utf8').toString('base64');
+    stub(() => json({ encoding: 'base64', size: 11, content }));
+    vi.spyOn(egress, 'assertGithubUrl').mockImplementation(() => {
+      throw new Error('blocked by guard');
+    });
+
+    await expect(fetchRemoteChangelog('1.4.0')).rejects.toThrow();
     expect(calls).toHaveLength(0);
   });
 });
