@@ -40,15 +40,41 @@ export class WatchtowerError extends Error {
   }
 }
 
+/**
+ * Below this, scrubSecrets(['a']) would shred every occurrence of the letter "a" in any
+ * error string into "[redacted]" — a token this short is unusable as a secret in the first
+ * place, so it is treated as if WATCHTOWER_TOKEN were never set at all (same fallback path
+ * as "absent"), rather than accepted and then silently mangling every future error message.
+ */
+const MIN_TOKEN_LENGTH = 8;
+
+let warnedShortToken = false;
+
+function warnShortToken(): void {
+  if (warnedShortToken) return;
+  warnedShortToken = true;
+  console.warn(
+    `[watchtower] WATCHTOWER_TOKEN is shorter than ${MIN_TOKEN_LENGTH} characters and will be treated as unset.`,
+  );
+}
+
 function pair(source: Partial<NodeJS.ProcessEnv> | undefined): { url: string; token: string } | null {
+  let url: string;
+  let token: string;
   if (source === undefined) {
     const env = readEnv();
     if (env.watchtowerUrl === null || env.watchtowerToken === null) return null;
-    return { url: env.watchtowerUrl, token: env.watchtowerToken };
+    url = env.watchtowerUrl;
+    token = env.watchtowerToken;
+  } else {
+    url = (source.WATCHTOWER_URL ?? '').trim();
+    token = (source.WATCHTOWER_TOKEN ?? '').trim();
+    if (url.length === 0 || token.length === 0) return null;
   }
-  const url = (source.WATCHTOWER_URL ?? '').trim();
-  const token = (source.WATCHTOWER_TOKEN ?? '').trim();
-  if (url.length === 0 || token.length === 0) return null;
+  if (token.length < MIN_TOKEN_LENGTH) {
+    warnShortToken();
+    return null;
+  }
   return { url, token };
 }
 
@@ -87,13 +113,34 @@ export function watchtowerConfigError(source?: Partial<NodeJS.ProcessEnv>): stri
  * to die before a response arrives: the app has just asked something to kill it. Treating
  * that as a failure would show a red error on the last screen a person sees before the app
  * comes back healthy on the new version, which is the worst possible false negative.
+ *
+ * undici's global fetch never surfaces a socket-level error at the top level: a connection
+ * reset or destroyed mid-request comes back as a top-level `TypeError('fetch failed')`, with
+ * the actual OS-level error (ECONNRESET, EPIPE, ...) nested one or more levels down in
+ * `.cause` — sometimes several layers deep. So this walks the `.cause` chain looking for a
+ * recognizable code/name/message at ANY level, not just the top one.
+ *
+ * A second, deliberately separate check catches the case the walk can't resolve: a
+ * top-level `TypeError('fetch failed')` whose cause carries nothing recognizable (e.g. the
+ * far side closing the socket cleanly with no data written, which undici reports as a
+ * generic "other side closed" rather than a named OS error). By the time this function runs,
+ * the request has already been written to a URL that passed assertWatchtowerUrl — so the
+ * ambiguity resolves to accepted-unconfirmed rather than a hard failure, and the boot
+ * reconciler is what actually confirms whether the update landed.
  */
 function isReplacementSignal(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
-  if (error.name === 'AbortError' || error.name === 'TimeoutError') return true;
-  const code = (error as Error & { code?: string }).code;
-  if (code === 'ECONNRESET' || code === 'EPIPE') return true;
-  return /socket hang up|aborted|ECONNRESET|EPIPE/i.test(error.message);
+  let current: unknown = error;
+  let depth = 0;
+  while (current instanceof Error && depth < 10) {
+    if (current.name === 'AbortError' || current.name === 'TimeoutError') return true;
+    const code = (current as Error & { code?: string }).code;
+    if (code === 'ECONNRESET' || code === 'EPIPE') return true;
+    if (/socket hang up|aborted|ECONNRESET|EPIPE/i.test(current.message)) return true;
+    current = (current as Error & { cause?: unknown }).cause;
+    depth += 1;
+  }
+  return error.name === 'TypeError' && error.message === 'fetch failed';
 }
 
 /**
