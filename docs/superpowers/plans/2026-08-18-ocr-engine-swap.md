@@ -17,7 +17,7 @@ These bind **every** task below. A task that violates one is wrong even if its o
 - **Version bump to 1.5.0 and the `CHANGELOG.md` entry happen in the final release task only.** **NOTE: v1.4.0 (a separate release) is being built in parallel on the same branch.** No task in this plan touches `package.json`'s `version` field or `CHANGELOG.md` until Task 13, and **Task 13 must rebase its expectations on whatever version is current at that moment** rather than assuming the repository still reads `1.3.1`. Task 1 does edit `package.json`, but only its `dependencies` and `scripts` blocks.
 - **Per-task verification is TARGETED `vitest` plus `tsc --noEmit` only.** The full suite and `npm run build` run **only** in the final release task (Task 13). This is the owner's speed ruling.
 - **A `'use server'` file may export ONLY async functions.** A `const` export from `src/app/(app)/warranties/actions.ts` breaks `next build`, and **neither `vitest` nor `tsc --noEmit` catches it**. This release does not modify that file (MUST-9.2), and no task may start.
-- **Comment and doc style: no em dashes or en dashes anywhere, no AI-sounding phrasing, comments state constraints not narration.** A comment says why a rule exists or what breaks without it. It does not narrate what the next line does.
+- **Comment and doc style: no em dashes or en dashes anywhere, no AI-sounding phrasing, comments state constraints not narration.** A comment says why a rule exists or what breaks without it. It does not narrate what the next line does. **One carve-out, stated so it is not mistaken for a slip:** Task 8 moves today's tesseract code into `src/lib/warranty/ocr/tesseract.ts` **verbatim**, and Task 1 reproduces an existing `next.config.ts` comment. Between them that carries roughly a dozen pre-existing em dashes into their new homes, plus the `IMPORTANT 2` comment that stays in `engine.ts`. Preserving that text unedited is the point of a verbatim move: the fallback must be the code that shipped, and rewording its comments makes the diff lie about what changed. **No newly authored comment or line of prose in this release may contain an em or en dash.**
 - **Zero egress at run time: no new fetch destinations.** `tests/ops/install.test.ts` and `tests/ops/notify-egress.test.ts` must stay green **with no amendment** (AC4, AC5). Model downloads happen only in the maintainer-run `scripts/fetch-ocr-models.mjs`, which the app, the tests, `docker build` and every npm lifecycle hook never invoke.
 - **No schema migration.** `drizzle/` gains no file, `drizzle/meta/_journal.json` is untouched, `src/db/schema.ts` is untouched. The probe verdict rides the existing `settings` key/value table through `getSetting` / `setSetting` / `deleteSetting` in `src/lib/settings.ts`. **If any task seems to need a migration the plan is wrong; stop and fix the plan.**
 - **Commit identity is already configured in the repo.** Do not pass `--author`. **Commit messages get NO attribution footers of any kind**: no `Co-Authored-By`, no `Generated with`, nothing. Never `--no-verify`.
@@ -63,10 +63,13 @@ Ten real gaps or conflicts inside the spec, resolved here once so no task has to
 5. **`session.ts` is built in Task 3, beside `preprocess.ts`, not last.** It owns the `TensorRun` type that Tasks 4 to 6 consume, and its own dependencies (`models.ts`, `constants.ts`, `dict.ts`) all land in Tasks 1 and 2. Grouping it with `preprocess.ts` also puts the release's two native-library seams (onnxruntime and sharp) behind one reviewer's gate.
 6. **`PIXEL_SCALE` is added to `constants.ts` beyond §4.11's table.** MUST-4.41 bans the literal `255` everywhere under `onnx/` except `constants.ts`, and §4.11 only pins it as `DET_SCALE = 1 / 255`. MUST-4.23 and MUST-4.29 normalise the classifier and recogniser with the same `/ 255`. Reusing a constant named `DET_` in the cls and rec paths would be a lie, so `PIXEL_SCALE = 1 / 255` is added with a comment saying it is the same number as `DET_SCALE` under a stage-neutral name. Three further additions are made on the same reasoning and for the same test: `REC_WIDTH_MULTIPLE = 8` (MUST-4.27), `CLS_FLIP_DEGREES = 180` (MUST-4.24) and `CROP_ANGLE_LIMIT_DEG = 45` (MUST-4.19). §13.4's `constants.test.ts` pins **§4.11's table** and does not ban these four.
 7. **The seven `SCANNER_*` constants live in `onnx/constants.ts`.** §2.2's file list adds no `src/lib/scanner/constants.ts`, and MUST-2.1 states that `constants.ts` is imported by the client scanner and that update MUST-2.1's client-bundle rule therefore applies to it. MUST-2.1 says "two shared limits"; the plan lands seven, all of them named numeric or string exports from that same client-safe file, which is what the rule actually governs.
-8. **The probe's own constants live in `probe.ts`, not `constants.ts`.** `OCR_PROBE_OK_LINE` and `OCR_PROBE_TIMEOUT_MS` are §5 values, are not in §4.11's table, and `probe.ts` is the module MUST-12.2 makes the sole owner of the `ocr.` key strings.
+8. **The probe's three protocol constants live in `constants.ts`; only the four `ocr.` settings-key strings live in `probe.ts`.** `probe.ts` sits under `onnx/`, so MUST-4.41's grep applies to it, and its detail cap is `200`, which is `DET_MAX_BOXES`'s value. Declaring it locally would make `tests/ops/constants.test.ts` fail. Excluding `probe.ts` from the grep would weaken a spec requirement to accommodate one number, so `OCR_PROBE_OK_LINE`, `OCR_PROBE_TIMEOUT_MS` and `OCR_PROBE_DETAIL_MAX_CHARS` move into `constants.ts` instead and the grep stays at full strength. MUST-12.2's ownership rule is about the four `ocr.` **keys**, which stay in `probe.ts`.
 9. **Fixtures are generated in test helpers, not committed as binaries, except `receipt-boxes.json`.** The prompt's fixture ruling permits either. `tests/fixtures/ocr/tensor-4x4.png` becomes an inline `Buffer` literal in `detect.test.ts` because `buildDetTensor` takes a `RawImage` and never a PNG; `skew-4deg.png` and the EXIF-orientation fixture are rendered with sharp at test time by `tests/helpers/ocr-images.ts`; the probability maps are built by `tests/helpers/ocr-probmaps.ts`. Only `tests/fixtures/ocr/receipt-boxes.json` is committed, because it is hand-written text a reviewer must be able to read. `tests/fixtures/` does not exist today (this repo's CSV fixtures live in the root `fixtures/`), so Task 6 creates it. `scripts/make-fixtures.mjs` is **not** extended; a generator that writes a binary nobody reviews is worse than a helper that renders it in the test.
 10. **`next.config.ts`'s `serverExternalPackages` change lands in Task 1, not the Docker task.** It is a property of the dependency, not of the image: the moment `sharp` or `onnxruntime-node` is imported from server code, bundling breaks their native `.node` resolution. §10.3 files it under ops; the plan files it with the dependency that needs it.
 11. **The selector reaches the ONNX tree through a dynamic import, and `engine.ts` re-exports nothing from it.** MUST-3.12 makes `models.ts` throw `OcrUnavailableError`, and MUST-5.12 keeps that class in `engine.ts`. A static `engine.ts -> onnx/engine.ts -> session.ts -> models.ts -> engine.ts` chain would be a module cycle, which is exactly the kind of thing that works until an unrelated refactor changes evaluation order. `engine.ts` therefore does `await import('@/lib/warranty/ocr/onnx/engine')` inside `recognize()`, which breaks the cycle, and additionally means a boot on hardware that cannot load the native binding never evaluates the ONNX tree at all. For the same reason `setOnnxSessionsForTests` is **not** re-exported from `engine.ts`; tests import it from `@/lib/warranty/ocr/onnx/session` directly. `setOcrWorkerForTests` **is** re-exported: `engine.ts` and `tesseract.ts` do form a two-module cycle through `OcrUnavailableError`, but that reference sits inside a function body and is evaluated long after both modules finish, and today's `engine.ts` already holds both halves in one file, so splitting them changes nothing about when the class is reached.
+12. **AC10's class-count check runs one real inference, not a metadata read.** Spec §13.2 says the dictionary test loads "only the model's metadata". ONNX Runtime's JS metadata surface reports the recognition head's class dimension symbolically on some builds, and Task 1 Step 7 measures which branch the real model takes. Rather than write a test that silently degrades to asserting nothing when the dimension is symbolic, `dict.test.ts` runs one zero-filled `[1, 3, 48, 320]` forward pass and reads `dims[2]`. That is strictly stronger than the spec's wording, costs a few milliseconds, and is recorded here so a reader diffing against §13.2 finds the reason. `session.ts` keeps the metadata fast path and falls back to the same inference.
+13. **The Settings warning copy carries no version number.** §5.16 ships copy reading "when version 1.5.0 first read a receipt here" and "the older reader that shipped before 1.5.0". Baking a release number into a shipped string in Task 9 decides in Task 9 what Task 13 is the task to decide, and it dates the sentence the moment the household upgrades again. The copy is reworded to say the same thing without a number ("the first time this version read a receipt here", "the older reader"), and `about-panel.test.tsx` asserts the rendered warning contains no `\d+\.\d+\.\d+` at all. Nothing else about §5.16 changes: same tone, same placement, same four paragraphs, still plain text nodes, still no library name.
+14. **`scan.ts` may not import `@/lib/warranty/receipts`, so the byte cap is duplicated into the client-safe constants block.** `ReceiptUploader.tsx` is `'use client'` and value-imports `scan.ts`; `receipts.ts` imports `node:fs`, `node:path`, `node:crypto` and `@/lib/env`, and would be the first client-reachable importer of that module. `SCANNER_MAX_OUTPUT_BYTES` is added to `constants.ts`'s scanner block, and `tests/ops/constants.test.ts` pins it equal to `MAX_RECEIPT_BYTES` in a Node-environment test that can safely import both. Same Ruling P10a shape as the `check-ocr-assets.mjs` hash duplication: duplicate where the boundary forces it, then pin the duplicate.
 
 ## Which tests need the real model files
 
@@ -75,10 +78,11 @@ Three suites load bytes from `vendor/ocr-models/`. Every other test in this rele
 | Test | What it loads | Why it must |
 |---|---|---|
 | `tests/lib/warranty/ocr/onnx/models.test.ts` | all four files, SHA256 only | MUST-3.11, MUST-3.12: proves the pins match the committed bytes |
-| `tests/lib/warranty/ocr/onnx/dict.test.ts` | `en_dict.txt` plus one `[1,3,48,320]` zero inference on the rec model | AC10 and MUST-3.16: the class-count guard proved, not asserted. Keep it to one tiny inference |
+| `tests/lib/warranty/ocr/onnx/dict.test.ts` | `en_dict.txt` plus one `[1,3,48,320]` zero inference on the rec model | AC10 and MUST-3.16: the class-count guard proved, not asserted. Keep it to one tiny inference (plan resolution 12) |
+| `tests/lib/warranty/ocr/onnx/session.test.ts` | **all four files, SHA256 only**, plus `en_dict.txt` as text | Every path through `build()` starts with `requireVerifiedOnnxOcrAssets()`, which hashes 12.7 MB. It is memoised, so the suite pays it once, but the suite does depend on the committed models being present. The ORT sessions themselves are fakes |
 | `tests/scripts/ocr-probe.test.ts` | all three `.onnx` files, three zero inferences | MUST-13.3: the only automated evidence the models and this ORT build work together |
 
-`session.test.ts` reads `en_dict.txt` (a few KB of text, no model) so its class-count guard has a real number to compare against; `detect.test.ts`, `classify.test.ts`, `recognize.test.ts`, `engine.test.ts` and the integration walk use fakes throughout. All of them must stay under a second each.
+`detect.test.ts`, `classify.test.ts`, `recognize.test.ts`, `contours.test.ts`, `assemble.test.ts` and the client suites use fakes and hand-built arrays throughout and touch no vendored file. `engine.test.ts` and `tests/integration/ocr-engine.test.ts` inject a fake session set through `setOnnxSessionsForTests`, which short-circuits `build()` before the hash, so they touch no vendored file either. Everything except `ocr-probe.test.ts` must stay under a second per file; the hash costs roughly 60 ms once.
 
 ## File structure
 
@@ -200,7 +204,7 @@ Every later task's constants depend on three facts nobody has measured yet: the 
   npm install --save sharp@^0.35.3
   ```
 
-  Then open `package.json` and put this comment block immediately above the four entries in `dependencies`, keeping the entries in alphabetical order among the existing ones. JSON has no comments, so the block goes in as a sibling `"//ocr-pins"` key, which is the only way to carry MUST-2.4's required reasoning in this file:
+  Then open `package.json` and record MUST-2.4's required reasoning. JSON has no comments, so it goes in as a **top-level** `"//ocr-pins"` key placed immediately above the `"dependencies"` object. It must be top level, not inside `dependencies`: npm reads every key in that object as a package name and `npm ci` would fail on it. `tests/ops/notice.test.ts` reads it as `pkg['//ocr-pins']`, which is what that placement gives. The four packages themselves stay in alphabetical order among the existing entries.
 
   ```json
     "//ocr-pins": "onnxruntime-node is exact because the ARM instruction-set risk the runtime probe exists for is a property of one ORT build; a silent minor bump changes the MLAS kernels this release was probed against. jscanify is exact because it is pinned against one OpenCV.js API generation. @techstark/opencv-js is exact and must be 4.7.0-release.1; the 5.0.x builds from the same publisher change enough API surface that pairing them with jscanify 1.4.3 is untested. sharp takes a caret: per-platform optional deps, mature, and 0.34.5 was already present only as a transitive of Next.",
@@ -362,8 +366,16 @@ Every later task's constants depend on three facts nobody has measured yet: the 
     return body.length;
   }
 
+  // The full Apache-2.0 text, pasted in as a literal while you have network access in Step 5,
+  // from https://www.apache.org/licenses/LICENSE-2.0.txt. It is inlined rather than fetched so
+  // regenerating the NOTICE needs no network. Must contain the line
+  // "Version 2.0, January 2004" and the "TERMS AND CONDITIONS" heading, which the test checks.
+  const APACHE_2_0_TEXT = `                                 Apache License
+                             Version 2.0, January 2004
+                          http://www.apache.org/licenses/
+  ... paste the remainder of the canonical text here, unmodified ...`;
+
   function writeNotice() {
-    const apacheLicensePath = path.join(ROOT, 'vendor', 'ocr-models', '.apache-2.0.txt');
     const lines = [
       'Vendored PP-OCRv5 ONNX models and recognition dictionary',
       '',
@@ -382,7 +394,7 @@ Every later task's constants depend on three facts nobody has measured yet: the 
       '  The underlying weights are copyright Baidu, released under the Apache License 2.0',
       '  by PaddlePaddle/PaddleOCR.',
       '',
-      readApacheLicense(apacheLicensePath),
+      APACHE_2_0_TEXT,
       '',
     ];
     const target = path.join(OUT_DIR, 'NOTICE');
@@ -390,8 +402,6 @@ Every later task's constants depend on three facts nobody has measured yet: the 
     console.log(`wrote ${target}`);
   }
   ```
-
-  `readApacheLicense` inlines the full Apache-2.0 text. Rather than embedding 11 KB of licence in a script, add the licence text to the script as a single exported template string constant `APACHE_2_0_TEXT` at the bottom of the file and have `readApacheLicense` return it, ignoring its argument; drop the unused `apacheLicensePath` line when you do. Copy the canonical text from `https://www.apache.org/licenses/LICENSE-2.0.txt` while you have network access in this task, and paste it in as a literal so the script needs no network to regenerate the NOTICE.
 
   Finish `main()`:
 
@@ -943,7 +953,11 @@ MUST-3.16 is the release's load-bearing guard. A wrong dictionary does not fail 
   export const REC_WIDTH_MULTIPLE = 8;
   export const CLS_FLIP_DEGREES = 180;
   export const CROP_ANGLE_LIMIT_DEG = 45;
-  // Client-safe scanner block, per plan resolution 7.
+  // Probe protocol, per plan resolution 8.
+  export const OCR_PROBE_OK_LINE = 'ocr-probe-ok';
+  export const OCR_PROBE_TIMEOUT_MS = 60_000;
+  export const OCR_PROBE_DETAIL_MAX_CHARS = 200;
+  // Client-safe scanner block, per plan resolutions 7 and 14.
   export const SCANNER_LOAD_TIMEOUT_MS = 15_000;
   export const SCANNER_WORK_MAX_PX = 1600;
   export const SCANNER_OUTPUT_MAX_PX = 2400;
@@ -951,6 +965,7 @@ MUST-3.16 is the release's load-bearing guard. A wrong dictionary does not fail 
   export const SCANNER_MIN_QUAD_AREA_RATIO = 0.25;
   export const SCANNER_MIN_SIDE_RATIO = 0.05;
   export const SCANNER_AUTO_ACCEPT_MS = 4000;
+  export const SCANNER_MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
 
   // src/lib/warranty/ocr/onnx/dict.ts
   export interface RecDictionary {
@@ -1080,6 +1095,7 @@ MUST-3.16 is the release's load-bearing guard. A wrong dictionary does not fail 
   import fs from 'node:fs';
   import path from 'node:path';
   import * as C from '@/lib/warranty/ocr/onnx/constants';
+  import { MAX_RECEIPT_BYTES } from '@/lib/warranty/receipts';
 
   const ONNX_DIR = path.join(process.cwd(), 'src/lib/warranty/ocr/onnx');
 
@@ -1181,6 +1197,15 @@ MUST-3.16 is the release's load-bearing guard. A wrong dictionary does not fail 
     });
   });
 
+  describe('plan resolution 14: the client-safe byte cap is pinned to the server one', () => {
+    it('SCANNER_MAX_OUTPUT_BYTES equals MAX_RECEIPT_BYTES', () => {
+      // scan.ts cannot import @/lib/warranty/receipts: that module pulls node:fs, node:crypto
+      // and @/lib/env, and scan.ts is value-imported by a 'use client' component. This test is
+      // the pin that stops the duplicate drifting.
+      expect(C.SCANNER_MAX_OUTPUT_BYTES).toBe(MAX_RECEIPT_BYTES);
+    });
+  });
+
   describe('MUST-2.1: constants.ts, contours.ts and assemble.ts are pure', () => {
     it.each(['constants.ts', 'contours.ts', 'assemble.ts'])('%s imports nothing forbidden', (file) => {
       const source = fs.readFileSync(path.join(ONNX_DIR, file), 'utf8');
@@ -1276,6 +1301,23 @@ MUST-3.16 is the release's load-bearing guard. A wrong dictionary does not fail 
   export const SCANNER_MIN_SIDE_RATIO = 0.05;
   /** The countdown before the corrected image uploads on its own. */
   export const SCANNER_AUTO_ACCEPT_MS = 4000;
+  /** The same 10 MB as MAX_RECEIPT_BYTES in @/lib/warranty/receipts, duplicated here because
+   *  that module imports node:fs, node:crypto and @/lib/env, and scan.ts is reachable from a
+   *  'use client' component. tests/ops/constants.test.ts pins the two equal. */
+  export const SCANNER_MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
+  ```
+
+  And the probe block, which moves here from `probe.ts` so that `200` is not a bare literal under `onnx/` (plan resolution 8):
+
+  ```ts
+  /** The exact line the probe child prints on success. Duplicated as a literal in
+   *  scripts/ocr-probe.mjs, which cannot resolve '@/...'; tests/scripts/ocr-probe.test.ts
+   *  pins the two equal. */
+  export const OCR_PROBE_OK_LINE = 'ocr-probe-ok';
+  /** After this the child is SIGKILLed and the verdict is the fallback engine. */
+  export const OCR_PROBE_TIMEOUT_MS = 60_000;
+  /** How much of the child's stderr is kept as the recorded reason. */
+  export const OCR_PROBE_DETAIL_MAX_CHARS = 200;
   ```
 
 - [ ] **Step 4: Write `src/lib/warranty/ocr/onnx/dict.ts`.**
@@ -1547,17 +1589,30 @@ Step 2 of `preprocess.ts`'s sharp pipeline, `.rotate()` with no argument, is the
       expect(out.data.length).toBe(out.width * out.height * 3);
     });
 
-    it('upscales a 400 pixel long side to the minimum', async () => {
-      const file = await write('small.png', await png(400, 300, [180, 180, 180]));
+    it('upscales a 500 pixel long side to exactly the minimum', async () => {
+      // 1280 / 500 = 2.56, which is under PREPROCESS_MAX_UPSCALE, so the minimum is reached.
+      // The cap starts binding below 1280 / 3 = 426.67, which the next case covers; a 400
+      // pixel image would come out at 1200, not 1280.
+      const file = await write('small.png', await png(500, 300, [180, 180, 180]));
       const out = await preprocessReceipt(file);
       expect(Math.max(out.width, out.height)).toBe(PREPROCESS_MIN_LONG_SIDE_PX);
     });
 
     it('caps a 200 pixel image at the maximum upscale rather than reaching the minimum', async () => {
+      // 1280 / 200 = 6.4, so PREPROCESS_MAX_UPSCALE wins: 200 * 3 = 600. Beyond 3x there is no
+      // information left to recover and the extra pixels only cost detection time.
       const file = await write('tiny.png', await png(200, 150, [180, 180, 180]));
       const out = await preprocessReceipt(file);
       expect(Math.max(out.width, out.height)).toBe(Math.round(200 * PREPROCESS_MAX_UPSCALE));
       expect(Math.max(out.width, out.height)).toBeLessThan(PREPROCESS_MIN_LONG_SIDE_PX);
+    });
+
+    it('the cap and the minimum meet at 1280 / 3, and the cap wins just below it', async () => {
+      // The boundary case, written down because "upscale small images to 1280" is what the
+      // rule sounds like and is not what it does.
+      const file = await write('boundary.png', await png(400, 300, [180, 180, 180]));
+      const out = await preprocessReceipt(file);
+      expect(Math.max(out.width, out.height)).toBe(1200);
     });
 
     it('downscales a 6000 pixel image to the maximum', async () => {
@@ -1568,9 +1623,19 @@ Step 2 of `preprocess.ts`'s sharp pipeline, `.rotate()` with no argument, is the
   });
 
   describe('MUST-4.5 / MUST-4.6: deskew', () => {
-    it('measures a 4.0 degree tilt within half a degree', async () => {
+    it('measures a 4.0 degree tilt within half a degree, with the sign the caller expects', async () => {
+      // barGridPng(4) applies sharp's .rotate(4), which tilts the content CLOCKWISE. The
+      // returned value is the content's skew, so it must be +4: the caller corrects with
+      // .rotate(-angle). A sign error here does not fail loudly, it doubles the tilt.
       const measured = await estimateSkewDeg(await barGridPng(4));
+      expect(measured).toBeGreaterThan(0);
       expect(Math.abs(measured - 4)).toBeLessThanOrEqual(0.5);
+    });
+
+    it('measures the opposite tilt as a negative angle', async () => {
+      const measured = await estimateSkewDeg(await barGridPng(-4));
+      expect(measured).toBeLessThan(0);
+      expect(Math.abs(measured + 4)).toBeLessThanOrEqual(0.5);
     });
 
     it('measures a level image below the apply threshold', async () => {
@@ -1579,18 +1644,28 @@ Step 2 of `preprocess.ts`'s sharp pipeline, `.rotate()` with no argument, is the
     });
 
     it('leaves a level image byte-identical, proving the no-op path really is a no-op', async () => {
+      // 1400 is between PREPROCESS_MIN_LONG_SIDE_PX and PREPROCESS_MAX_LONG_SIDE_PX, so no
+      // resize happens either and the ONLY difference between the two pipelines below would be
+      // a deskew rotate. The reference goes through the same intermediate PNG so a lossless
+      // round-trip cannot be mistaken for a rotation.
       const level = await write('level.png', await barGridPng(0, 1400, 900));
       const out = await preprocessReceipt(level);
-      const reference = await sharp(level)
+      const staged = await sharp(level)
         .rotate()
         .flatten({ background: '#ffffff' })
         .greyscale()
         .normalise({ lower: 1, upper: 99 })
-        .toColourspace('srgb')
-        .removeAlpha()
-        .raw()
+        .png()
         .toBuffer();
+      const reference = await sharp(staged).toColourspace('srgb').removeAlpha().raw().toBuffer();
       expect(Buffer.compare(out.data, reference)).toBe(0);
+    });
+
+    it('a solid image with no structure at all measures exactly 0, not the first candidate angle', async () => {
+      // The degenerate case: every row sum is identical at every angle, so nothing beats the
+      // seed. A search seeded at -DESKEW_SEARCH_MAX_DEG would return -10 here and rotate a
+      // level receipt by ten degrees.
+      expect(await estimateSkewDeg(await png(300, 200, [200, 200, 200]))).toBe(0);
     });
   });
   ```
@@ -2058,10 +2133,16 @@ Step 2 of `preprocess.ts`'s sharp pipeline, `.rotate()` with no argument, is the
   export function bestSkewAngleDeg(binary: Uint8Array, width: number, height: number): number {
     const centreX = (width - 1) / 2;
     const centreY = (height - 1) / 2;
-    let bestAngle = 0;
-    let bestScore = -1;
-    for (let angle = -DESKEW_SEARCH_MAX_DEG; angle <= DESKEW_SEARCH_MAX_DEG; angle += DESKEW_SEARCH_STEP_DEG) {
-      const radians = (angle * Math.PI) / 180;
+
+    /**
+     * `skewDeg` is the SKEW OF THE CONTENT, positive meaning the text runs down to the right.
+     * Levelling it means rotating by -skewDeg, which is exactly what the caller does, so the
+     * profile is measured under that same -skewDeg rotation. Getting this sign backwards
+     * produces a deskew that doubles the tilt instead of removing it, and the fixture at 4
+     * degrees is what catches it.
+     */
+    function profileVariance(skewDeg: number): number {
+      const radians = (-skewDeg * Math.PI) / 180;
       const cos = Math.cos(radians);
       const sin = Math.sin(radians);
       const rows = new Float64Array(height);
@@ -2080,14 +2161,26 @@ Step 2 of `preprocess.ts`'s sharp pipeline, `.rotate()` with no argument, is the
       mean /= height;
       let variance = 0;
       for (const value of rows) variance += (value - mean) ** 2;
+      return variance;
+    }
+
+    // Seeded at 0 and replaced only on a STRICTLY greater score, so a degenerate input (a
+    // blank page, a solid colour, anything whose row sums do not change with angle) returns 0
+    // rather than whichever candidate the loop happened to try first. Seeding with -1 and
+    // starting the sweep at -10 returns -10 on every uniform image, and the pipeline then
+    // rotates a perfectly level receipt by ten degrees.
+    let bestAngle = 0;
+    let bestScore = profileVariance(0);
+    for (let angle = -DESKEW_SEARCH_MAX_DEG; angle <= DESKEW_SEARCH_MAX_DEG; angle += DESKEW_SEARCH_STEP_DEG) {
+      const candidate = Math.round(angle / DESKEW_SEARCH_STEP_DEG) * DESKEW_SEARCH_STEP_DEG;
+      if (candidate === 0) continue;
+      const variance = profileVariance(candidate);
       if (variance > bestScore) {
         bestScore = variance;
-        bestAngle = angle;
+        bestAngle = candidate;
       }
     }
-    // Floating accumulation over the loop can leave a value like 3.9999999; the search grid
-    // is what the caller compares against.
-    return Math.round(bestAngle / DESKEW_SEARCH_STEP_DEG) * DESKEW_SEARCH_STEP_DEG;
+    return bestAngle;
   }
 
   /** Runs on a downsampled copy and never on the full image. */
@@ -2104,7 +2197,12 @@ Step 2 of `preprocess.ts`'s sharp pipeline, `.rotate()` with no argument, is the
       })
       .raw()
       .toBuffer({ resolveWithObject: true });
-    const grey = new Uint8Array(data.buffer, data.byteOffset, info.width * info.height);
+    // .greyscale() gives one channel, but read the stride from the result rather than assuming
+    // it: a future pipeline change that adds a channel would otherwise measure the skew of
+    // every third byte.
+    const stride = info.channels;
+    const grey = new Uint8Array(info.width * info.height);
+    for (let i = 0; i < grey.length; i += 1) grey[i] = data[i * stride];
     const threshold = otsuThreshold(grey);
     const binary = new Uint8Array(grey.length);
     for (let i = 0; i < grey.length; i += 1) binary[i] = grey[i] <= threshold ? 1 : 0;
@@ -2286,18 +2384,57 @@ MUST-4.16's simplification is stated rather than hidden. The reference implement
     return map;
   }
 
-  /** 1,200 isolated single-pixel components on a 100 by 100 grid, 3 pixels apart so no
-   *  dilation kernel can merge them. */
+  /**
+   * Isolated single-pixel components on a 100 by 100 grid, 3 pixels apart so the 2 by 2
+   * dilation cannot merge them. `y` and `x` each take 34 values (0, 3, ... 99), so this is
+   * 34 * 34 = 1156 components, comfortably past DET_MAX_CANDIDATES (1000), which is the only
+   * thing it is for. The guard is an exact count so a grid change cannot silently make the
+   * DET_MAX_CANDIDATES assertion vacuous.
+   */
+  export const NOISE_MAP_COMPONENTS = 1156;
+
   export function noiseMap(): ProbMap {
     const map = blank(100, 100);
     let placed = 0;
-    for (let y = 0; y < 100 && placed < 1200; y += 3) {
-      for (let x = 0; x < 100 && placed < 1200; x += 3) {
+    for (let y = 0; y < 100; y += 3) {
+      for (let x = 0; x < 100; x += 3) {
         map.data[y * 100 + x] = 0.95;
         placed += 1;
       }
     }
-    if (placed !== 1200) throw new Error(`noiseMap placed ${placed} components, expected 1200`);
+    if (placed !== NOISE_MAP_COMPONENTS) {
+      throw new Error(`noiseMap placed ${placed} components, expected ${NOISE_MAP_COMPONENTS}`);
+    }
+    return map;
+  }
+
+  /**
+   * 231 blocks of 5 by 5, spaced 7 apart so the dilation to 6 by 6 leaves a one-pixel gap and
+   * nothing merges. Every block survives DET_MIN_BOX_SIDE_PX (its rectangle is 5 by 5) and
+   * DET_BOX_THRESH (score = v * 25 / 36, and the weakest v is 0.75, giving 0.5208), so all 231
+   * reach the DET_MAX_BOXES cap. Values rise with the index so the cap's sort-and-slice has
+   * something to order.
+   */
+  export const MANY_BOXES_COUNT = 231;
+  export const MANY_BOXES_MIN_VALUE = 0.75;
+  export const MANY_BOXES_VALUE_STEP = 0.0008;
+  /** A 5 by 5 block dilates to 6 by 6, and boxScoreFast measures the dilated bounding box
+   *  against the undilated map: 25 filled cells out of 36. */
+  export const MANY_BOXES_SCORE_RATIO = 25 / 36;
+
+  export function manyBoxesMap(): ProbMap {
+    const map = blank(150, 80);
+    let index = 0;
+    for (let row = 0; row < 11; row += 1) {
+      for (let col = 0; col < 21; col += 1) {
+        const value = MANY_BOXES_MIN_VALUE + index * MANY_BOXES_VALUE_STEP;
+        const x0 = col * 7 + 1;
+        const y0 = row * 7 + 1;
+        fillRect(map, x0, y0, x0 + 4, y0 + 4, value);
+        index += 1;
+      }
+    }
+    if (index !== MANY_BOXES_COUNT) throw new Error(`manyBoxesMap placed ${index} blocks`);
     return map;
   }
   ```
@@ -2311,6 +2448,7 @@ MUST-4.16's simplification is stated rather than hidden. The reference implement
   import {
     DET_BINARY_THRESH,
     DET_DILATION_KERNEL,
+    DET_MAX_BOXES,
     DET_MAX_CANDIDATES,
     DET_UNCLIP_RATIO,
   } from '@/lib/warranty/ocr/onnx/constants';
@@ -2326,7 +2464,15 @@ MUST-4.16's simplification is stated rather than hidden. The reference implement
     unclipRect,
     type Point,
   } from '@/lib/warranty/ocr/onnx/contours';
-  import { noiseMap, oneGapMap, twoBoxMap } from '../../../../helpers/ocr-probmaps';
+  import {
+    MANY_BOXES_MIN_VALUE,
+    MANY_BOXES_SCORE_RATIO,
+    NOISE_MAP_COMPONENTS,
+    manyBoxesMap,
+    noiseMap,
+    oneGapMap,
+    twoBoxMap,
+  } from '../../../../helpers/ocr-probmaps';
 
   describe('binarize (MUST-4.10)', () => {
     it('keeps values strictly above the threshold and drops the rest', () => {
@@ -2374,6 +2520,9 @@ MUST-4.16's simplification is stated rather than hidden. The reference implement
 
     it('stops at exactly DET_MAX_CANDIDATES on the noise fixture', () => {
       const noise = noiseMap();
+      // 1156 candidates in, 1000 out. If the fixture ever fell below the cap this assertion
+      // would pass while proving nothing, so pin the input count too.
+      expect(NOISE_MAP_COMPONENTS).toBeGreaterThan(DET_MAX_CANDIDATES);
       const result = labelComponents(
         binarize(noise.data, DET_BINARY_THRESH),
         noise.width,
@@ -2382,6 +2531,18 @@ MUST-4.16's simplification is stated rather than hidden. The reference implement
       );
       expect(result.components).toHaveLength(DET_MAX_CANDIDATES);
       expect(result.truncated).toBe(true);
+    });
+
+    it('reports truncated false and every component when the cap is not reached', () => {
+      const clean = twoBoxMap();
+      const result = labelComponents(
+        binarize(clean.data, DET_BINARY_THRESH),
+        clean.width,
+        clean.height,
+        DET_MAX_CANDIDATES,
+      );
+      expect(result.components).toHaveLength(2);
+      expect(result.truncated).toBe(false);
     });
   });
 
@@ -2422,10 +2583,21 @@ MUST-4.16's simplification is stated rather than hidden. The reference implement
       const width = 4;
       const height = 2;
       const map = new Float32Array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]);
-      const quad = rectCorners({ cx: 1.5, cy: 0.5, width: 2, height: 2, angleDeg: 0 });
-      // Corners land on x in 0.5..2.5 and y in -0.5..1.5, which clips to columns 0..2 and
-      // both rows: (0.1 + 0.2 + 0.3 + 0.5 + 0.6 + 0.7) / 6.
+      const quad = rectCorners({ cx: 1, cy: 0.5, width: 1, height: 1, angleDeg: 0 });
+      // Corners land on x in 0.5..1.5 and y in 0..1. The implementation floors the minimum and
+      // ceils the maximum, so x0 = floor(0.5) = 0, x1 = ceil(1.5) = 2, y0 = 0, y1 = 1: columns
+      // 0..2 of both rows, which is (0.1 + 0.2 + 0.3 + 0.5 + 0.6 + 0.7) / 6 = 2.4 / 6 = 0.4.
+      // Column 3 is genuinely outside, which is what makes this a clipping test rather than a
+      // whole-map average.
       expect(boxScoreFast(map, width, height, quad)).toBeCloseTo(2.4 / 6, 6);
+    });
+
+    it('ceils the maximum rather than flooring it, so a box never under-covers its own edge', () => {
+      const map = new Float32Array([0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]);
+      const quad = rectCorners({ cx: 1.5, cy: 0.5, width: 2, height: 2, angleDeg: 0 });
+      // x spans 0.5..2.5 so x1 = ceil(2.5) = 3, taking all four columns and both rows:
+      // 3.6 / 8 = 0.45. Flooring instead would give 0.4 and quietly shrink every box.
+      expect(boxScoreFast(map, 4, 2, quad)).toBeCloseTo(3.6 / 8, 6);
     });
 
     it('clips the bounding box into the map bounds', () => {
@@ -2466,24 +2638,47 @@ MUST-4.16's simplification is stated rather than hidden. The reference implement
     });
 
     it('keeps a box scoring 0.51 and drops one scoring 0.49', () => {
+      // The region runs flush to the right and bottom edges on purpose. dilate() only grows
+      // down and to the right and clamps at the bounds, so the dilated set is identical to the
+      // region, the box's bounding box is exactly the region, and the measured score is the
+      // fill value exactly. A region floating in the middle would be measured over a bounding
+      // box one row and one column larger than itself, diluting 0.51 to about 0.435 and
+      // dropping the "kept" case for a reason that has nothing to do with DET_BOX_THRESH.
       const width = 30;
       const height = 12;
-      const strong = new Float32Array(width * height);
-      const weak = new Float32Array(width * height);
-      for (let y = 2; y <= 9; y += 1) {
-        for (let x = 3; x <= 26; x += 1) {
-          strong[y * width + x] = 0.51;
-          weak[y * width + x] = 0.49;
+      function mapAt(value: number): Float32Array {
+        const map = new Float32Array(width * height);
+        for (let y = 2; y <= height - 1; y += 1) {
+          for (let x = 3; x <= width - 1; x += 1) map[y * width + x] = value;
         }
+        return map;
       }
-      expect(boxesFromProbMap(strong, width, height)).toHaveLength(1);
-      expect(boxesFromProbMap(weak, width, height)).toHaveLength(0);
+      // Rectangle corners (3,2) and (29,11): 26 by 9, so min side 9 clears DET_MIN_BOX_SIDE_PX.
+      // Score cells are x 3..29 by y 2..11 = 27 * 10 = 270, all of them inside the region.
+      expect(boxesFromProbMap(mapAt(0.51), width, height)).toHaveLength(1);
+      expect(boxesFromProbMap(mapAt(0.51), width, height)[0].score).toBeCloseTo(0.51, 5);
+      expect(boxesFromProbMap(mapAt(0.49), width, height)).toHaveLength(0);
     });
 
     it('caps at DET_MAX_BOXES, keeping the highest-scoring ones', () => {
+      const many = manyBoxesMap();
+      const boxes = boxesFromProbMap(many.data, many.width, many.height);
+      // 231 blocks all clear both filters, so the cap has to do real work here. The noise
+      // fixture cannot test this: its single-pixel components dilate to a 2 by 2 whose
+      // rectangle measures 1 by 1 and DET_MIN_BOX_SIDE_PX drops every one of them, leaving an
+      // empty array that satisfies any upper-bound assertion.
+      expect(boxes).toHaveLength(DET_MAX_BOXES);
+      // The 31 weakest blocks were dropped, so nothing at the floor value survives.
+      const weakestPossible = MANY_BOXES_MIN_VALUE * MANY_BOXES_SCORE_RATIO;
+      expect(Math.min(...boxes.map((box) => box.score))).toBeGreaterThan(weakestPossible);
+    });
+
+    it('the noise fixture is dropped on size, not on the cap', () => {
       const noise = noiseMap();
-      const boxes = boxesFromProbMap(noise.data, noise.width, noise.height);
-      expect(boxes.length).toBeLessThanOrEqual(200);
+      // A single pixel dilates to 2 by 2, whose min-area rectangle measures 1 by 1 because the
+      // extent is max minus min. 1 < DET_MIN_BOX_SIDE_PX, so a patterned countertop costs
+      // nothing downstream.
+      expect(boxesFromProbMap(noise.data, noise.width, noise.height)).toEqual([]);
     });
   });
   ```
@@ -3142,9 +3337,20 @@ MUST-4.25 is a decision taken against the research doc's advice and it is worth 
       expect(crops[0].boxIndex).toBe(1);
     });
 
-    it('drops a box that clamps to nothing at the image edge', async () => {
+    it('drops a box that lies entirely outside the image rather than sliding it onto the corner', async () => {
+      // left = -520, top = -506, right = -480, bottom = -494: nothing overlaps the page.
+      // Clamping before this check yields left 0, top 0, width 40, height 12, which is a
+      // perfectly valid crop of a region the detector never pointed at.
       const crops = await cropBoxes(page, [box(-500, -500, 40, 12, 0)]);
       expect(crops).toHaveLength(0);
+    });
+
+    it('keeps a box that straddles the edge, clipped to the part that is on the page', async () => {
+      // left = -10, right = 30, so 30 columns of the 40 are real.
+      const crops = await cropBoxes(page, [box(10, 30, 40, 12, 0)]);
+      expect(crops).toHaveLength(1);
+      expect(crops[0].width).toBe(30);
+      expect(crops[0].height).toBe(12);
     });
   });
   ```
@@ -3163,6 +3369,20 @@ MUST-4.25 is a decision taken against the research doc's advice and it is worth 
 
   function crop(boxIndex: number, value = 128): Crop {
     return { data: solidRgb(20, 10, [value, value, value]), width: 20, height: 10, boxIndex };
+  }
+
+  /** 4 by 2, every pixel a distinct grey, so a 180 degree rotation is visible in the bytes:
+   *  index 0 holds 0 and index 7 holds 70, and the rotation swaps them. */
+  function gradientCrop(boxIndex: number): Crop {
+    const width = 4;
+    const height = 2;
+    const data = Buffer.alloc(width * height * 3);
+    for (let i = 0; i < width * height; i += 1) {
+      data[i * 3] = i * 10;
+      data[i * 3 + 1] = i * 10;
+      data[i * 3 + 2] = i * 10;
+    }
+    return { data, width, height, boxIndex };
   }
 
   function sessions(runCls: (input: OnnxTensorData) => Promise<OnnxTensorData>): OnnxOcrSessions {
@@ -3191,13 +3411,29 @@ MUST-4.25 is a decision taken against the research doc's advice and it is worth 
   });
 
   describe('classifyAndFlip (MUST-4.24)', () => {
-    it('flips a crop whose class-1 probability is at the threshold', async () => {
+    it('flips a crop whose class-1 probability is at the threshold, and the pixels prove it', async () => {
+      const input = gradientCrop(0);
+      expect(input.data[0]).toBe(0);
       const out = await classifyAndFlip(
-        [crop(0)],
+        [input],
         sessions(async () => ({ data: new Float32Array([1 - CLS_THRESH, CLS_THRESH]), dims: [1, 2] })),
       );
       expect(out).toHaveLength(1);
       expect(out[0].boxIndex).toBe(0);
+      // A 180 degree rotation reverses both axes, so the last pixel becomes the first. Asserting
+      // only the length and the index would pass identically on the un-flipped path.
+      expect(out[0].data[0]).toBe(70);
+      expect(out[0].width).toBe(input.width);
+      expect(out[0].height).toBe(input.height);
+    });
+
+    it('is exactly at-or-above, not strictly above, the threshold', async () => {
+      const input = gradientCrop(0);
+      const justUnder = await classifyAndFlip(
+        [input],
+        sessions(async () => ({ data: new Float32Array([1, CLS_THRESH - 0.01]), dims: [1, 2] })),
+      );
+      expect(justUnder[0].data).toBe(input.data);
     });
 
     it('leaves a crop below the threshold byte-identical', async () => {
@@ -3301,10 +3537,16 @@ MUST-4.25 is a decision taken against the research doc's advice and it is worth 
   ): { left: number; top: number; width: number; height: number } | null {
     const left = Math.round(cx - width / 2);
     const top = Math.round(cy - height / 2);
+    const right = left + Math.round(width);
+    const bottom = top + Math.round(height);
+    // A box that does not intersect the image at all is dropped BEFORE clamping. Clamping it
+    // first would slide it onto the nearest corner and hand the recogniser a strip of margin
+    // as if it were a line of text, which is a silent wrong answer rather than a crash.
+    if (right <= 0 || bottom <= 0 || left >= imageWidth || top >= imageHeight) return null;
     const clampedLeft = Math.max(0, Math.min(imageWidth - 1, left));
     const clampedTop = Math.max(0, Math.min(imageHeight - 1, top));
-    const clampedWidth = Math.min(Math.round(width), imageWidth - clampedLeft);
-    const clampedHeight = Math.min(Math.round(height), imageHeight - clampedTop);
+    const clampedWidth = Math.min(right, imageWidth) - clampedLeft;
+    const clampedHeight = Math.min(bottom, imageHeight) - clampedTop;
     // A crop whose width or height comes out as zero after clamping is dropped, not passed
     // on: a zero-width tensor is an ORT crash, not an exception.
     if (clampedWidth <= 0 || clampedHeight <= 0) return null;
@@ -3757,19 +3999,32 @@ MUST-4.28's pad-value note is the other one to read twice: padding happens in **
 
   describe('assembleText (MUST-4.33)', () => {
     it('merges two boxes overlapping by 60 percent of the shorter height', () => {
+      // Box A spans y 0..20, box B spans y 8..28, both 20 tall. Overlap is
+      // min(20, 28) - max(0, 8) = 12, and 12 / 20 = 0.6, which clears LINE_OVERLAP_RATIO.
       const text = assembleText([
         { quad: quad(0, 0, 50, 20), text: 'left', score: 0.9 },
-        { quad: quad(60, 12, 110, 32), text: 'right', score: 0.9 },
+        { quad: quad(60, 8, 110, 28), text: 'right', score: 0.9 },
       ]);
       expect(text).toBe('left right');
     });
 
     it('does not merge two boxes overlapping by 40 percent', () => {
+      // Same shapes shifted four pixels further down: overlap is
+      // min(20, 32) - max(0, 12) = 8, and 8 / 20 = 0.4, which does not.
       const text = assembleText([
         { quad: quad(0, 0, 50, 20), text: 'top', score: 0.9 },
-        { quad: quad(60, 12, 110, 40), text: 'bottom', score: 0.9 },
+        { quad: quad(60, 12, 110, 32), text: 'bottom', score: 0.9 },
       ]);
       expect(text).toBe('top\nbottom');
+    });
+
+    it('merges at exactly LINE_OVERLAP_RATIO, because the comparison is at-or-above', () => {
+      // Overlap 10 of a 20 tall pair is exactly 0.5.
+      const text = assembleText([
+        { quad: quad(0, 0, 50, 20), text: 'a', score: 0.9 },
+        { quad: quad(60, 10, 110, 30), text: 'b', score: 0.9 },
+      ]);
+      expect(text).toBe('a b');
     });
 
     it('emits a single box as one line with no trailing newline', () => {
@@ -4105,6 +4360,7 @@ The `OcrEngine` interface is unchanged and stays the only way a caller reaches r
   import sharp from 'sharp';
   import { onnxOcrEngine } from '@/lib/warranty/ocr/onnx/engine';
   import { detResize } from '@/lib/warranty/ocr/onnx/detect';
+  import { preprocessReceipt } from '@/lib/warranty/ocr/onnx/preprocess';
   import { setOnnxSessionsForTests, type OnnxOcrSessions } from '@/lib/warranty/ocr/onnx/session';
   import { solidRgb } from '../../../../helpers/ocr-images';
 
@@ -4115,7 +4371,7 @@ The `OcrEngine` interface is unchanged and stays the only way a caller reaches r
     vi.restoreAllMocks();
   });
 
-  async function receiptFile(): Promise<{ file: string; dir: string; width: number; height: number }> {
+  async function receiptFile(): Promise<{ file: string; dir: string }> {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-ocr-engine-'));
     const width = 1400;
     const height = 900;
@@ -4126,12 +4382,20 @@ The `OcrEngine` interface is unchanged and stays the only way a caller reaches r
       .toBuffer();
     const file = path.join(dir, 'receipt.png');
     fs.writeFileSync(file, png);
-    return { file, dir, width, height };
+    return { file, dir };
   }
 
-  /** A fake session set that reports one box covering the top strip and decodes it to 'TOTAL'. */
-  function fakeSessions(preWidth: number, preHeight: number): OnnxOcrSessions {
-    const geometry = detResize(preWidth, preHeight);
+  /**
+   * A fake session set that reports one box covering the top strip and decodes it to 'TOTAL'.
+   *
+   * The detection tensor's shape comes from detResize(PREPROCESSED dims), not from the source
+   * file's nominal size: preprocessReceipt resizes and may deskew, so the two differ, and
+   * detectBoxes throws on a spatial-dimension mismatch. Running the real preprocess here is
+   * cheap and is the only way the fake can agree with what the engine actually asks for.
+   */
+  async function fakeSessions(file: string): Promise<OnnxOcrSessions> {
+    const pre = await preprocessReceipt(file);
+    const geometry = detResize(pre.width, pre.height);
     return {
       runDet: async () => {
         const map = new Float32Array(geometry.resizeW * geometry.resizeH);
@@ -4166,9 +4430,9 @@ The `OcrEngine` interface is unchanged and stays the only way a caller reaches r
 
   describe('onnxOcrEngine (MUST-4.1, MUST-4.2)', () => {
     it('satisfies the OcrEngine interface and returns { text }', async () => {
-      const { file, dir, width, height } = await receiptFile();
+      const { file, dir } = await receiptFile();
       try {
-        setOnnxSessionsForTests(fakeSessions(width, height));
+        setOnnxSessionsForTests(await fakeSessions(file));
         const result = await onnxOcrEngine.recognize(file, 'image/png');
         expect(Object.keys(result)).toEqual(['text']);
         expect(result.text).toContain('TOTAL');
@@ -4178,19 +4442,19 @@ The `OcrEngine` interface is unchanged and stays the only way a caller reaches r
     });
 
     it('runs no inference at all for a PDF (MUST-4.2, MUST-7.1)', async () => {
-      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-ocr-engine-pdf-'));
+      const { file: image, dir } = await receiptFile();
       try {
         let touched = 0;
         setOnnxSessionsForTests({
-          ...fakeSessions(100, 100),
+          ...(await fakeSessions(image)),
           runDet: async () => {
             touched += 1;
             throw new Error('the PDF path must never reach a session');
           },
         });
-        const file = path.join(dir, 'not-a-pdf.pdf');
-        fs.writeFileSync(file, Buffer.from('not really a pdf'));
-        await expect(onnxOcrEngine.recognize(file, 'application/pdf')).rejects.toThrow();
+        const pdf = path.join(dir, 'not-a-pdf.pdf');
+        fs.writeFileSync(pdf, Buffer.from('not really a pdf'));
+        await expect(onnxOcrEngine.recognize(pdf, 'application/pdf')).rejects.toThrow();
         expect(touched).toBe(0);
       } finally {
         fs.rmSync(dir, { recursive: true, force: true });
@@ -4198,17 +4462,16 @@ The `OcrEngine` interface is unchanged and stays the only way a caller reaches r
     });
 
     it('returns an empty string when detection finds nothing, rather than throwing', async () => {
-      const { file, dir, width, height } = await receiptFile();
+      const { file, dir } = await receiptFile();
       try {
+        const pre = await preprocessReceipt(file);
+        const geometry = detResize(pre.width, pre.height);
         setOnnxSessionsForTests({
-          ...fakeSessions(width, height),
-          runDet: async () => {
-            const geometry = detResize(width, height);
-            return {
-              data: new Float32Array(geometry.resizeW * geometry.resizeH),
-              dims: [1, 1, geometry.resizeH, geometry.resizeW],
-            };
-          },
+          ...(await fakeSessions(file)),
+          runDet: async () => ({
+            data: new Float32Array(geometry.resizeW * geometry.resizeH),
+            dims: [1, 1, geometry.resizeH, geometry.resizeW],
+          }),
         });
         expect(await onnxOcrEngine.recognize(file, 'image/png')).toEqual({ text: '' });
       } finally {
@@ -4216,11 +4479,24 @@ The `OcrEngine` interface is unchanged and stays the only way a caller reaches r
       }
     });
 
-    it('MUST-4.3: a detection failure propagates rather than being swallowed', async () => {
-      const { file, dir, width, height } = await receiptFile();
+    it('MUST-4.9: a detection tensor whose spatial dims disagree with the input throws', async () => {
+      const { file, dir } = await receiptFile();
       try {
         setOnnxSessionsForTests({
-          ...fakeSessions(width, height),
+          ...(await fakeSessions(file)),
+          runDet: async () => ({ data: new Float32Array(4), dims: [1, 1, 2, 2] }),
+        });
+        await expect(onnxOcrEngine.recognize(file, 'image/png')).rejects.toThrow(/spatial/i);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    });
+
+    it('MUST-4.3: a detection failure propagates rather than being swallowed', async () => {
+      const { file, dir } = await receiptFile();
+      try {
+        setOnnxSessionsForTests({
+          ...(await fakeSessions(file)),
           runDet: async () => {
             throw new Error('det kernel exploded');
           },
@@ -4232,10 +4508,10 @@ The `OcrEngine` interface is unchanged and stays the only way a caller reaches r
     });
 
     it('MUST-4.3: a recognition failure propagates rather than being swallowed', async () => {
-      const { file, dir, width, height } = await receiptFile();
+      const { file, dir } = await receiptFile();
       try {
         setOnnxSessionsForTests({
-          ...fakeSessions(width, height),
+          ...(await fakeSessions(file)),
           runRec: async () => {
             throw new Error('rec kernel exploded');
           },
@@ -4247,9 +4523,9 @@ The `OcrEngine` interface is unchanged and stays the only way a caller reaches r
     });
 
     it('MUST-4.35: the engine applies no cap of its own', async () => {
-      const { file, dir, width, height } = await receiptFile();
+      const { file, dir } = await receiptFile();
       try {
-        setOnnxSessionsForTests(fakeSessions(width, height));
+        setOnnxSessionsForTests(await fakeSessions(file));
         const source = fs.readFileSync(path.join(process.cwd(), 'src/lib/warranty/ocr/onnx/engine.ts'), 'utf8');
         expect(source).not.toContain('truncateOcrText');
         expect(source).not.toContain('MAX_OCR_TEXT_CHARS');
@@ -4260,6 +4536,8 @@ The `OcrEngine` interface is unchanged and stays the only way a caller reaches r
     });
   });
   ```
+
+  The fake's detection map marks `x` 10 to 119 and `y` 10 to 33 as 0.95. Both fit inside the detection canvas this fixture produces: 1400 by 900 sits between `PREPROCESS_MIN_LONG_SIDE_PX` and `PREPROCESS_MAX_LONG_SIDE_PX` so `preprocessReceipt` does not resize it, the solid fill measures a skew of 0 so it does not rotate it either, and `detResize(1400, 900)` gives `ratio = 960 / 1400 = 0.6857`, `resizeW = round(960 / 32) * 32 = 960`, `resizeH = round(617.14 / 32) * 32 = 19 * 32 = 608`. After the 2 by 2 dilation the strip is a 110 by 24 rectangle scoring `2640 * 0.95 / (111 * 25) = 0.904`, comfortably over `DET_BOX_THRESH`, and the five recognition timesteps `[1, 2, 1, 3, 4]` decode against `DICT` to `TOTAL`. If Task 1's contingency changed a preprocessing constant, print `pre.width`, `pre.height` and `geometry` once and move the strip rather than loosening the assertion.
 
 - [ ] **Step 2: Run to verify it fails.**
 
@@ -4368,8 +4646,8 @@ The signal row of MUST-5.8's table is the whole reason the section exists, and i
 - Produces:
   ```ts
   // src/lib/warranty/ocr/onnx/probe.ts
-  export const OCR_PROBE_OK_LINE = 'ocr-probe-ok';
-  export const OCR_PROBE_TIMEOUT_MS = 60_000;
+  // OCR_PROBE_OK_LINE, OCR_PROBE_TIMEOUT_MS and OCR_PROBE_DETAIL_MAX_CHARS live in
+  // constants.ts (plan resolution 8) and are imported here, not redeclared.
   export const SETTING_OCR_ENGINE = 'ocr.engine';
   export const SETTING_OCR_ENGINE_PROBED_VERSION = 'ocr.engine_probed_version';
   export const SETTING_OCR_ENGINE_PROBE_AT = 'ocr.engine_probe_at';
@@ -4535,9 +4813,67 @@ The signal row of MUST-5.8's table is the whole reason the section exists, and i
 
 - [ ] **Step 4: Repoint the three existing tests.**
 
-  - `tests/lib/warranty/ocr/engine-options.test.ts` reads `src/lib/warranty/ocr/engine.ts`'s source text and slices out the `createWorker(...)` call. Change the path to `src/lib/warranty/ocr/tesseract.ts`. Its assertions are unchanged, including the "no `https?://`, no unpkg, no jsdelivr" one, which now covers the moved file.
-  - `tests/lib/warranty/ocr/idle.test.ts` imports `terminateOcrWorker`; change it to `releaseOcrEngine` at the import and at both `afterEach` call sites. Its fake-timer assertions are unchanged.
-  - `tests/lib/warranty/ocr/queue.test.ts` does `vi.spyOn(engineModule, 'terminateOcrWorker')`; change the spy name to `'releaseOcrEngine'`. Its assertion that the spy was called exactly once after a timeout is unchanged.
+  - `tests/lib/warranty/ocr/engine-options.test.ts` reads `src/lib/warranty/ocr/engine.ts`'s source text and slices out the `createWorker(...)` call. Change the path to `src/lib/warranty/ocr/tesseract.ts`. Its two anchors, `indexOf('createWorker(')` and `indexOf('as unknown as TesseractWorkerLike')`, both survive the verbatim move, so its assertions are unchanged, including the "no `https?://`, no unpkg, no jsdelivr" one, which now covers the moved file.
+  - `tests/lib/warranty/ocr/queue.test.ts` does `vi.spyOn(engineModule, 'terminateOcrWorker')` at line 316; change the spy name to `'releaseOcrEngine'`. Nothing else in that file changes: every one of its cases injects a fake engine through `setOcrEngineForTests`, so the selector and the probe are never reached.
+  - **`tests/lib/warranty/ocr/idle.test.ts` needs more than a rename, and this is the one test the selector genuinely breaks.** It is the only test in the repository that drives the real `defaultEngine`, and after this task `defaultEngine.recognize()` opens with `await resolveOcrEngineKind()`, which reads `settings` through `getDb()`. That file creates **no** test database and runs under `vi.useFakeTimers()`, so as written it would either throw on the missing database or, worse, find no cached verdict and spawn the real probe behind a 60 second `setTimeout` the fake clock never advances. It would then hang, or resolve to `'onnx'` and route to the ONNX engine instead of the seeded fake worker, at which point `expect(terminate).not.toHaveBeenCalled()` proves nothing.
+
+    Give it a real database and a seeded verdict. Add to the imports:
+
+    ```ts
+    import { beforeEach } from 'vitest';
+    import { setSetting } from '@/lib/settings';
+    import {
+      SETTING_OCR_ENGINE,
+      SETTING_OCR_ENGINE_PROBED_VERSION,
+      probeCacheKey,
+      resetOcrProbeForTests,
+    } from '@/lib/warranty/ocr/onnx/probe';
+    import { createSeededTestDb, type TestDb } from '../../../helpers/db';
+    ```
+
+    and wrap the existing cases:
+
+    ```ts
+    let current: TestDb | null = null;
+
+    beforeEach(() => {
+      current = createSeededTestDb();
+      resetOcrProbeForTests();
+      // The selector asks resolveOcrEngineKind() before it touches an engine. Seeding a
+      // verdict that matches this build's cache key is what keeps this file about the idle
+      // timer instead of about the probe: no child is spawned, and the fake worker below is
+      // what actually runs.
+      setSetting(SETTING_OCR_ENGINE, 'tesseract');
+      setSetting(SETTING_OCR_ENGINE_PROBED_VERSION, probeCacheKey());
+    });
+
+    afterEach(async () => {
+      vi.useRealTimers();
+      await releaseOcrEngine();
+      setOcrWorkerForTests(null);
+      setOcrEngineForTests(null);
+      resetOcrProbeForTests();
+      current?.cleanup();
+      current = null;
+    });
+    ```
+
+    The import of `terminateOcrWorker` becomes `releaseOcrEngine`, and there is exactly **one** call site to change, in that single `afterEach`. Every fake-timer assertion in the two cases stays exactly as it is: `resolveOcrEngineKind()` now returns from the settings cache without a timer of its own, so the clock still belongs to the idle timer alone.
+
+    Add one case to the same file, which is the cheapest place to prove the selector routes at all:
+
+    ```ts
+    it('routes to the tesseract worker when that is the cached verdict, without spawning a probe', async () => {
+      setOcrEngineForTests(null);
+      const fake: TesseractWorkerLike = {
+        recognize: async () => ({ data: { text: 'from the fallback' } }),
+        terminate: async () => {},
+      };
+      setOcrWorkerForTests(fake);
+      const result = await getOcrEngine().recognize('/tmp/a.jpg', 'image/jpeg');
+      expect(result.text).toBe('from the fallback');
+    });
+    ```
 
 - [ ] **Step 5: Write `scripts/ocr-probe.mjs`.**
 
@@ -4550,6 +4886,14 @@ The signal row of MUST-5.8's table is the whole reason the section exists, and i
    *
    * Touches no database, opens no socket, reads no environment variable and writes nothing to
    * disk. It is a pure question about this CPU and these three files.
+   *
+   * Ruling P10a: every literal below is duplicated from
+   * src/lib/warranty/ocr/onnx/{constants,models}.ts, because this script runs inside the
+   * runtime image where '@/...' does not resolve and src/ is not present. The probe must load
+   * the same graphs with the same options and the same shapes the app will use, or it answers
+   * a different question from the one it was asked. tests/scripts/ocr-probe.test.ts pins every
+   * one of these against the real exports, so a constant change fails the suite rather than
+   * silently desyncing the probe from the thing it probes.
    */
   import path from 'node:path';
 
@@ -4598,18 +4942,21 @@ The signal row of MUST-5.8's table is the whole reason the section exists, and i
   ```ts
   import path from 'node:path';
   import { spawn } from 'node:child_process';
+  import {
+    OCR_PROBE_DETAIL_MAX_CHARS,
+    OCR_PROBE_OK_LINE,
+    OCR_PROBE_TIMEOUT_MS,
+  } from '@/lib/warranty/ocr/onnx/constants';
   import { deleteSetting, getSetting, setSetting } from '@/lib/settings';
   import { APP_VERSION } from '@/lib/version';
 
-  export const OCR_PROBE_OK_LINE = 'ocr-probe-ok';
-  export const OCR_PROBE_TIMEOUT_MS = 60_000;
-
+  // MUST-12.2: this module owns every settings key beginning `ocr.` and no other module writes
+  // one. The protocol numbers live in constants.ts, because this file sits under onnx/ and
+  // MUST-4.41's grep bans a bare 200 anywhere in that tree.
   export const SETTING_OCR_ENGINE = 'ocr.engine';
   export const SETTING_OCR_ENGINE_PROBED_VERSION = 'ocr.engine_probed_version';
   export const SETTING_OCR_ENGINE_PROBE_AT = 'ocr.engine_probe_at';
   export const SETTING_OCR_ENGINE_PROBE_DETAIL = 'ocr.engine_probe_detail';
-
-  const DETAIL_MAX_CHARS = 200;
 
   export type OcrEngineKind = 'onnx' | 'tesseract';
 
@@ -4650,6 +4997,9 @@ The signal row of MUST-5.8's table is the whole reason the section exists, and i
 
   export function resetOcrProbeForTests(): void {
     inFlight = null;
+    // Also clear the script override. A leaked override surviving into another suite in the
+    // same worker would silently point the probe at a deleted temp file.
+    scriptPathOverride = null;
   }
 
   export function setProbeScriptPathForTests(scriptPath: string | null): void {
@@ -4718,7 +5068,7 @@ The signal row of MUST-5.8's table is the whole reason the section exists, and i
           return;
         }
         if (code !== 0) {
-          const detail = stderr.replace(/\s*\n\s*/g, ' ').trim().slice(0, DETAIL_MAX_CHARS);
+          const detail = stderr.replace(/\s*\n\s*/g, ' ').trim().slice(0, OCR_PROBE_DETAIL_MAX_CHARS);
           finish({ kind: 'tesseract', detail: detail.length > 0 ? detail : `probe exited with code ${code}` });
           return;
         }
@@ -4769,8 +5119,8 @@ The signal row of MUST-5.8's table is the whole reason the section exists, and i
   import path from 'node:path';
   import { getSetting, setSetting } from '@/lib/settings';
   import { APP_VERSION } from '@/lib/version';
+  import { OCR_PROBE_OK_LINE } from '@/lib/warranty/ocr/onnx/constants';
   import {
-    OCR_PROBE_OK_LINE,
     SETTING_OCR_ENGINE,
     SETTING_OCR_ENGINE_PROBED_VERSION,
     SETTING_OCR_ENGINE_PROBE_AT,
@@ -4904,7 +5254,24 @@ The signal row of MUST-5.8's table is the whole reason the section exists, and i
   import path from 'node:path';
   import { execFile } from 'node:child_process';
   import { promisify } from 'node:util';
-  import { OCR_PROBE_OK_LINE } from '@/lib/warranty/ocr/onnx/probe';
+  import {
+    CLS_INPUT_HEIGHT,
+    CLS_INPUT_WIDTH,
+    DET_SIZE_MULTIPLE,
+    OCR_PROBE_OK_LINE,
+    ORT_CPU_MEM_ARENA,
+    ORT_GRAPH_OPT,
+    ORT_INTER_OP_THREADS,
+    ORT_INTRA_OP_THREADS,
+    ORT_LOG_SEVERITY,
+    REC_BASE_WIDTH,
+    REC_INPUT_HEIGHT,
+  } from '@/lib/warranty/ocr/onnx/constants';
+  import {
+    CLS_MODEL_FILENAME,
+    DET_MODEL_FILENAME,
+    REC_MODEL_FILENAME,
+  } from '@/lib/warranty/ocr/onnx/models';
 
   const run = promisify(execFile);
   const script = path.join(process.cwd(), 'scripts', 'ocr-probe.mjs');
@@ -4922,6 +5289,37 @@ The signal row of MUST-5.8's table is the whole reason the section exists, and i
 
     it('pins the same ok line the parent compares against', () => {
       expect(source).toContain(`'${OCR_PROBE_OK_LINE}'`);
+    });
+  });
+
+  // Ruling P10a, applied to the probe exactly as it is applied to check-ocr-assets.mjs. The
+  // script cannot import '@/...', so it duplicates; these assertions are what stop the
+  // duplicate drifting from the values the app actually runs with.
+  describe('scripts/ocr-probe.mjs duplicates the pinned constants faithfully', () => {
+    const source = fs.readFileSync(script, 'utf8');
+
+    it('re-types the six session options at their pinned values', () => {
+      expect(source).toContain(`intraOpNumThreads: ${ORT_INTRA_OP_THREADS}`);
+      expect(source).toContain(`interOpNumThreads: ${ORT_INTER_OP_THREADS}`);
+      expect(source).toContain(`graphOptimizationLevel: '${ORT_GRAPH_OPT}'`);
+      expect(source).toContain(`logSeverityLevel: ${ORT_LOG_SEVERITY}`);
+      expect(source).toContain(`enableCpuMemArena: ${ORT_CPU_MEM_ARENA}`);
+      expect(source).toContain("executionProviders: ['cpu']");
+    });
+
+    it('probes the three real filenames', () => {
+      for (const filename of [DET_MODEL_FILENAME, CLS_MODEL_FILENAME, REC_MODEL_FILENAME]) {
+        expect(source).toContain(`'${filename}'`);
+      }
+    });
+
+    it('probes the classifier and recogniser at their pinned input shapes', () => {
+      // A probe that loads the graphs but runs them at some other shape can miss exactly the
+      // kernel the app will select.
+      expect(source).toContain(`[1, 3, ${CLS_INPUT_HEIGHT}, ${CLS_INPUT_WIDTH}]`);
+      expect(source).toContain(`[1, 3, ${REC_INPUT_HEIGHT}, ${REC_BASE_WIDTH}]`);
+      // The detector takes one DBNet stride, which is the smallest valid input.
+      expect(source).toContain(`[1, 3, ${DET_SIZE_MULTIPLE}, ${DET_SIZE_MULTIPLE}]`);
     });
   });
 
@@ -5050,16 +5448,19 @@ The signal row of MUST-5.8's table is the whole reason the section exists, and i
 - [ ] **Step 10: Run everything this task touched.**
 
   ```powershell
-  npx vitest run tests/lib/warranty/ocr tests/scripts/ocr-probe.test.ts tests/ops/ocr-egress.test.ts
+  npx vitest run tests/lib/warranty/ocr tests/scripts/ocr-probe.test.ts tests/ops/ocr-egress.test.ts tests/ops/constants.test.ts
   npx tsc --noEmit
   ```
   Expected: green, including the three amended files and the real-probe test.
 
+  **`tests/ops/constants.test.ts` is in that list on purpose.** This task writes the only new file under `onnx/` that is not a pipeline stage, and MUST-4.41's grep covers the whole directory. Leaving it out would let a bare `200` in `probe.ts` sit undetected until Task 13's full suite, five tasks downstream, which is exactly the delay the targeted-run rule is supposed to trade away deliberately rather than by accident.
+
+  Then confirm the rename is total. `Select-String` has no `-Recurse` parameter, so pipe into it:
+
   ```powershell
-  Select-String -Path .\src -Pattern 'terminateOcrWorker' -Recurse
-  Select-String -Path .\tests -Pattern 'terminateOcrWorker' -Recurse
+  Get-ChildItem -Recurse -Include *.ts,*.tsx -Path .\src,.\tests | Select-String -Pattern 'terminateOcrWorker'
   ```
-  Expected: no matches anywhere. The rename is complete or it is not done.
+  Expected: no output at all. The rename is complete or it is not done.
 
 - [ ] **Step 11: Commit.**
 
@@ -5121,7 +5522,10 @@ MUST-5.17 is a decision worth restating before the temptation arrives: the warni
   const NO_PROBE: OcrEngineState = { engine: null, probedVersion: null, probedAt: null, detail: null };
   const FELL_BACK: OcrEngineState = {
     engine: 'tesseract',
-    probedVersion: '1.5.0/arm64',
+    // Built from APP_VERSION, which this file already imports, rather than typed as a literal:
+    // a release number frozen into a fixture in this task is a release number Task 13 has not
+    // decided yet (plan resolution 13).
+    probedVersion: `${APP_VERSION}/arm64`,
     probedAt: '2026-08-18T09:41:07.000Z',
     detail: 'probe process was killed by SIGILL',
   };
@@ -5153,26 +5557,38 @@ MUST-5.17 is a decision worth restating before the temptation arrives: the warni
       expect(screen.queryByText(/This machine cannot run/)).toBeNull();
     });
 
-    it('MUST-5.18: the copy names no library and no version of one', () => {
-      const { container } = render(<AboutPanel ocr={{ ...FELL_BACK, detail: 'probe timed out after 60 seconds' }} />);
-      const text = container.textContent ?? '';
-      for (const banned of ['PP-OCR', 'ONNX', 'onnx', 'tesseract', 'Tesseract']) {
-        expect(text).not.toContain(banned);
+    it('MUST-5.18: the warning names no library, no model and no version number', () => {
+      render(<AboutPanel ocr={{ ...FELL_BACK, detail: 'probe timed out after 60 seconds' }} />);
+      // Scoped to the Notice, not the whole panel. AboutPanel also renders the real
+      // CHANGELOG.md, whose 1.5.0 entry legitimately contains version numbers and the word
+      // "models", so a container-wide assertion would be testing the changelog.
+      const warning = screen.getByRole('status').textContent ?? '';
+      for (const banned of ['PP-OCR', 'ONNX', 'onnx', 'tesseract', 'Tesseract', 'model', 'Model']) {
+        expect(warning).not.toContain(banned);
       }
-      expect(text).toContain('the new receipt reader');
-      expect(text).toContain('the older reader');
+      // Plan resolution 13: no release number in shipped copy.
+      expect(warning).not.toMatch(/\d+\.\d+\.\d+/);
+      expect(warning).toContain('the new receipt reader');
+      expect(warning).toContain('the older reader');
     });
 
-    it('MUST-13.3-style safety: the recorded reason is a text node, not markup', () => {
+    it('the recorded reason is a text node, not markup', () => {
       const { container } = render(<AboutPanel ocr={{ ...FELL_BACK, detail: 'exploded <b>badly</b>' }} />);
       expect(container.querySelector('b')).toBeNull();
-      expect(container.textContent).toContain('exploded <b>badly</b>');
+      expect(screen.getByRole('status').textContent).toContain('exploded <b>badly</b>');
     });
 
     it('sits above the changelog list', () => {
       const { container } = render(<AboutPanel ocr={FELL_BACK} />);
-      const html = container.innerHTML;
-      expect(html.indexOf('This machine cannot run')).toBeLessThan(html.indexOf('<ol'));
+      const warning = screen.getByRole('status');
+      const list = container.querySelector('ol');
+      // AboutPanel renders the <ol> only when loadChangelog() returns something. This repo has
+      // a real CHANGELOG.md so it does; assert that rather than letting indexOf('<ol') === -1
+      // make the ordering check pass for the wrong reason.
+      expect(list).not.toBeNull();
+      expect(
+        warning.compareDocumentPosition(list as Node) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
     });
   });
   ```
@@ -5180,15 +5596,17 @@ MUST-5.17 is a decision worth restating before the temptation arrives: the warni
   Create `tests/integration/ocr-engine.test.ts` (MUST-13.4). It uses a **fake** session set, so the whole engine path runs with no model load.
 
   ```ts
-  import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+  import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
   import fs from 'node:fs';
   import os from 'node:os';
   import path from 'node:path';
   import sharp from 'sharp';
   import { sql } from 'drizzle-orm';
   import { setSetting } from '@/lib/settings';
-  import { OCR_TIMEOUT_MESSAGE, releaseOcrEngine } from '@/lib/warranty/ocr/engine';
+  import { OCR_TIMEOUT_MESSAGE, OCR_TIMEOUT_MS, releaseOcrEngine } from '@/lib/warranty/ocr/engine';
+  import * as engineModule from '@/lib/warranty/ocr/engine';
   import { detResize } from '@/lib/warranty/ocr/onnx/detect';
+  import { preprocessReceipt } from '@/lib/warranty/ocr/onnx/preprocess';
   import {
     SETTING_OCR_ENGINE,
     SETTING_OCR_ENGINE_PROBED_VERSION,
@@ -5211,8 +5629,15 @@ MUST-5.17 is a decision worth restating before the temptation arrives: the warni
   let originalDataDir: string | undefined;
   let storedFilename: string;
 
-  function fakeSessions(over: Partial<OnnxOcrSessions> = {}): OnnxOcrSessions {
-    const geometry = detResize(WIDTH, HEIGHT);
+  /**
+   * The detection tensor's shape must come from detResize(PREPROCESSED dims). preprocessReceipt
+   * resizes and may deskew, so those differ from the stored file's nominal size, and
+   * detectBoxes throws on a spatial-dimension mismatch. Deriving them from WIDTH and HEIGHT
+   * would fail every case in this file for a reason unrelated to what it is testing.
+   */
+  async function fakeSessions(over: Partial<OnnxOcrSessions> = {}): Promise<OnnxOcrSessions> {
+    const pre = await preprocessReceipt(path.join(receiptsDir(), storedFilename));
+    const geometry = detResize(pre.width, pre.height);
     return {
       runDet: async () => {
         const map = new Float32Array(geometry.resizeW * geometry.resizeH);
@@ -5294,6 +5719,8 @@ MUST-5.17 is a decision worth restating before the temptation arrives: the warni
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
     setOnnxSessionsForTests(null);
     await releaseOcrEngine();
     resetOcrQueueForTests();
@@ -5307,7 +5734,7 @@ MUST-5.17 is a decision worth restating before the temptation arrives: the warni
 
   describe('MUST-13.4: the whole engine path against a fake session set', () => {
     it('drains a pending receipt to done and indexes its text', async () => {
-      setOnnxSessionsForTests(fakeSessions());
+      setOnnxSessionsForTests(await fakeSessions());
       const receiptId = makeReceipt();
       enqueueOcrJob({ kind: 'receipt', receiptId });
       await drainOcrQueue();
@@ -5321,7 +5748,7 @@ MUST-5.17 is a decision worth restating before the temptation arrives: the warni
     });
 
     it('MUST-9.2: the unmodified re-run resets and re-reads on the same engine', async () => {
-      setOnnxSessionsForTests(fakeSessions());
+      setOnnxSessionsForTests(await fakeSessions());
       const receiptId = makeReceipt();
       enqueueOcrJob({ kind: 'receipt', receiptId });
       await drainOcrQueue();
@@ -5333,7 +5760,7 @@ MUST-5.17 is a decision worth restating before the temptation arrives: the warni
 
     it('records a throwing session as failed with its message and leaves the index consistent', async () => {
       setOnnxSessionsForTests(
-        fakeSessions({
+        await fakeSessions({
           runRec: async () => {
             throw new Error('rec kernel exploded');
           },
@@ -5348,23 +5775,33 @@ MUST-5.17 is a decision worth restating before the temptation arrives: the warni
       expect(row.ocr_text).toBeNull();
     });
 
-    it('MUST-4.40: a session that never settles fails with the timeout message', async () => {
-      const { OCR_TIMEOUT_MS } = await import('@/lib/warranty/ocr/engine');
-      setOnnxSessionsForTests(fakeSessions({ runDet: () => new Promise(() => {}) }));
+    it('MUST-4.40: a session that never settles fails with the timeout message and releases the engine once', async () => {
+      // Same timer handling as tests/lib/warranty/ocr/queue.test.ts's "Ruling P5" suite:
+      // install fake timers, start the drain, advance past OCR_TIMEOUT_MS, then await the
+      // drain. Do not await the drain before advancing; it never settles on its own, which is
+      // the whole point of the fixture.
+      vi.useFakeTimers();
+      const releaseSpy = vi.spyOn(engineModule, 'releaseOcrEngine');
+      setOnnxSessionsForTests(await fakeSessions({ runDet: () => new Promise(() => {}) }));
       const receiptId = makeReceipt();
-      const started = Date.now();
       enqueueOcrJob({ kind: 'receipt', receiptId });
-      // Do not wait the real two minutes: assert the race wiring by shrinking the wait with
-      // a fake timer instead of the constant, which stays at its shipped value.
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(OCR_TIMEOUT_MS).toBe(120_000);
-      expect(Date.now() - started).toBeLessThan(OCR_TIMEOUT_MS);
-      expect(OCR_TIMEOUT_MESSAGE).toBe('OCR timed out.');
+
+      const drainPromise = drainOcrQueue();
+      await vi.advanceTimersByTimeAsync(OCR_TIMEOUT_MS + 1000);
+      await drainPromise;
+
+      const row = statusOf(receiptId);
+      expect(row.ocr_status).toBe('failed');
+      expect(row.ocr_error).toBe(OCR_TIMEOUT_MESSAGE);
+      // A race abandons the caller's await but does not cancel the call, so a wedged engine
+      // must be explicitly discarded or every future job queues behind it.
+      expect(releaseSpy).toHaveBeenCalledTimes(1);
+      vi.useRealTimers();
     });
   });
   ```
 
-  The last test as written proves only that the constant is unchanged. **Rewrite it during implementation to drive the race with `vi.useFakeTimers()` and `vi.advanceTimersByTimeAsync(OCR_TIMEOUT_MS + 1)`, in the same shape `tests/lib/warranty/ocr/queue.test.ts`'s existing "Ruling P5" suite already uses, and assert three things: the row reaches `'failed'` with `OCR_TIMEOUT_MESSAGE`, and `releaseOcrEngine` was called exactly once (spy on the module namespace object, as `queue.test.ts` does).** Copy that suite's timer handling rather than inventing new handling; it already solves the ordering problem between the raced promise and the fake clock.
+  The timeout case needs three additions to the file's header that the other cases do not: `vi` in the `vitest` import, `import * as engineModule from '@/lib/warranty/ocr/engine';` beside the named import (the same double import `queue.test.ts` already uses so a namespace spy has something to attach to), and `OCR_TIMEOUT_MS` added to the named import. Add `vi.useRealTimers()` and `vi.restoreAllMocks()` to the file's `afterEach` so a failure inside this case cannot leave a fake clock installed for the next file in the worker.
 
 - [ ] **Step 2: Run to verify they fail.**
 
@@ -5399,9 +5836,9 @@ MUST-5.17 is a decision worth restating before the temptation arrives: the warni
           {fellBack ? (
             <Notice tone="warning" title="This machine cannot run the new receipt reader." className="mb-4">
               <p>
-                Budget Tracker checked once, when version 1.5.0 first read a receipt here, and the check did not
-                survive. It has gone back to the older reader that shipped before 1.5.0. Receipts still upload and are
-                still read, just less accurately.
+                Budget Tracker checked once, the first time this version read a receipt here, and the check did not
+                survive. It has gone back to the older reader. Receipts still upload and are still read, just less
+                accurately.
               </p>
               <p>
                 There is nothing to fix. This is a limitation of the processor in this machine, not a setting, and the
@@ -5419,7 +5856,7 @@ MUST-5.17 is a decision worth restating before the temptation arrives: the warni
   }
   ```
 
-  The literal `1.5.0` in the copy is the release this warning describes and it is correct as written; do not interpolate `APP_VERSION`, because a household reading this after a later upgrade needs to know which release introduced the new reader, not which one they are running.
+  **The copy carries no release number, which is a deliberate change from §5.16's wording (plan resolution 13).** The spec's version of these sentences says "when version 1.5.0 first read a receipt here" and "the older reader that shipped before 1.5.0". Two things are wrong with shipping that literal from this task: it decides here what Task 13 is the task to decide, and it is stale the moment the household takes the next update, at which point the panel is telling them about a version they are no longer running. "the first time this version read a receipt here" says the same thing and stays true. Do not interpolate `APP_VERSION` into it either; the version is already on this panel, in the header, and repeating it in a warning adds nothing an admin can act on.
 
 - [ ] **Step 4: Pass the state from `src/app/(app)/settings/page.tsx`.**
 
@@ -5503,9 +5940,10 @@ R6 is why the CSP gets its own test rather than being left to a manual pass: the
     extractPaper(canvas: HTMLCanvasElement, width: number, height: number, points?: unknown): HTMLCanvasElement;
   }
   export function loadScanner(): Promise<{ cv: unknown; scanner: JscanifyLike }>;
-  export function resetScannerLoaderForTests(): void;
   ```
-  Task 11's `scan.ts` calls `loadScanner()`; Task 11's uploader test stubs the whole module.
+  There is deliberately **no** `resetScannerLoaderForTests`. Nothing can call it: jsdom has no WebAssembly and no canvas rasteriser, so no test in this release reaches the loader, and Task 11's suite stubs `scanReceiptFile` one level above it. The cache already self-clears on a rejection, which is the only reset the running app needs. An exported seam with no caller is a claim that something is tested when it is not.
+
+  Task 11's `scan.ts` calls `loadScanner()`; Task 11's uploader test stubs `scan.ts`.
 
 ### Steps
 
@@ -5747,6 +6185,50 @@ R6 is why the CSP gets its own test rather than being left to a manual pass: the
       expect(source).not.toMatch(/src\s*=\s*['"`]https?:/);
     });
   });
+
+  /**
+   * Plan resolution 14. Everything under src/lib/scanner/ is reachable from a 'use client'
+   * component, so a single value-import of a server module drags node:fs and @/lib/env into
+   * the browser bundle. Nothing before `npm run build` in the release task catches that, and
+   * the release task is the wrong place to find out. The directory is walked rather than
+   * listed by name so scan.ts is covered the moment Task 11 creates it.
+   */
+  describe('src/lib/scanner is client-safe', () => {
+    const entries = fs
+      .readdirSync(path.join(ROOT, 'src/lib/scanner'))
+      .filter((entry) => entry.endsWith('.ts') || entry.endsWith('.tsx'));
+
+    it('has files to check, so a move cannot make this suite vacuous', () => {
+      expect(entries.length).toBeGreaterThan(0);
+    });
+
+    it.each(entries)('%s imports no node builtin and no server-only module', (entry) => {
+      const source = read(path.posix.join('src/lib/scanner', entry));
+      expect(source).not.toMatch(/from\s+['"]node:/);
+      expect(source).not.toMatch(/from\s+['"]@\/lib\/env['"]/);
+      expect(source).not.toMatch(/from\s+['"]@\/db/);
+      expect(source).not.toMatch(/from\s+['"]@\/lib\/settings['"]/);
+      // receipts.ts is the specific trap: MAX_RECEIPT_BYTES looks harmless and the module it
+      // lives in pulls node:fs, node:path, node:crypto and @/lib/env. Use
+      // SCANNER_MAX_OUTPUT_BYTES from the constants block instead; constants.test.ts pins the
+      // two equal.
+      expect(source).not.toMatch(/from\s+['"]@\/lib\/warranty\/receipts['"]/);
+    });
+
+    it('reaches outside its own directory only for the client-safe constants file', () => {
+      // An allowlist rather than a denylist: the next server module someone reaches for will
+      // not be one anybody thought to ban.
+      for (const entry of entries) {
+        const source = read(path.posix.join('src/lib/scanner', entry));
+        const appImports = [...source.matchAll(/from\s+['"](@\/[^'"]+)['"]/g)].map((match) => match[1]);
+        for (const specifier of appImports) {
+          const allowed =
+            specifier === '@/lib/warranty/ocr/onnx/constants' || specifier.startsWith('@/lib/scanner/');
+          expect(allowed, `${entry} imports ${specifier}`).toBe(true);
+        }
+      }
+    });
+  });
   ```
 
 - [ ] **Step 5: Run to verify they fail.**
@@ -5814,10 +6296,6 @@ R6 is why the CSP gets its own test rather than being left to a manual pass: the
   }
 
   let cached: Promise<{ cv: unknown; scanner: JscanifyLike }> | null = null;
-
-  export function resetScannerLoaderForTests(): void {
-    cached = null;
-  }
 
   function injectScript(src: string): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -5923,7 +6401,7 @@ jsdom has no WebAssembly, no canvas rasteriser and no `OffscreenCanvas`, so ever
 - Create: `tests/app/receipt-scanner.test.tsx`
 
 **Interfaces:**
-- Consumes: `loadScanner`, `JscanifyLike` from `@/lib/scanner/load` (Task 10); the `SCANNER_*` constants from `@/lib/warranty/ocr/onnx/constants` (Task 2); `MAX_RECEIPT_BYTES` from `@/lib/warranty/receipts`.
+- Consumes: `loadScanner`, `JscanifyLike` from `@/lib/scanner/load` (Task 10); the `SCANNER_*` constants from `@/lib/warranty/ocr/onnx/constants` (Task 2), **including `SCANNER_MAX_OUTPUT_BYTES` in place of `MAX_RECEIPT_BYTES`, per plan resolution 14.** Nothing under `src/lib/scanner/` may import `@/lib/warranty/receipts`, `@/lib/env`, `@/lib/settings`, `@/db` or any `node:` builtin; `tests/ops/scanner-assets.test.ts` enforces that and Step 6 runs it.
 - Produces:
   ```ts
   // src/lib/scanner/scan.ts
@@ -6236,13 +6714,18 @@ jsdom has no WebAssembly, no canvas rasteriser and no `OffscreenCanvas`, so ever
   ```ts
   import {
     SCANNER_JPEG_QUALITY,
+    SCANNER_MAX_OUTPUT_BYTES,
     SCANNER_MIN_QUAD_AREA_RATIO,
     SCANNER_MIN_SIDE_RATIO,
     SCANNER_OUTPUT_MAX_PX,
     SCANNER_WORK_MAX_PX,
   } from '@/lib/warranty/ocr/onnx/constants';
-  import { MAX_RECEIPT_BYTES } from '@/lib/warranty/receipts';
   import { loadScanner } from '@/lib/scanner/load';
+
+  // Do NOT import MAX_RECEIPT_BYTES from @/lib/warranty/receipts here. This module is
+  // value-imported by a 'use client' component, and that one pulls node:fs, node:path,
+  // node:crypto and @/lib/env into the browser bundle. SCANNER_MAX_OUTPUT_BYTES is the same
+  // number in a client-safe file, and tests/ops/constants.test.ts pins the two equal.
 
   export interface ScanQuad {
     topLeft: { x: number; y: number };
@@ -6352,7 +6835,7 @@ jsdom has no WebAssembly, no canvas rasteriser and no `OffscreenCanvas`, so ever
       const blob = await toBlob(extracted);
       if (blob === null) return { file };
       // A crop that fails the size limit is not a crop, it is a rejected upload.
-      if (blob.size > MAX_RECEIPT_BYTES) return { file };
+      if (blob.size > SCANNER_MAX_OUTPUT_BYTES) return { file };
 
       const corrected = new File([blob], jpegName(file.name), { type: 'image/jpeg' });
       return {
@@ -6803,7 +7286,7 @@ MUST-10.1's `rm -rf` is worth 204 MB. `onnxruntime-node` does not use per-platfo
 
 - [ ] **Step 6: Amend the three ops tests.**
 
-  In `tests/ops/docker.test.ts`, add to the existing `describe('Dockerfile', ...)` block. It already locates the runtime stage with `dockerfile.lastIndexOf('FROM node:22-bookworm-slim AS runner')`; reuse that same slice.
+  In `tests/ops/docker.test.ts`, add to the existing `describe('Dockerfile', ...)` block. **That file has no describe-scope `runtimeStage` binding**: every existing case that needs one re-declares it locally with `const runtimeStage = dockerfile.slice(dockerfile.lastIndexOf('FROM node:22-bookworm-slim AS runner'));` inside its own `it()`. Follow that, so each new case is self-contained the way its neighbours are. `dockerfile` itself **is** describe-scoped and can be used directly.
 
   ```ts
     it('MUST-10.1 / MUST-10.2: the deps stage strips the darwin and win32 ORT binaries', () => {
@@ -6829,6 +7312,7 @@ MUST-10.1's `rm -rf` is worth 204 MB. `onnxruntime-node` does not use per-platfo
     });
 
     it('MUST-10.4: the runner copies the ONNX runtime and sharp', () => {
+      const runtimeStage = dockerfile.slice(dockerfile.lastIndexOf('FROM node:22-bookworm-slim AS runner'));
       for (const needle of [
         'node_modules/onnxruntime-node ',
         'node_modules/onnxruntime-common ',
@@ -6840,12 +7324,14 @@ MUST-10.1's `rm -rf` is worth 204 MB. `onnxruntime-node` does not use per-platfo
     });
 
     it('MUST-10.4: vendor/, public/ and scripts/ are copied wholesale, so the models, the scanner and the probe arrive', () => {
+      const runtimeStage = dockerfile.slice(dockerfile.lastIndexOf('FROM node:22-bookworm-slim AS runner'));
       expect(runtimeStage).toMatch(/COPY .*\/app\/vendor \.\/vendor/);
       expect(runtimeStage).toMatch(/COPY .*\/app\/public \.\/public/);
       expect(runtimeStage).toMatch(/COPY .*\/app\/scripts \.\/scripts/);
     });
 
     it('MUST-10.5 / MUST-10.9: the asset guard runs after every COPY it checks, with the strip assertion on', () => {
+      const runtimeStage = dockerfile.slice(dockerfile.lastIndexOf('FROM node:22-bookworm-slim AS runner'));
       const guard = runtimeStage.indexOf('node scripts/check-ocr-assets.mjs');
       expect(runtimeStage).toContain('OCR_ASSETS_IN_IMAGE=1 node scripts/check-ocr-assets.mjs');
       for (const needle of ['node_modules/tesseract.js-core', 'node_modules/onnxruntime-node ', 'node_modules/sharp ']) {
@@ -6853,20 +7339,15 @@ MUST-10.1's `rm -rf` is worth 204 MB. `onnxruntime-node` does not use per-platfo
       }
     });
 
-  ```
-
-  The file's existing `it('...', ...)` that asserts `runtimeStage` contains the literal `RUN node scripts/check-ocr-assets.mjs` must be updated to `RUN OCR_ASSETS_IN_IMAGE=1 node scripts/check-ocr-assets.mjs` in the same edit, or it fails. Keep its index comparison against `node_modules/tesseract.js-core` exactly as it is.
-
-  ```ts
-
     it('MUST-5.14: the tesseract fallback is still in the image', () => {
+      const runtimeStage = dockerfile.slice(dockerfile.lastIndexOf('FROM node:22-bookworm-slim AS runner'));
       expect(runtimeStage).toContain('node_modules/tesseract.js ');
       expect(runtimeStage).toContain('node_modules/tesseract.js-core');
       expect(runtimeStage).toMatch(/COPY .*\/app\/vendor \.\/vendor/);
     });
   ```
 
-  If the file names its runtime slice something other than `runtimeStage`, use whatever the existing tests use rather than introducing a second name.
+  **One existing case in that file must change in the same edit or it fails.** `it('fails the BUILD, not production, when an asset is missing (MUST-7.9 / acceptance A3)')` pins the exact literal `'RUN node scripts/check-ocr-assets.mjs'` twice, once in `toContain` and once inside `runtimeStage.indexOf(...)`. Both become `'RUN OCR_ASSETS_IN_IMAGE=1 node scripts/check-ocr-assets.mjs'`. Its `toBeGreaterThan(runtimeStage.indexOf('node_modules/tesseract.js-core'))` comparison stays exactly as it is.
 
   In `tests/scripts/check-ocr-assets.test.ts`, extend the existing "checks exactly the four paths" test to the ten paths, and add the pin against the real constants:
 
@@ -6894,6 +7375,25 @@ MUST-10.1's `rm -rf` is worth 204 MB. `onnxruntime-node` does not use per-platfo
       expect(source).toContain('public/scanner/opencv.js');
       expect(source).toContain('public/scanner/jscanify.min.js');
       expect(source).toContain('INLINED_GLUE_MIN_BYTES');
+    });
+
+    it('its inlined-glue threshold equals the vendoring script\'s, so the two cannot disagree', () => {
+      // Both scripts implement the same two accepted dist shapes, because neither can import
+      // from the other: one runs in the repo before the build, the other inside the runtime
+      // image. Asserting that each contains the identifier proves nothing about the value, so
+      // parse the number out of both and compare it. A build that accepts a 6 MB inlined glue
+      // in one place and rejects it in the other is a build that fails at the worst moment.
+      const threshold = (source: string) => {
+        const match = source.match(/INLINED_GLUE_MIN_BYTES\s*=\s*([\d_]+)/);
+        expect(match, 'INLINED_GLUE_MIN_BYTES is not a plain numeric literal').not.toBeNull();
+        return Number((match as RegExpMatchArray)[1].replace(/_/g, ''));
+      };
+      const guard = threshold(fs.readFileSync(script, 'utf8'));
+      const vendoring = threshold(
+        fs.readFileSync(path.join(root, 'scripts/vendor-scanner-assets.mjs'), 'utf8'),
+      );
+      expect(guard).toBe(vendoring);
+      expect(guard).toBe(8_000_000);
     });
 
     it('exits 0 in a healthy checkout, covering all ten paths', () => {
@@ -6938,15 +7438,9 @@ MUST-10.1's `rm -rf` is worth 204 MB. `onnxruntime-node` does not use per-platfo
   npx vitest run tests/ops/docker.test.ts tests/scripts/check-ocr-assets.test.ts tests/ops/release-image.test.ts
   npx tsc --noEmit
   ```
-  Expected: the guard prints `ok` for all ten paths plus the hash and scanner phases, skips the strip phase locally (Step 4's `IN_IMAGE` gate), and exits 0. The three test files are green, including every assertion that was already in them.
+  Expected: the guard prints `ok` for all ten paths plus the hash and scanner phases, skips the strip phase locally (Step 4's `IN_IMAGE` gate), and exits 0. All three test files are green, including every assertion that was already in them.
 
-  Change the Dockerfile's guard line so the strip phase does run inside the image:
-
-  ```dockerfile
-  RUN OCR_ASSETS_IN_IMAGE=1 node scripts/check-ocr-assets.mjs
-  ```
-
-  and update `tests/ops/docker.test.ts`'s existing guard-position assertion, which currently matches the exact string `RUN node scripts/check-ocr-assets.mjs`, to the new command text. The release workflow's step keeps its plain command, because a CI runner's `node_modules` is not the image's.
+  Everything this step verifies was written in Steps 3 to 6; nothing new is edited here. The release workflow's guard step deliberately keeps its plain command with no `OCR_ASSETS_IN_IMAGE`, because a CI runner's `node_modules` is not the image's and the strip has not happened there.
 
 - [ ] **Step 8: Build both architectures and record the sizes (MUST-10.18, AC7).**
 
@@ -7012,7 +7506,14 @@ a native ORT binary, which is the whole reason the run-time probe exists."
 
   - If the newest section is `## [1.4.0]`, this is a normal minor bump and the `1.5.0` section goes above it.
   - If v1.4.0 has not landed, `1.5.0` still ships as written, and the changelog's previous section is whatever is actually there. Do not renumber this release; the spec fixes it at 1.5.0 and §17.10 already considered the alternative.
-  - Whatever the previous section number turns out to be, **use that number, not `1.4.0`, in the `changelog.slice(...)` bounds** of the census assertion in Step 5.
+  - Whatever the previous section number turns out to be, **use that number, not `1.4.0`, in the `changelog.slice(...)` bounds** of the census assertion in Step 5b.
+
+  Also print the current release tripwire, because Step 5a has to move it and its starting value is whatever the parallel release left behind:
+
+  ```powershell
+  Select-String -Path .\tests\ops\docker.test.ts -Pattern "expect\(pkg\.version\)\.toBe"
+  ```
+  Expected: exactly one match. Note the literal it pins; Step 5a replaces it.
 
 - [ ] **Step 2: Set `package.json`'s `version` to `1.5.0`.** It stays the single source of truth: `src/lib/version.ts` imports it at build time, the footer and Settings, About render it, `/api/health` reports it, the update check compares against it, and the OCR probe caches its verdict against it plus `process.arch`.
 
@@ -7068,9 +7569,19 @@ a native ORT binary, which is the whole reason the run-time probe exists."
      > checks the new machine and records the right answer. This is the one case the automatic
      > check cannot see for itself.
 
-- [ ] **Step 5: Update the version census in `tests/ops/docker.test.ts`.** Its existing "keeps package.json and the newest changelog section on the same version" test should pass unchanged. Add beside the existing 1.3.1 assertion, using the **actual** previous section number found in Step 1 in place of `1.4.0`:
+- [ ] **Step 5a: Move the release tripwire in `tests/ops/docker.test.ts` to 1.5.0. This is a required edit, not an optional one.**
+
+  That file's `describe('version and changelog', ...)` block contains a case that hard-pins the shipped version. At the time this plan was written it read `it('MUST-18.1 / MUST-18.3: the 1.3.1 release')` with `expect(pkg.version).toBe('1.3.1')`; the parallel v1.4.0 release moves it to `1.4.0` first. **Do not assume which value you will find.** Open the file, locate the single case whose body pins `pkg.version` to a literal, and update that case end to end for this release: its title, the `toBe(...)` literal, the `## [x.y.z]` regex, the `indexOf('## [x.y.z]')` bound and the `changelog.slice(...)` upper bound (which becomes the section that is now second-newest).
+
+  The pin is deliberate and it stays. It is the tripwire that makes bumping `package.json` without writing a changelog entry a red test rather than a quiet release, and every release since 1.2.3 has moved it forward as its own step. Deleting it to make the suite pass would remove the only thing that catches the exact mistake this step exists to prevent.
+
+  Its sibling `it('keeps package.json and the newest changelog section on the same version')` derives both values from the files and needs **no** edit; if it goes red, the CHANGELOG heading and `package.json` genuinely disagree.
+
+- [ ] **Step 5b: Add the new census cases.** Beside the case you just updated, using the **actual** previous section number found in Step 1 in place of `1.4.0`:
 
   ```ts
+    // This is the case Step 5a moved forward, shown at its 1.5.0 destination. There must be
+    // exactly ONE version-pinning case in this file when you are done, not two.
     it('MUST-14: the 1.5.0 release', () => {
       const pkg = JSON.parse(read('package.json')) as { version: string };
       expect(pkg.version).toBe('1.5.0');
@@ -7078,6 +7589,7 @@ a native ORT binary, which is the whole reason the run-time probe exists."
       expect(changelog).toMatch(/^## \[1\.5\.0\] - 2026-08-18$/m);
       // An empty Unreleased section is left in place for the next session.
       expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.5.0]'));
+      // Replace '## [1.4.0]' with whatever Step 1 found as the previous newest section.
       const section = changelog.slice(changelog.indexOf('## [1.5.0]'), changelog.indexOf('## [1.4.0]'));
       expect(section).toContain('Re-run OCR');
       expect(section).not.toMatch(/PP-OCR|ONNX|tesseract/i);
