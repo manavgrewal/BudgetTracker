@@ -7,6 +7,7 @@ import {
   getUserSettings,
   hasAnyEnabledTarget,
   isEventEnabled,
+  recordTargetOutcome,
   saveEmailTarget,
   saveSmtp,
   saveTelegramTarget,
@@ -336,6 +337,42 @@ describe('Round 2 fix (MED): a token-only Telegram target cannot fire a live tes
     const sent = await actions.testTargetAction(form({ channel: 'telegram' }));
     expect(sent.message).toBeDefined();
     expect(calls).toBe(1);
+  });
+});
+
+describe('Round 3 fix: clearing an existing chat ID gets an honest removal message, not the onboarding one', () => {
+  it('an existing, enabled target with a chat ID: clearing the field on save wipes the destination, disables the channel, clears verifiedAt, and returns the removal message', async () => {
+    await actions.saveTelegramTargetAction({}, form({ destination: '5551234', botToken: TOKEN, enabled: 'on' }));
+    // Prove the target was genuinely verified before the clear, so `verifiedAt` clearing
+    // below is a real assertion and not a no-op on an already-null column.
+    recordTargetOutcome({ userId: currentUser.value.id, channel: 'telegram', ok: true, verify: true });
+    expect(getTarget(currentUser.value.id, 'telegram')?.verifiedAt).not.toBeNull();
+
+    // The DOM's real state for "user cleared the Chat ID field and pressed Save": no new
+    // token typed, the field is now empty, and the Enabled checkbox — no longer disabled,
+    // since it was already checked and the field only just became empty on this very
+    // submit — is still checked because nothing untinicked it.
+    const result = await actions.saveTelegramTargetAction({}, form({ destination: '', botToken: '', enabled: 'on' }));
+    expect(result.error).toBeUndefined();
+    expect(result.message).toBe('Chat ID removed. Telegram is disabled until you add one (press Detect).');
+
+    const stored = getTarget(currentUser.value.id, 'telegram');
+    expect(stored?.destination).toBe('');
+    expect(stored?.enabled).toBe(false);
+    expect(stored?.verifiedAt).toBeNull();
+    expect(stored?.secretSet).toBe(true); // the token itself is untouched by this save
+  });
+
+  it('a target that was ALREADY empty (the token-only path) still gets the onboarding message, never the removal one', async () => {
+    const result = await actions.saveTelegramTargetAction({}, form({ destination: '', botToken: TOKEN }));
+    expect(result.error).toBeUndefined();
+    expect(result.message).toBe('Token saved. Add your chat ID (press Detect) and save again to enable.');
+
+    // Saving again with the field still empty (e.g. the user pressed Save a second time
+    // without typing anything) must not suddenly claim something was "removed".
+    const resaved = await actions.saveTelegramTargetAction({}, form({ destination: '', botToken: '' }));
+    expect(resaved.error).toBeUndefined();
+    expect(resaved.message).toBe('Token saved. Add your chat ID (press Detect) and save again to enable.');
   });
 });
 

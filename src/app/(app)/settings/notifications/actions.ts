@@ -169,24 +169,38 @@ export async function saveTelegramTargetAction(_prev: NotificationsState, formDa
   });
   if (!parsed.success) return { error: firstIssue(parsed.error) };
 
+  // Round 3 fix: read once and reuse, rather than a second lookup after the write, so the
+  // "was there a chat ID before this save" check below sees the PRE-write row.
+  const existing = getTarget(user.id, 'telegram');
   const botToken = parsed.data.botToken.length > 0 ? parsed.data.botToken : null;
-  if (botToken === null && getTarget(user.id, 'telegram') === null) {
+  if (botToken === null && existing === null) {
     return { error: 'A bot token is required the first time you save this channel.' };
   }
 
   const emptyDestination = parsed.data.destination.length === 0;
   const savingNewToken = botToken !== null;
+  // Round 3 fix: unlike a blank botToken (which means "keep the stored, unreadable token" —
+  // MUST-5.6, there is nothing else a blank field could mean once the value is masked), a
+  // blank chat ID is fully legible and fully meaningful on its own: the user can SEE the
+  // field they cleared, so an empty destination here is treated as an explicit "remove it",
+  // never as "keep the old one". That is what makes the two paths below need different
+  // copy — one is onboarding, the other is a deletion the user asked for.
+  const hadDestination = (existing?.destination.length ?? 0) > 0;
 
   // Round 2 fix (HIGH): the Enabled checkbox defaults to CHECKED for a brand-new target
   // (guides.tsx step 6 — paste the token, press Save — produces exactly token + empty chat
   // ID + enabled=on). A hard rejection here used to refuse the WHOLE save, token included,
   // which is the user's original chicken-and-egg report all over again. So: a save that is
   // ALSO writing a token is never hard-rejected for an empty chat ID — it silently forces
-  // enabled to false and stores the token, exactly like an explicit token-only save. The
-  // hard rejection is reserved for the other case: an EXISTING target, no token change, chat
-  // ID still empty, and the user deliberately ticking Enabled — a real attempt to turn on an
-  // incomplete channel, which deserves a clear "not yet" rather than a silent no-op.
-  if (emptyDestination && parsed.data.enabled && !savingNewToken) {
+  // enabled to false and stores the token, exactly like an explicit token-only save.
+  //
+  // Round 3 fix: the same reasoning extends to a save that is CLEARING a previously-set chat
+  // ID (`hadDestination`) — that is also a legitimate, deliberate change, not "nothing about
+  // this submission changed except the checkbox". The hard rejection is reserved for the one
+  // remaining case: a target whose chat ID was ALREADY empty, no token change, and the user
+  // deliberately ticking Enabled anyway — a real attempt to turn on a channel that was, and
+  // still is, incomplete, which deserves a clear "not yet" rather than a silent no-op.
+  if (emptyDestination && parsed.data.enabled && !savingNewToken && !hadDestination) {
     return { error: 'Enter a chat ID (or press Detect chat ID below) before enabling Telegram.' };
   }
 
@@ -194,9 +208,14 @@ export async function saveTelegramTargetAction(_prev: NotificationsState, formDa
   saveTelegramTarget({ userId: user.id, destination: parsed.data.destination, botToken, enabled });
   revalidatePath(PATH);
   return {
-    message: emptyDestination
-      ? 'Token saved. Add your chat ID (press Detect) and save again to enable.'
-      : 'Telegram saved. Press Send test message to prove it works.',
+    message: !emptyDestination
+      ? 'Telegram saved. Press Send test message to prove it works.'
+      : hadDestination
+        // Round 3 fix: an existing, working chat ID just got wiped by this save — that is
+        // real data loss the user should be told about plainly, never dressed up as the
+        // first-time onboarding message.
+        ? 'Chat ID removed. Telegram is disabled until you add one (press Detect).'
+        : 'Token saved. Add your chat ID (press Detect) and save again to enable.',
   };
 }
 
