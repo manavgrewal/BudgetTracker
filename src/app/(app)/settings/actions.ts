@@ -23,7 +23,7 @@ import { parseChangelog } from '@/lib/changelog';
 import type { ChangelogRelease } from '@/lib/changelog';
 import { applyUpdate, runUpdateCheck } from '@/lib/update/check';
 import { boundRelease, fetchRemoteChangelog } from '@/lib/update/github';
-import { checkUpdateApply, checkUpdateCheckNow, checkUpdateReview } from '@/lib/update/ratelimit';
+import { checkUpdateCheckNow, checkUpdateReview } from '@/lib/update/ratelimit';
 import { dismissVersion, readUpdateState, setAutoApply, setUpdateChecksEnabled } from '@/lib/update/state';
 import { watchtowerConfig } from '@/lib/update/watchtower';
 
@@ -270,16 +270,20 @@ export async function applyUpdateAction(formData: FormData): Promise<UpdateActio
   // nothing would be the wrong order.
   if (watchtowerConfig() === null) return { error: 'This install has no Watchtower companion to ask.' };
 
-  const verdict = checkUpdateApply();
-  if (!verdict.allowed) return { error: `Too many attempts. Try again in ${verdict.retryAfterMinutes} minutes.` };
-
   try {
-    const outcome = await applyUpdate({ version: parsed.data, now: new Date() });
+    const result = await applyUpdate({ version: parsed.data, now: new Date() });
     revalidatePath(UPDATE_PATH);
+    // Fix round finding 4 (round 3): the APPLY bucket now lives inside applyUpdate() itself —
+    // the single choke point every triggerUpdate() call passes through — rather than in a
+    // duplicate check here. This is the same "Too many attempts" sentence that local check
+    // used to return, just sourced from applyUpdate()'s own verdict now.
+    if (result.outcome === 'rate-limited') {
+      return { error: `Too many attempts. Try again in ${result.retryAfterMinutes} minutes.` };
+    }
     // MUST-9.8: two of the three fixed sentences. The third is the scrubbed error below.
     return {
       message:
-        outcome === 'accepted'
+        result.outcome === 'accepted'
           ? `Update requested. Watchtower is pulling ${parsed.data} and will restart this app in a moment. Reload this page in a minute or two.`
           : `Update requested. This app is being replaced right now, so it could not wait for a reply. Reload this page in a minute or two — the version at the bottom of this card will tell you whether it worked.`,
     };
@@ -308,11 +312,13 @@ export async function dismissUpdateAction(formData: FormData): Promise<UpdateAct
   }
   const parsed = versionSchema.safeParse(raw);
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Invalid request.' };
-  // Fix round finding 2: the same stale-version check applyUpdateAction runs. Without it, a
-  // stale tab (or a forged field) could pre-dismiss a version that has not been offered yet
-  // — including one not yet published — which would silently swallow MUST-5.9's notice the
-  // moment that version actually became current.
-  if (readUpdateState().latestVersion !== parsed.data) return { error: STALE_VERSION_ERROR };
+  // Fix round finding 2: the same two checks applyUpdateAction runs, in the same order.
+  // Without them, a stale tab (or a forged field) could pre-dismiss a version that has not
+  // been offered yet — including one not yet published — which would silently swallow
+  // MUST-5.9's notice the moment that version actually became current.
+  const state = readUpdateState();
+  if (state.latestVersion === null) return { error: NO_UPDATE_ERROR };
+  if (state.latestVersion !== parsed.data) return { error: STALE_VERSION_ERROR };
   dismissVersion(parsed.data);
   revalidatePath(UPDATE_PATH);
   return { message: `Skipping ${parsed.data} for now. You will still be told when a newer version is published.` };

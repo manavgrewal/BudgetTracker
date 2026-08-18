@@ -30,6 +30,20 @@ export interface UpdateCheckResult {
 }
 
 /**
+ * Fix round finding 4 (round 3): applyUpdate() is the one choke point every triggerUpdate()
+ * call passes through, so its return shape carries the APPLY bucket's verdict rather than a
+ * bare TriggerOutcome — 'rate-limited' is a normal, distinguishable outcome, not a throw, and
+ * each of the two callers below folds it into whatever shape they already return for "did not
+ * apply this time" (the internal auto-apply path treats it like Watchtower being absent; the
+ * button action surfaces the same "Too many attempts" sentence it always has).
+ */
+export interface ApplyOutcome {
+  outcome: TriggerOutcome | 'rate-limited';
+  /** Only meaningful when outcome === 'rate-limited'; 0 otherwise. */
+  retryAfterMinutes: number;
+}
+
+/**
  * MUST-5.5: compares against `update.last_checked_at`, which is written on every attempt —
  * success or failure — so a container in a crash-restart loop makes at most one GitHub
  * request per 24 hours, not one per boot, and a repeatedly failing check cannot become a
@@ -56,17 +70,25 @@ function scrub(text: string): string {
  * MUST-10.11: every string that can reach `update.last_apply_error`, console.* or the
  * browser goes through scrubSecrets with the token in the secret list.
  */
-export async function applyUpdate(input: { version: string; now?: Date }): Promise<TriggerOutcome> {
+export async function applyUpdate(input: { version: string; now?: Date }): Promise<ApplyOutcome> {
   const at = input.now ?? new Date();
   const config = watchtowerConfig();
   if (config === null) throw new WatchtowerError('This install has no Watchtower companion to ask.', { permanent: true });
+
+  // Fix round finding 4 (round 3): the APPLY bucket is consumed HERE, inside the one function
+  // every triggerUpdate() call passes through — not at each caller's site. Two call-site
+  // duplicates (one here in this file's own auto-apply branch, one in applyUpdateAction) were
+  // functionally equivalent but structurally wrong: a future third caller of applyUpdate()
+  // would have bypassed both and reached Watchtower unbounded.
+  const verdict = checkUpdateApply();
+  if (!verdict.allowed) return { outcome: 'rate-limited', retryAfterMinutes: verdict.retryAfterMinutes };
 
   recordApplyRequested({ version: input.version, at });
   try {
     const outcome = await triggerUpdate(config);
     // 'accepted-unconfirmed' records NO error: the app has just asked something to kill it.
     recordApplyOutcome({ at });
-    return outcome;
+    return { outcome, retryAfterMinutes: 0 };
   } catch (error) {
     const raw = error instanceof Error ? error.message : 'The update request failed.';
     recordApplyOutcome({ at, error: scrubSecrets(raw, [config.token]) });
@@ -124,16 +146,20 @@ export async function runUpdateCheck(input: { now?: Date; manual?: boolean }): P
 
   // Fix round finding 4: the APPLY bucket must bound EVERY triggerUpdate call, not only the
   // one applyUpdateAction's Apply button gates — this is the path a spammed Check-now button
-  // reaches too, and without a token check here it drives an unbounded run of real /v1/update
-  // requests against a container that is (by definition, once the first one lands) already
-  // mid-replacement. A refusal here is not an error: it falls through to the same notify path
+  // reaches too, and without a token check somewhere it drives an unbounded run of real
+  // /v1/update requests against a container that is (by definition, once the first one lands)
+  // already mid-replacement. That check now lives inside applyUpdate() itself (round 3), so a
+  // 'rate-limited' result here is not an error: it falls through to the same notify path
   // Watchtower-absent installs take, exactly as if this attempt simply couldn't reach it.
-  if (autoApply && config !== null && checkUpdateApply().allowed) {
+  if (autoApply && config !== null) {
     try {
-      await applyUpdate({ version: release.version, now: at });
-      // MUST-5.7 row 2: NO notification. The container is about to be replaced and Settings
-      // -> About will show the new version.
-      return { severity, currentVersion, latestVersion: release.version, applied: true, notified: false, error: null };
+      const result = await applyUpdate({ version: release.version, now: at });
+      if (result.outcome !== 'rate-limited') {
+        // MUST-5.7 row 2: NO notification. The container is about to be replaced and Settings
+        // -> About will show the new version.
+        return { severity, currentVersion, latestVersion: release.version, applied: true, notified: false, error: null };
+      }
+      // Rate-limited: fall through to the notify path below, exactly as when Watchtower absent.
     } catch (error) {
       const message = scrub(error instanceof Error ? error.message : 'The update could not be applied.');
       console.error('[update] apply failed', message);

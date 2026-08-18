@@ -151,6 +151,16 @@ describe('Fix round finding 2 / 3: dismissUpdateAction hygiene', () => {
     expect(readUpdateState().dismissedVersion).toBeNull();
   });
 
+  it('round 3, cosmetic: with no update on offer at all, refuses with NO_UPDATE_ERROR, not the stale-version sentence', async () => {
+    await actions.enableUpdateChecksAction();
+    // No recordCheckOutcome call at all: update.latest_version stays null, the same
+    // "nothing has ever been offered" state applyUpdateAction distinguishes from "offered,
+    // but not THIS version".
+    const result = await actions.dismissUpdateAction(form({ version: '1.4.0' }));
+    expect(result.error).toBe('There is no update on offer right now.');
+    expect(readUpdateState().dismissedVersion).toBeNull();
+  });
+
   it('"Show again" (an empty version) deletes the key rather than writing an empty string', async () => {
     await actions.enableUpdateChecksAction();
     recordCheckOutcome({ at: new Date(), latestVersion: '1.4.0' });
@@ -185,6 +195,25 @@ describe('MUST-10.9 / MUST-10.10: a rate-limited action performs no egress', () 
     }
     // The bucket is untouched, so a properly configured install still has all three.
     expect(checkUpdateApply().allowed).toBe(true);
+  });
+
+  it('round 3: after APPLY_MAX successful applies via the button, the next attempt still returns the same rate-limit sentence', async () => {
+    // Proves the refactor that moved the APPLY-bucket check inside applyUpdate() itself
+    // preserved the exact message applyUpdateAction used to produce from its own, now-removed
+    // local check.
+    process.env.WATCHTOWER_URL = 'http://watchtower:8080/v1/update';
+    process.env.WATCHTOWER_TOKEN = 'a-fine-token-value-long-enough';
+    await actions.enableUpdateChecksAction();
+    recordCheckOutcome({ at: new Date(), latestVersion: '1.4.0' });
+    stubWatchtower(200);
+
+    for (let i = 0; i < APPLY_MAX; i += 1) {
+      const result = await actions.applyUpdateAction(form({ version: '1.4.0' }));
+      expect(result.message).toBeDefined();
+    }
+    const refused = await actions.applyUpdateAction(form({ version: '1.4.0' }));
+    expect(refused.error).toMatch(/^Too many attempts\. Try again in \d+ minutes\.$/);
+    expect(refused.message).toBeUndefined();
   });
 });
 
