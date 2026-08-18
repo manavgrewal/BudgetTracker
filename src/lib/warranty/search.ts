@@ -139,6 +139,10 @@ interface RawRow {
   updated_at: string;
   billing_cycle: BillingCycle | null;
   billing_amount_cents: number | null;
+  principal_cents: number | null;
+  interest_rate_bps: number | null;
+  current_balance_cents: number | null;
+  balance_updated_at: string | null;
   status: WarrantyStatus;
   receipt_count: number;
 }
@@ -170,6 +174,10 @@ function toListItem(row: RawRow): WarrantyListItem {
     updatedAt: row.updated_at,
     billingCycle: row.billing_cycle,
     billingAmountCents: row.billing_amount_cents,
+    principalCents: row.principal_cents,
+    interestRateBps: row.interest_rate_bps,
+    currentBalanceCents: row.current_balance_cents,
+    balanceUpdatedAt: row.balance_updated_at,
     status: row.status,
     receiptCount: row.receipt_count,
   };

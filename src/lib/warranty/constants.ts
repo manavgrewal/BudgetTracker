@@ -213,18 +213,52 @@ export const BILLING_CYCLE_LABELS: Record<BillingCycle, string> = {
   annual: 'Annual',
 };
 
-/** Appended after the formatted amount: `${formatCents(cents)} ${billingCycleSuffix(cycle)}` -> "$15.99 / month". */
-export function billingCycleSuffix(cycle: BillingCycle): string {
-  return cycle === 'monthly' ? '/ month' : '/ year';
+/**
+ * v1.3.1: widened to include 'loan'. A loan's billing pair is its regular PAYMENT
+ * (see BILLING_WORDING) -- the amount and the cadence, not an interest calculation.
+ *
+ * This is the ENTIRE server-side rule change. assertBillingMatchesKind() in items.ts calls
+ * this predicate, setItemTypeKind()'s clearing pass calls it, and both forms gate their
+ * fieldset on it -- so one edit moves every one of them together. The rule lives here, in
+ * the app layer, rather than in SQL, because a CHECK on warranty_items cannot see across to
+ * warranty_item_types.kind; drizzle/0005_billing_cycle.sql's own header says so, which is
+ * why widening it needs no DDL and no table rebuild (MUST-11.6).
+ */
+export function billingAllowedForKind(kind: ItemKind): boolean {
+  return kind !== 'warranty';
+}
+
+/** v1.3.1: the four money columns are loan-only, by the same app-layer argument. */
+export function loanFieldsAllowedForKind(kind: ItemKind): boolean {
+  return kind === 'loan';
 }
 
 /**
- * Only these two kinds ever show the Billing fields on the add/edit form, or carry a
- * non-NULL billing_cycle / billing_amount_cents (enforced server-side in
- * src/lib/warranty/items.ts by looking up the selected type's kind).
+ * MUST-12.3: the second wording matrix, beside KIND_WORDING. The `warranty` row exists only
+ * so the record is total; it is unreachable through the UI, because
+ * billingAllowedForKind('warranty') is false.
+ *
+ * MUST-12.4: BILLING_CYCLE_LABELS (Monthly / Annual) is unchanged and shared -- the cadence
+ * has the same name for a subscription and for a loan; only the noun around it differs.
  */
-export function billingAllowedForKind(kind: ItemKind): boolean {
-  return kind === 'subscription' || kind === 'contract';
+const BILLING_WORDING: Record<ItemKind, { section: string; amount: string; monthly: string; annual: string }> = {
+  warranty: { section: 'Billing', amount: 'Amount', monthly: '/ month', annual: '/ year' },
+  subscription: { section: 'Billing', amount: 'Amount', monthly: '/ month', annual: '/ year' },
+  contract: { section: 'Billing', amount: 'Amount', monthly: '/ month', annual: '/ year' },
+  loan: { section: 'Payment', amount: 'Payment amount', monthly: 'per month', annual: 'per year' },
+};
+
+export function billingSectionLabelForKind(kind: ItemKind): string {
+  return BILLING_WORDING[kind].section;
+}
+
+export function billingAmountLabelForKind(kind: ItemKind): string {
+  return BILLING_WORDING[kind].amount;
+}
+
+/** Appended after the formatted amount: `${formatCents(cents)} ${billingCycleSuffixForKind(kind, cycle)}` -> "$15.99 / month". */
+export function billingCycleSuffixForKind(kind: ItemKind, cycle: BillingCycle): string {
+  return cycle === 'monthly' ? BILLING_WORDING[kind].monthly : BILLING_WORDING[kind].annual;
 }
 
 /**

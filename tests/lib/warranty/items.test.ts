@@ -5,9 +5,11 @@ import path from 'node:path';
 import { sql } from 'drizzle-orm';
 import { createSeededTestDb, insertTestUser, type TestDb } from '../../helpers/db';
 import {
+  BALANCE_ANCHOR_ERROR,
   BILLING_KIND_ERROR,
   FUTURE_PURCHASE_DATE_ERROR,
   LIFETIME_WITH_TERM_ERROR,
+  LOAN_KIND_ERROR,
   attachStagedReceipts,
   createWarrantyItem,
   deleteWarrantyItem,
@@ -282,11 +284,17 @@ describe('billing cycle and amount', () => {
     );
   });
 
-  it('refuses billingAmountCents on a loan-kind item, and writes nothing', () => {
+  // v1.3.1: widened -- a loan's billing pair is its regular payment amount/cadence, so this
+  // now round-trips instead of throwing (see MUST-12.1 / MUST-12.2 in constants.test.ts and
+  // the "loan money on an item" describe block below).
+  it('allows billingAmountCents/billingCycle on a loan-kind item', () => {
     const loan = createItemType('Car Loan Billing', 'loan');
-    expect(() => createWarrantyItem(input({ typeId: loan.id, billingAmountCents: 100 }))).toThrowError(
-      BILLING_KIND_ERROR,
+    const id = createWarrantyItem(
+      input({ typeId: loan.id, billingCycle: 'monthly', billingAmountCents: 100 }),
     );
+    const row = getWarrantyItem(id)!;
+    expect(row.billingCycle).toBe('monthly');
+    expect(row.billingAmountCents).toBe(100);
   });
 
   it('refuses billing fields on an untyped item (untyped normalises to warranty)', () => {
@@ -309,6 +317,48 @@ describe('billing cycle and amount', () => {
     const row = getWarrantyItem(id)!;
     expect(row.billingCycle).toBeNull();
     expect(row.billingAmountCents).toBeNull();
+  });
+});
+
+describe('MUST-12.1 / MUST-12.2 / MUST-11.7: loan money on an item', () => {
+  it('a loan may now save a billing pair and a warranty still may not', () => {
+    const loanType = createItemType('Car loan', 'loan');
+    expect(() =>
+      createWarrantyItem({ ...input(), typeId: loanType.id, billingCycle: 'monthly', billingAmountCents: 45000 }),
+    ).not.toThrow();
+    const warrantyType = createItemType('Appliance Loan Money', 'warranty');
+    expect(() =>
+      createWarrantyItem({ ...input(), typeId: warrantyType.id, billingCycle: 'monthly', billingAmountCents: 45000 }),
+    ).toThrowError('Billing details only apply to subscriptions, contracts and loans.');
+  });
+
+  it('the four money fields are refused on a non-loan kind', () => {
+    const subType = createItemType('Streaming', 'subscription');
+    expect(() => createWarrantyItem({ ...input(), typeId: subType.id, principalCents: 100 })).toThrowError(
+      'Loan amounts only apply to loans.',
+    );
+  });
+
+  it('MUST-11.7: a balance with no anchor, and an anchor with no balance, are both rejected', () => {
+    const loanType = createItemType('Car loan 2', 'loan');
+    expect(() =>
+      createWarrantyItem({ ...input(), typeId: loanType.id, currentBalanceCents: 100, balanceUpdatedAt: null }),
+    ).toThrowError('A balance and the date it was set must both be present, or both absent.');
+    expect(() =>
+      createWarrantyItem({
+        ...input(),
+        typeId: loanType.id,
+        currentBalanceCents: null,
+        balanceUpdatedAt: '2026-08-18T00:00:00.000Z',
+      }),
+    ).toThrowError('A balance and the date it was set must both be present, or both absent.');
+  });
+
+  it('MUST-14.4: the rate round-trips through basis points and 100.01% is rejected in SQL', () => {
+    const loanType = createItemType('Car loan 3', 'loan');
+    const id = createWarrantyItem({ ...input(), typeId: loanType.id, interestRateBps: 549 });
+    expect(getWarrantyItem(id)?.interestRateBps).toBe(549);
+    expect(() => createWarrantyItem({ ...input(), typeId: loanType.id, interestRateBps: 1_000_001 })).toThrow();
   });
 });
 

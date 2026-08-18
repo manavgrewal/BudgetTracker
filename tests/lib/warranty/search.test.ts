@@ -414,3 +414,39 @@ describe('billing cycle and amount surface on list rows', () => {
     expect(row.billingAmountCents).toBeNull();
   });
 });
+
+// v1.3.1: the four loan money columns surface on list rows exactly as stored (MUST-12.1).
+describe('loan money surfaces on list rows', () => {
+  const TODAY = '2026-08-16';
+
+  it('carries principalCents/interestRateBps/currentBalanceCents/balanceUpdatedAt through to WarrantyListItem', () => {
+    const loan = createItemType('Loan Search', 'loan');
+    const id = createWarrantyItem({
+      name: 'Civic Search',
+      vendor: null, model: null, serial: null,
+      purchaseDate: '2026-08-16', warrantyMonths: null, isLifetime: false,
+      priceCents: null, ownerUserId: owner, transactionId: null, typeId: loan.id, notes: null,
+      principalCents: 2500000, interestRateBps: 549, currentBalanceCents: 2000000,
+      balanceUpdatedAt: '2026-08-16T00:00:00.000Z',
+    });
+    const row = searchWarrantyItems({ today: TODAY }).rows.find((r) => r.id === id)!;
+    expect(row.principalCents).toBe(2500000);
+    expect(row.interestRateBps).toBe(549);
+    expect(row.currentBalanceCents).toBe(2000000);
+    expect(row.balanceUpdatedAt).toBe('2026-08-16T00:00:00.000Z');
+  });
+
+  it('surfaces null loan fields for a non-loan item', () => {
+    const id = createWarrantyItem({
+      name: 'Non-loan Search',
+      vendor: null, model: null, serial: null,
+      purchaseDate: '2026-08-16', warrantyMonths: null, isLifetime: false,
+      priceCents: null, ownerUserId: owner, transactionId: null, typeId: null, notes: null,
+    });
+    const row = searchWarrantyItems({ today: TODAY }).rows.find((r) => r.id === id)!;
+    expect(row.principalCents).toBeNull();
+    expect(row.interestRateBps).toBeNull();
+    expect(row.currentBalanceCents).toBeNull();
+    expect(row.balanceUpdatedAt).toBeNull();
+  });
+});

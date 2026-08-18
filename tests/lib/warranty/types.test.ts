@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { createTestDb, insertTestUser, type TestDb } from '../../helpers/db';
+import { createTestDb, insertTestAccount, insertTestUser, type TestDb } from '../../helpers/db';
+import { getWarrantyItem } from '@/lib/warranty/items';
 import {
   ItemTypeInUseError,
   createItemType,
@@ -41,6 +42,47 @@ function idOf(name: string): number {
   const found = listItemTypes().find((t) => t.name === name);
   if (!found) throw new Error(`no type named ${name}`);
   return found.id;
+}
+
+/**
+ * MUST-12.5/12.6: a loan-kind type, an item with a billing pair and loan money, one matcher
+ * rule and one linked payment -- so a kind flip away from 'loan' has something real to clear
+ * (money + rule) and something real that must survive (the payment). Mirrors
+ * tests/db/loan-schema.test.ts's own seedLoan(), which pins the same shapes at the SQL layer.
+ */
+function seedLoanWithRuleAndPayment(): { typeId: number; itemId: number; txnId: number } {
+  const userId = insertTestUser(current!.db, { name: 'Bob', username: 'bob-loan' });
+  const accountId = insertTestAccount(current!.db, { name: 'Loan Chequing' });
+  const loan = createItemType('Car Loan Flip', 'loan');
+  const itemInfo = current!.sqlite
+    .prepare(
+      `insert into warranty_items
+        (name, purchase_date, is_lifetime, owner_user_id, type_id, billing_cycle, billing_amount_cents,
+         principal_cents, interest_rate_bps, current_balance_cents, balance_updated_at, created_at, updated_at)
+       values ('Civic', '2024-01-15', 0, ?, ?, 'monthly', 45000, 2500000, 549, 2000000, ?, ?, ?)`,
+    )
+    .run(userId, loan.id, ISO, ISO, ISO);
+  const itemId = Number(itemInfo.lastInsertRowid);
+  current!.sqlite
+    .prepare(
+      `insert into loan_matcher_rules (item_id, merchant_contains, account_id, enabled, created_at, updated_at)
+       values (?, 'HONDA FIN', ?, 1, ?, ?)`,
+    )
+    .run(itemId, accountId, ISO, ISO);
+  const txnInfo = current!.sqlite
+    .prepare(
+      `insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, created_by, created_at, updated_at)
+       values (?, '2026-08-01', 'HONDA FIN SVC', 'HONDA FIN SVC', -45000, ?, ?, ?)`,
+    )
+    .run(accountId, userId, ISO, ISO);
+  const txnId = Number(txnInfo.lastInsertRowid);
+  current!.sqlite
+    .prepare(
+      `insert into loan_payments (txn_id, item_id, amount_cents, applied_cents, source, created_at)
+       values (?, ?, 45000, 45000, 'manual', ?)`,
+    )
+    .run(txnId, itemId, ISO);
+  return { typeId: loan.id, itemId, txnId };
 }
 
 describe('listItemTypes', () => {
@@ -182,7 +224,10 @@ describe('renameItemType / setItemTypeKind', () => {
       expect(billingOf(itemId)).toEqual({ billing_cycle: null, billing_amount_cents: null });
     });
 
-    it('nulls billing when flipping to loan too (the other disallowed kind)', () => {
+    // v1.3.1: widened -- 'warranty' is now the ONLY kind that disallows billing, so a flip
+    // to 'loan' (allowed since MUST-12.1) keeps the pair, same as the "two ALLOWED kinds"
+    // case just below.
+    it('keeps billing when flipping to loan too, since loan now allows billing (MUST-12.1)', () => {
       const { userId } = setup();
       const contract = createItemType('Gym Kind Flip', 'contract');
       const itemId = insertItem(contract.id, userId, 'Gym membership');
@@ -192,7 +237,7 @@ describe('renameItemType / setItemTypeKind', () => {
 
       setItemTypeKind(contract.id, 'loan');
 
-      expect(billingOf(itemId)).toEqual({ billing_cycle: null, billing_amount_cents: null });
+      expect(billingOf(itemId)).toEqual({ billing_cycle: 'annual', billing_amount_cents: 49999 });
     });
 
     it('leaves billing untouched when flipping between the two ALLOWED kinds', () => {
@@ -225,6 +270,38 @@ describe('renameItemType / setItemTypeKind', () => {
       expect(billingOf(flippedItem)).toEqual({ billing_cycle: null, billing_amount_cents: null });
       expect(billingOf(untouchedItem)).toEqual({ billing_cycle: 'monthly', billing_amount_cents: 500 });
     });
+  });
+});
+
+describe('MUST-12.5 / MUST-12.6: what a kind flip clears', () => {
+  it('loan -> warranty clears the money and the billing pair, deletes the rules, KEEPS the payments', () => {
+    setup();
+    const { typeId, itemId, txnId } = seedLoanWithRuleAndPayment();
+    setItemTypeKind(typeId, 'warranty');
+    const item = getWarrantyItem(itemId)!;
+    expect([item.principalCents, item.interestRateBps, item.currentBalanceCents, item.balanceUpdatedAt]).toEqual([
+      null,
+      null,
+      null,
+      null,
+    ]);
+    expect([item.billingCycle, item.billingAmountCents]).toEqual([null, null]);
+    expect(current!.sqlite.prepare('select count(*) as n from loan_matcher_rules').get()).toEqual({ n: 0 });
+    // Historical facts about what the household paid survive.
+    expect(current!.sqlite.prepare('select count(*) as n from loan_payments where txn_id = ?').get(txnId)).toEqual({
+      n: 1,
+    });
+  });
+
+  it('loan -> subscription KEEPS the billing pair and clears only the money fields', () => {
+    setup();
+    const { typeId, itemId } = seedLoanWithRuleAndPayment();
+    setItemTypeKind(typeId, 'subscription');
+    const item = getWarrantyItem(itemId)!;
+    expect(item.billingCycle).toBe('monthly');
+    expect(item.billingAmountCents).toBe(45000);
+    expect(item.currentBalanceCents).toBeNull();
+    expect(current!.sqlite.prepare('select count(*) as n from loan_matcher_rules').get()).toEqual({ n: 0 });
   });
 });
 

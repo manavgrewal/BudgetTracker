@@ -1,9 +1,9 @@
-import { eq, sql } from 'drizzle-orm';
+import { eq, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { getDb } from '@/db/client';
-import { warrantyItemTypes, warrantyItems } from '@/db/schema';
+import { loanMatcherRules, warrantyItemTypes, warrantyItems } from '@/db/schema';
 import { nowIso } from '@/lib/clock';
-import { ITEM_KINDS, billingAllowedForKind, type ItemKind } from '@/lib/warranty/constants';
+import { ITEM_KINDS, billingAllowedForKind, loanFieldsAllowedForKind, type ItemKind } from '@/lib/warranty/constants';
 
 export interface ItemType {
   id: number;
@@ -173,6 +173,35 @@ export function setItemTypeKind(id: number, kind: ItemKind): ItemType {
         .set({ billingCycle: null, billingAmountCents: null })
         .where(eq(warrantyItems.typeId, typeId))
         .run();
+    }
+    /**
+     * MUST-12.5: a type moving AWAY from 'loan' loses its loan money and its matcher rules
+     * -- a matcher rule can only mean something for a loan -- but KEEPS every loan_payments
+     * row. Those rows are historical facts about transactions, not configuration, and
+     * deleting them would silently rewrite what the household paid. They become inert:
+     * listLoans() and the debt report both filter on kind = 'loan' with a non-null balance,
+     * so nothing reads them until the type becomes a loan again -- at which point
+     * re-entering a balance moves the anchor to now (MUST-11.8) and the old rows are
+     * correctly excluded from the reconstruction anyway.
+     *
+     * MUST-12.6: the billing pair moves with the rule it always had. loan -> subscription
+     * KEEPS the pair (both kinds allow it) and clears only the money fields;
+     * loan -> warranty loses both sets.
+     */
+    if (!loanFieldsAllowedForKind(cleanKind)) {
+      const itemIds = tx
+        .select({ id: warrantyItems.id })
+        .from(warrantyItems)
+        .where(eq(warrantyItems.typeId, typeId))
+        .all()
+        .map((row) => row.id);
+      if (itemIds.length > 0) {
+        tx.update(warrantyItems)
+          .set({ principalCents: null, interestRateBps: null, currentBalanceCents: null, balanceUpdatedAt: null })
+          .where(inArray(warrantyItems.id, itemIds))
+          .run();
+        tx.delete(loanMatcherRules).where(inArray(loanMatcherRules.itemId, itemIds)).run();
+      }
     }
     return updated;
   });

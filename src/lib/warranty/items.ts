@@ -16,7 +16,13 @@ import {
 } from '@/lib/warranty/receipts';
 import { sniffReceiptType, type ReceiptMime } from '@/lib/warranty/sniff';
 import { deleteSidecar, findStagedReceipt, readSidecar } from '@/lib/warranty/staging';
-import { billingAllowedForKind, BILLING_CYCLES, type BillingCycle, type ItemKind } from '@/lib/warranty/constants';
+import {
+  billingAllowedForKind,
+  BILLING_CYCLES,
+  loanFieldsAllowedForKind,
+  type BillingCycle,
+  type ItemKind,
+} from '@/lib/warranty/constants';
 import { findItemType } from '@/lib/warranty/types';
 
 export const MAX_NAME_CHARS = 200;
@@ -71,6 +77,15 @@ export interface WarrantyItemRow {
    */
   billingCycle: BillingCycle | null;
   billingAmountCents: number | null;
+  /**
+   * v1.3.1 (spec §11.2). Loan money. Always present on a read row (NULL for every
+   * non-loan item), never omitted -- matching every other nullable column above.
+   * MUST-13.1: interestRateBps is basis points and is DISPLAY ONLY.
+   */
+  principalCents: number | null;
+  interestRateBps: number | null;
+  currentBalanceCents: number | null;
+  balanceUpdatedAt: string | null;
 }
 
 export interface WarrantyReceiptRow {
@@ -116,6 +131,14 @@ export interface WarrantyInput {
    */
   billingCycle?: BillingCycle | null;
   billingAmountCents?: number | null;
+  /**
+   * v1.3.1: optional, same normalise-to-null-before-either-writer treatment as the billing
+   * pair above.
+   */
+  principalCents?: number | null;
+  interestRateBps?: number | null;
+  currentBalanceCents?: number | null;
+  balanceUpdatedAt?: string | null;
 }
 
 /**
@@ -192,6 +215,21 @@ export function warrantyInputSchema(today: string) {
         .nonnegative("The amount can't be negative.")
         .nullable()
         .optional(),
+      principalCents: z
+        .number()
+        .int('The original amount must be a whole number of cents')
+        .nonnegative()
+        .nullable()
+        .optional(),
+      // MUST-14.4: 0-10000%, range-checked in zod as well as in SQL.
+      interestRateBps: z.number().int().min(0).max(1_000_000, 'That rate is out of range.').nullable().optional(),
+      currentBalanceCents: z
+        .number()
+        .int('The balance must be a whole number of cents')
+        .nonnegative()
+        .nullable()
+        .optional(),
+      balanceUpdatedAt: z.string().min(1).nullable().optional(),
     })
     .superRefine((value, ctx) => {
       // MUST-3.5, enforced by zod at the action boundary AND by a CHECK in 0002.
@@ -206,6 +244,12 @@ export function warrantyInputSchema(today: string) {
       const amountSet = value.billingAmountCents !== null && value.billingAmountCents !== undefined;
       if (cycleSet !== amountSet) {
         ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['billingCycle'], message: BILLING_PAIR_ERROR });
+      }
+      // MUST-11.7, at the schema boundary as well as in the writers.
+      const balanceSet = value.currentBalanceCents !== null && value.currentBalanceCents !== undefined;
+      const anchorSet = value.balanceUpdatedAt !== null && value.balanceUpdatedAt !== undefined;
+      if (balanceSet !== anchorSet) {
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['currentBalance'], message: BALANCE_ANCHOR_ERROR });
       }
     });
 }
@@ -233,6 +277,10 @@ const ITEM_COLUMNS = {
   updatedAt: warrantyItems.updatedAt,
   billingCycle: warrantyItems.billingCycle,
   billingAmountCents: warrantyItems.billingAmountCents,
+  principalCents: warrantyItems.principalCents,
+  interestRateBps: warrantyItems.interestRateBps,
+  currentBalanceCents: warrantyItems.currentBalanceCents,
+  balanceUpdatedAt: warrantyItems.balanceUpdatedAt,
 };
 
 /**
@@ -247,7 +295,11 @@ function toItemRow<T extends { isSubscription: boolean | null; kind: ItemKind | 
   return { ...row, isSubscription: row.isSubscription ?? false, kind: row.kind ?? 'warranty' };
 }
 
-export const BILLING_KIND_ERROR = 'Billing cycle and amount only apply to subscriptions and contracts.';
+/** MUST-12.2: reworded, because a loan may now carry a billing pair. */
+export const BILLING_KIND_ERROR = 'Billing details only apply to subscriptions, contracts and loans.';
+export const LOAN_KIND_ERROR = 'Loan amounts only apply to loans.';
+/** MUST-11.7: the cross-column rule that deliberately has no SQL representation. */
+export const BALANCE_ANCHOR_ERROR = 'A balance and the date it was set must both be present, or both absent.';
 
 /** typeId null (unclassified) normalises to 'warranty', same as toItemRow()'s own read-side default. */
 function kindForTypeId(typeId: number | null): ItemKind {
@@ -257,7 +309,7 @@ function kindForTypeId(typeId: number | null): ItemKind {
 
 /**
  * v1.3.0: server-side enforcement that billing_cycle/billing_amount_cents are NULL for
- * every warranty/loan item -- mirrors how typeExistsOrNull() in actions.ts already looks up
+ * every warranty item -- mirrors how typeExistsOrNull() in actions.ts already looks up
  * the type before trusting a write, except this lookup has to happen in the data layer
  * itself (not just the 'use server' action) so createWarrantyItem/updateWarrantyItem stay
  * correct for every caller, not only the ones that route through actions.ts.
@@ -269,6 +321,36 @@ function assertBillingMatchesKind(
 ): void {
   if (billingCycle === null && billingAmountCents === null) return;
   if (!billingAllowedForKind(kindForTypeId(typeId))) throw new Error(BILLING_KIND_ERROR);
+}
+
+/** Loan-only money, by the same app-layer argument billing already lives under. */
+function assertLoanFieldsMatchKind(
+  typeId: number | null,
+  values: {
+    principalCents: number | null;
+    interestRateBps: number | null;
+    currentBalanceCents: number | null;
+    balanceUpdatedAt: string | null;
+  },
+): void {
+  const empty =
+    values.principalCents === null &&
+    values.interestRateBps === null &&
+    values.currentBalanceCents === null &&
+    values.balanceUpdatedAt === null;
+  if (empty) return;
+  if (!loanFieldsAllowedForKind(kindForTypeId(typeId))) throw new Error(LOAN_KIND_ERROR);
+}
+
+/**
+ * MUST-11.7: current_balance_cents and balance_updated_at are both set or both NULL. This
+ * is a CROSS-COLUMN invariant, and 0007 deliberately does not express it as a SQL CHECK:
+ * ALTER TABLE ADD COLUMN does not re-validate existing rows against a CHECK added that way,
+ * so the constraint would be weaker than it looks while being riskier to add. It is enforced
+ * here, beside assertBillingMatchesKind, by the same argument that migration's header makes.
+ */
+function assertBalanceAnchorPairing(currentBalanceCents: number | null, balanceUpdatedAt: string | null): void {
+  if ((currentBalanceCents === null) !== (balanceUpdatedAt === null)) throw new Error(BALANCE_ANCHOR_ERROR);
 }
 
 export function getWarrantyItem(id: number): WarrantyItemRow | null {
@@ -297,7 +379,13 @@ export function createWarrantyItem(
   // exactly like typeExistsOrNull's early return in actions.ts.
   const billingCycle = input.billingCycle ?? null;
   const billingAmountCents = input.billingAmountCents ?? null;
+  const principalCents = input.principalCents ?? null;
+  const interestRateBps = input.interestRateBps ?? null;
+  const currentBalanceCents = input.currentBalanceCents ?? null;
+  const balanceUpdatedAt = input.balanceUpdatedAt ?? null;
   assertBillingMatchesKind(input.typeId, billingCycle, billingAmountCents);
+  assertLoanFieldsMatchKind(input.typeId, { principalCents, interestRateBps, currentBalanceCents, balanceUpdatedAt });
+  assertBalanceAnchorPairing(currentBalanceCents, balanceUpdatedAt);
 
   const db = getDb();
   const expiryDate = computeExpiryDate(input);
@@ -313,10 +401,21 @@ export function createWarrantyItem(
     const id = db.transaction((tx) => {
       const row = tx
         .insert(warrantyItems)
-        // billingCycle/billingAmountCents override input's own (possibly undefined) values
-        // with the normalised-to-null pair computed above -- undefined would otherwise
-        // reach better-sqlite3's bind step for an omitted column.
-        .values({ ...input, billingCycle, billingAmountCents, expiryDate, createdAt: at, updatedAt: at })
+        // billingCycle/billingAmountCents/the four loan fields override input's own (possibly
+        // undefined) values with the normalised-to-null values computed above -- undefined
+        // would otherwise reach better-sqlite3's bind step for an omitted column.
+        .values({
+          ...input,
+          billingCycle,
+          billingAmountCents,
+          principalCents,
+          interestRateBps,
+          currentBalanceCents,
+          balanceUpdatedAt,
+          expiryDate,
+          createdAt: at,
+          updatedAt: at,
+        })
         .returning({ id: warrantyItems.id })
         .get();
       commitStaged(tx, row.id, staged, at, adopted, deferred);
@@ -339,11 +438,27 @@ export function updateWarrantyItem(id: number, input: WarrantyInput, at: string 
   // v1.3.0: same kind check as createWarrantyItem, run before the write.
   const billingCycle = input.billingCycle ?? null;
   const billingAmountCents = input.billingAmountCents ?? null;
+  const principalCents = input.principalCents ?? null;
+  const interestRateBps = input.interestRateBps ?? null;
+  const currentBalanceCents = input.currentBalanceCents ?? null;
+  const balanceUpdatedAt = input.balanceUpdatedAt ?? null;
   assertBillingMatchesKind(input.typeId, billingCycle, billingAmountCents);
+  assertLoanFieldsMatchKind(input.typeId, { principalCents, interestRateBps, currentBalanceCents, balanceUpdatedAt });
+  assertBalanceAnchorPairing(currentBalanceCents, balanceUpdatedAt);
 
   const result = getDb()
     .update(warrantyItems)
-    .set({ ...input, billingCycle, billingAmountCents, expiryDate: computeExpiryDate(input), updatedAt: at })
+    .set({
+      ...input,
+      billingCycle,
+      billingAmountCents,
+      principalCents,
+      interestRateBps,
+      currentBalanceCents,
+      balanceUpdatedAt,
+      expiryDate: computeExpiryDate(input),
+      updatedAt: at,
+    })
     .where(eq(warrantyItems.id, id))
     .run();
   return result.changes > 0;

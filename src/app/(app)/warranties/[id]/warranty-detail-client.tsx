@@ -15,7 +15,7 @@ import {
   BILLING_CYCLE_LABELS,
   BILLING_CYCLES,
   billingAllowedForKind,
-  billingCycleSuffix,
+  billingCycleSuffixForKind,
   formEndLabel,
   formOpenEndedLabel,
   formStartLabel,
@@ -264,7 +264,7 @@ export function WarrantyDetailClient({
                   <Detail label="Billing">
                     {item.billingCycle !== null && item.billingAmountCents !== null ? (
                       <>
-                        <Money cents={item.billingAmountCents} plain /> {billingCycleSuffix(item.billingCycle)}
+                        <Money cents={item.billingAmountCents} plain /> {billingCycleSuffixForKind(item.kind, item.billingCycle)}
                       </>
                     ) : (
                       '—'

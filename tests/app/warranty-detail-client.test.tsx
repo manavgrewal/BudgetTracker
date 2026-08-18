@@ -31,6 +31,7 @@ function item(over: Partial<WarrantyItemRow> = {}): WarrantyItemRow {
     typeId: null, typeName: null, isSubscription: false, kind: 'warranty', notes: 'kitchen',
     createdAt: '2026-08-16T00:00:00.000Z', updatedAt: '2026-08-16T00:00:00.000Z',
     billingCycle: null, billingAmountCents: null,
+    principalCents: null, interestRateBps: null, currentBalanceCents: null, balanceUpdatedAt: null,
     ...over,
   };
 }
@@ -282,9 +283,13 @@ describe('WarrantyDetailClient', () => {
     expect(screen.queryByText('Billing')).toBeNull();
   });
 
-  it('renders no Billing row for a loan-kind item even if billing columns were somehow set', () => {
-    renderDetail({ item: item({ kind: 'loan', billingCycle: 'annual', billingAmountCents: 5000 }) });
-    expect(screen.queryByText('Billing')).toBeNull();
+  // v1.3.1: widened -- a loan's billing pair is its regular payment amount/cadence, so the
+  // Billing row now renders for a loan too, using the loan cycle-suffix wording ("per year").
+  it('renders the Billing row for a loan-kind item, using the loan cycle wording', () => {
+    const { container } = renderDetail({ item: item({ kind: 'loan', billingCycle: 'annual', billingAmountCents: 5000 }) });
+    const dt = Array.from(container.querySelectorAll('dt')).find((el) => el.textContent === 'Billing')!;
+    expect(dt).toBeTruthy();
+    expect(dt.nextElementSibling?.textContent).toBe('$50.00 per year');
   });
 
   it("shows the edit form's Billing fields for a subscription type and hides them for warranty", () => {

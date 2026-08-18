@@ -16,6 +16,7 @@ function item(over: Partial<WarrantyListItem> = {}): WarrantyListItem {
     typeId: null, typeName: null, isSubscription: false, kind: 'warranty', notes: null,
     createdAt: '2026-08-16T00:00:00.000Z', updatedAt: '2026-08-16T00:00:00.000Z',
     billingCycle: null, billingAmountCents: null,
+    principalCents: null, interestRateBps: null, currentBalanceCents: null, balanceUpdatedAt: null,
     status: 'active', receiptCount: 1,
     ...over,
   };

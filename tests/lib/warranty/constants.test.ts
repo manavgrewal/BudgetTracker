@@ -1,11 +1,16 @@
 import { describe, it, expect } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
   BILLING_CYCLES,
   BILLING_CYCLE_LABELS,
   ITEM_KINDS,
   ITEM_KIND_LABELS,
   billingAllowedForKind,
-  billingCycleSuffix,
+  billingAmountLabelForKind,
+  billingCycleSuffixForKind,
+  billingSectionLabelForKind,
   coveredThroughLabelForKind,
   expiryNoun,
   expiryNounForKind,
@@ -19,8 +24,11 @@ import {
   formTermLabel,
   isBillingCycle,
   isItemKind,
+  loanFieldsAllowedForKind,
   openEndedDisplayLabel,
 } from '@/lib/warranty/constants';
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
 describe('subscription wording (MUST-19.10 / MUST-19.11)', () => {
   it('swaps the expiry noun on the flag and nothing else', () => {
@@ -158,15 +166,17 @@ describe('billing cycle constants (v1.3.0)', () => {
   });
 
   it('builds the display suffix used after the formatted amount', () => {
-    expect(billingCycleSuffix('monthly')).toBe('/ month');
-    expect(billingCycleSuffix('annual')).toBe('/ year');
+    expect(billingCycleSuffixForKind('subscription', 'monthly')).toBe('/ month');
+    expect(billingCycleSuffixForKind('subscription', 'annual')).toBe('/ year');
   });
 
-  it('only allows billing for subscription and contract kinds', () => {
+  // v1.3.1: widened to include 'loan' -- see the MUST-12.1 describe block below for the
+  // full matrix.
+  it('allows billing for subscription, contract and loan kinds, still not warranty', () => {
     expect(billingAllowedForKind('subscription')).toBe(true);
     expect(billingAllowedForKind('contract')).toBe(true);
+    expect(billingAllowedForKind('loan')).toBe(true);
     expect(billingAllowedForKind('warranty')).toBe(false);
-    expect(billingAllowedForKind('loan')).toBe(false);
   });
 });
 
@@ -182,6 +192,48 @@ describe('open-ended DISPLAY label per kind (v1.3.0)', () => {
     expect(openEndedDisplayLabel('warranty')).not.toBe(formOpenEndedLabel('warranty'));
     expect(openEndedDisplayLabel('subscription')).not.toBe(formOpenEndedLabel('subscription'));
     expect(openEndedDisplayLabel('loan')).not.toBe(formOpenEndedLabel('loan'));
+  });
+});
+
+describe('MUST-12.1 … MUST-12.4: the widened rule and the wording matrix', () => {
+  it('billingAllowedForKind is true for loan and still false for warranty', () => {
+    expect(billingAllowedForKind('loan')).toBe(true);
+    expect(billingAllowedForKind('subscription')).toBe(true);
+    expect(billingAllowedForKind('contract')).toBe(true);
+    expect(billingAllowedForKind('warranty')).toBe(false);
+  });
+
+  it('loanFieldsAllowedForKind is true for loan alone', () => {
+    expect(ITEM_KINDS.filter((kind) => loanFieldsAllowedForKind(kind))).toEqual(['loan']);
+  });
+
+  it('returns the MUST-12.3 table for all four kinds', () => {
+    for (const kind of ['warranty', 'subscription', 'contract'] as const) {
+      expect(billingSectionLabelForKind(kind)).toBe('Billing');
+      expect(billingAmountLabelForKind(kind)).toBe('Amount');
+      expect(billingCycleSuffixForKind(kind, 'monthly')).toBe('/ month');
+      expect(billingCycleSuffixForKind(kind, 'annual')).toBe('/ year');
+    }
+    expect(billingSectionLabelForKind('loan')).toBe('Payment');
+    expect(billingAmountLabelForKind('loan')).toBe('Payment amount');
+    expect(billingCycleSuffixForKind('loan', 'monthly')).toBe('per month');
+    expect(billingCycleSuffixForKind('loan', 'annual')).toBe('per year');
+    // MUST-12.4: the cadence labels are shared and unchanged.
+    expect(BILLING_CYCLE_LABELS).toEqual({ monthly: 'Monthly', annual: 'Annual' });
+  });
+
+  it('MUST-12.3: the kind-agnostic billingCycleSuffix is DELETED, not wrapped', () => {
+    // A source-level check rather than a type error: a real `import { billingCycleSuffix }`
+    // in this file would break `tsc --noEmit` for the whole suite, which is a worse signal
+    // than a failing assertion. Wording must live in exactly one place.
+    const source = fs.readFileSync(path.join(root, 'src/lib/warranty/constants.ts'), 'utf8');
+    expect(source).not.toMatch(/export function billingCycleSuffix\s*\(/);
+    const callers = fs
+      .readdirSync(path.join(root, 'src'), { recursive: true, encoding: 'utf8' })
+      .filter((name) => /\.tsx?$/.test(name))
+      .filter((name) => /billingCycleSuffix\s*\(/.test(fs.readFileSync(path.join(root, 'src', name), 'utf8')))
+      .filter((name) => !/billingCycleSuffixForKind\s*\(/.test(fs.readFileSync(path.join(root, 'src', name), 'utf8')));
+    expect(callers).toEqual([]);
   });
 });
 
