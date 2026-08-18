@@ -3,7 +3,7 @@ import { sql } from 'drizzle-orm';
 import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../../helpers/db';
 import { budgetProgress, type BudgetRow } from '@/lib/budgets';
 import { nowIso } from '@/lib/clock';
-import { categorySeries, firstDataMonth, seasonalReference } from '@/lib/predict/history';
+import { categorySeries, firstDataMonth, seasonalReference, suggestionsFor } from '@/lib/predict/history';
 
 let current: TestDb | null = null;
 afterEach(() => {
@@ -229,6 +229,23 @@ describe('MUST-4.8: one grouped query per call', () => {
       restore();
     }
     expect(statements.filter((statement) => /\btransactions\b/.test(statement))).toHaveLength(0);
+  });
+});
+
+describe('controller ruling on the Task 5 review: suggestionsFor skips archived categories', () => {
+  it('an archived top-level category with non-zero own spend produces no suggestion entry', () => {
+    const { db, spend } = setup();
+    const kids = categoryIdByName(db, 'Kids');
+    db.run(sql`update categories set is_archived = 1 where id = ${kids}`);
+    for (const month of WINDOW) spend({ categoryId: kids, amountCents: -6000, date: `${month}-10` });
+
+    // categorySeries still surfaces the row (own spend is non-zero), but the Budgets UI
+    // renders an archived row read-only, so a suggestion for it could never be applied.
+    const series = categorySeries({ months: WINDOW, scope: 'household', userId: null });
+    expect(pick(series, kids)).toBeDefined();
+
+    const { byCategory } = suggestionsFor({ targetMonth: '2026-08', scope: 'household', userId: null });
+    expect(byCategory.has(kids)).toBe(false);
   });
 });
 

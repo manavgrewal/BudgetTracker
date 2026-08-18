@@ -208,6 +208,10 @@ export function suggestionsFor(input: {
     : null;
 
   for (const row of series) {
+    // Controller ruling (Task 5 review): an archived row is read-only on the Budgets page, so
+    // a suggestion for it could never be applied. Skip it entirely rather than compute one
+    // nobody can act on.
+    if (row.isArchived) continue;
     const found = reference?.get(row.categoryId) ?? null;
     byCategory.set(
       row.categoryId,

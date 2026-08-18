@@ -202,3 +202,54 @@ describe('MUST-4.6: under three months of history there are no suggestions at al
     expect(state.error).toBe('That suggestion is no longer available. Reload the page.');
   });
 });
+
+describe('controller ruling on the Task 5 review: archived categories are skipped for suggestions', () => {
+  it("excludes an archived top-level category with non-zero own spend from apply-all's counts", async () => {
+    const { db, flatSix } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const kids = categoryIdByName(db, 'Kids');
+    db.run(sql`update categories set is_archived = 1 where id = ${kids}`);
+    flatSix(groceries, 60000);
+    flatSix(kids, 6000);
+
+    // Groceries and its rolled-up parent Food are the only two rows with a suggestion; Kids
+    // is archived and read-only on the Budgets page, so it is neither set nor counted skipped.
+    const state = await applyAllSuggestionsAction({}, formData({ scope: 'household', userId: '', month: TARGET }));
+
+    expect(state.message).toBe('Set 2 budgets from suggestions. Skipped 0 categories that already had a limit.');
+    expect(resolveBudget('household', null, kids, TARGET)).toBeNull();
+  });
+});
+
+describe('cheap test additions from the Task 5 review', () => {
+  it('running apply-all twice sets nothing the second time and skips exactly what the first run set', async () => {
+    const { db, flatSix } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const restaurants = categoryIdByName(db, 'Restaurants');
+    flatSix(groceries, 60000);
+    flatSix(restaurants, 30000);
+
+    const first = await applyAllSuggestionsAction({}, formData({ scope: 'household', userId: '', month: TARGET }));
+    const setCount = Number(/^Set (\d+) budgets/.exec(first.message ?? '')?.[1]);
+    expect(setCount).toBeGreaterThan(0);
+
+    const second = await applyAllSuggestionsAction({}, formData({ scope: 'household', userId: '', month: TARGET }));
+    expect(second.message).toBe(`Set 0 budgets from suggestions. Skipped ${setCount} categories that already had a limit.`);
+  });
+
+  // MUST-7.6 covers applySuggestionAction; this is the same rule, unexercised for the ALL
+  // action until now, even though the production guard already exists for both (actions.ts
+  // lines 133-136 and 99-101 read identically).
+  it('MUST-7.6 parity: a member calling applyAllSuggestionsAction for another member personal scope is rejected the same way the single action is', async () => {
+    const { db, bob, flatSix } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    flatSix(groceries, 60000, bob);
+
+    const refused = await applyAllSuggestionsAction(
+      {},
+      formData({ scope: 'personal', userId: String(bob), month: TARGET }),
+    );
+    expect(refused.error).toBe('You can only edit your own personal budgets.');
+    expect(resolveBudget('personal', bob, groceries, TARGET)).toBeNull();
+  });
+});
