@@ -302,7 +302,11 @@ function TelegramFields({
             defaultValue=""
           />
         </Field>
-        <Field label="Chat ID" htmlFor="telegram-chat">
+        <Field
+          label="Chat ID"
+          htmlFor="telegram-chat"
+          hint={!telegram?.destination ? 'Fill this in after saving the token above — use Detect chat ID, or type it in yourself.' : undefined}
+        >
           <input
             id="telegram-chat"
             name="destination"

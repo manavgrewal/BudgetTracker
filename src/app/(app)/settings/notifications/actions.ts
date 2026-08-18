@@ -66,7 +66,14 @@ const smtpSchema = z
   });
 
 const telegramSchema = z.object({
-  destination: z.string().regex(/^-?\d{1,20}$/, 'Chat ID must be a number, optionally starting with a minus sign.'),
+  // Fix (chicken-and-egg, MUST-8.11a): a bot token must be saveable ALONE, before a chat ID
+  // is known — Detect chat ID only works once the token is saved. Empty is therefore valid
+  // here; the destination becomes REQUIRED only when the user tries to enable the channel,
+  // enforced below in saveTelegramTargetAction rather than in this shape check.
+  destination: z
+    .string()
+    .regex(/^-?\d{1,20}$/, 'Chat ID must be a number, optionally starting with a minus sign.')
+    .or(z.literal('')),
   botToken: z
     .string()
     .regex(/^\d{5,15}:[A-Za-z0-9_-]{20,80}$/, 'That does not look like a bot token. Copy the whole line BotFather sent.')
@@ -167,9 +174,22 @@ export async function saveTelegramTargetAction(_prev: NotificationsState, formDa
     return { error: 'A bot token is required the first time you save this channel.' };
   }
 
+  // Fix (chicken-and-egg): the chat ID is required to ENABLE the channel, never merely to
+  // save the token — Detect chat ID needs a saved token before it can find one. Rejecting
+  // here (rather than in the schema) keeps "save the token alone" and "save with an empty
+  // chat ID while enabled" as two clearly distinct outcomes.
+  if (parsed.data.enabled && parsed.data.destination.length === 0) {
+    return { error: 'Enter a chat ID (or press Detect chat ID below) before enabling Telegram.' };
+  }
+
   saveTelegramTarget({ userId: user.id, destination: parsed.data.destination, botToken, enabled: parsed.data.enabled });
   revalidatePath(PATH);
-  return { message: 'Telegram saved. Press Send test message to prove it works.' };
+  return {
+    message:
+      parsed.data.destination.length === 0
+        ? 'Token saved. Press Detect chat ID, or enter it manually, then save again.'
+        : 'Telegram saved. Press Send test message to prove it works.',
+  };
 }
 
 export async function saveEmailTargetAction(_prev: NotificationsState, formData: FormData): Promise<NotificationsState> {

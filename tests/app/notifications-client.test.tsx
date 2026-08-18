@@ -280,6 +280,25 @@ describe('MUST-11.2: Detect chat ID', () => {
   });
 });
 
+describe('Fix: the Chat ID field explains the token-first flow while it is still empty', () => {
+  it('shows the hint when there is no destination yet, and hides it once one is saved', () => {
+    const empty = render(
+      <NotificationsClient
+        {...props({ targets: { telegram: target({ channel: 'telegram', destination: '', secretSet: true }), email: null } })}
+      />,
+    );
+    expect(empty.container.textContent).toContain('Fill this in after saving the token above');
+    cleanup();
+
+    const filled = render(
+      <NotificationsClient
+        {...props({ targets: { telegram: target({ channel: 'telegram', destination: '5551234', secretSet: true }), email: null } })}
+      />,
+    );
+    expect(filled.container.textContent).not.toContain('Fill this in after saving the token above');
+  });
+});
+
 describe('MUST-11.8: the guide closing line matches the rendered button label', () => {
   it('asserts against the button, not a duplicated literal', () => {
     const { getByText, container } = render(

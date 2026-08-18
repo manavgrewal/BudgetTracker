@@ -5,6 +5,8 @@ import {
   getSmtp,
   getTarget,
   getUserSettings,
+  hasAnyEnabledTarget,
+  isEventEnabled,
   saveEmailTarget,
   saveSmtp,
   saveTelegramTarget,
@@ -230,6 +232,61 @@ describe('MUST-12.5: Telegram validation', () => {
   it('never returns the token', async () => {
     const result = await actions.saveTelegramTargetAction({}, form({ destination: '5551234', botToken: TOKEN, enabled: 'on' }));
     expect(JSON.stringify(result)).not.toContain('AAHk3f');
+  });
+});
+
+describe('Fix: the bot token is saveable ALONE, before a chat ID is known (chicken-and-egg)', () => {
+  it('token-only save round-trip: token stored, destination stays empty, enabled stays false', async () => {
+    const result = await actions.saveTelegramTargetAction({}, form({ destination: '', botToken: TOKEN }));
+    expect(result.error).toBeUndefined();
+    expect(result.message).toBe('Token saved. Press Detect chat ID, or enter it manually, then save again.');
+
+    const stored = getTarget(currentUser.value.id, 'telegram');
+    expect(stored?.secretSet).toBe(true);
+    expect(stored?.destination).toBe('');
+    expect(stored?.enabled).toBe(false);
+  });
+
+  it('a token-only target never receives sends: isEventEnabled and hasAnyEnabledTarget both see it as unconfigured', async () => {
+    await actions.saveTelegramTargetAction({}, form({ destination: '', botToken: TOKEN }));
+    expect(isEventEnabled(currentUser.value.id, 'coming_due', 'telegram')).toBe(false);
+    expect(hasAnyEnabledTarget()).toBe(false);
+  });
+
+  it('enabling with an empty chat ID is rejected server-side with a clear message, and the row stays disabled', async () => {
+    await actions.saveTelegramTargetAction({}, form({ destination: '', botToken: TOKEN }));
+    const result = await actions.saveTelegramTargetAction({}, form({ destination: '', botToken: '', enabled: 'on' }));
+    expect(result.error).toBe('Enter a chat ID (or press Detect chat ID below) before enabling Telegram.');
+    expect(getTarget(currentUser.value.id, 'telegram')?.enabled).toBe(false);
+  });
+
+  it('saving both token and chat ID together still works exactly as before', async () => {
+    const result = await actions.saveTelegramTargetAction({}, form({ destination: '5551234', botToken: TOKEN, enabled: 'on' }));
+    expect(result.error).toBeUndefined();
+    expect(result.message).toBe('Telegram saved. Press Send test message to prove it works.');
+    const stored = getTarget(currentUser.value.id, 'telegram');
+    expect(stored?.destination).toBe('5551234');
+    expect(stored?.enabled).toBe(true);
+  });
+
+  it('Detect chat ID works right after a token-only save — the fix\'s whole point', async () => {
+    const saved = await actions.saveTelegramTargetAction({}, form({ destination: '', botToken: TOKEN }));
+    expect(saved.error).toBeUndefined();
+
+    fetchChats.mockResolvedValue([{ chatId: '5551234', title: 'Sam', kind: 'private', lastMessageAt: null }]);
+    const detected = await actions.detectTelegramChatIdAction();
+    expect(detected.error).toBeUndefined();
+    expect(detected.chats).toEqual([{ chatId: '5551234', title: 'Sam', kind: 'private', lastMessageAt: null }]);
+  });
+
+  it('filling in the chat ID afterwards and saving again enables normally', async () => {
+    await actions.saveTelegramTargetAction({}, form({ destination: '', botToken: TOKEN }));
+    const result = await actions.saveTelegramTargetAction({}, form({ destination: '5551234', botToken: '', enabled: 'on' }));
+    expect(result.error).toBeUndefined();
+    const stored = getTarget(currentUser.value.id, 'telegram');
+    expect(stored?.destination).toBe('5551234');
+    expect(stored?.enabled).toBe(true);
+    expect(stored?.secretSet).toBe(true);
   });
 });
 
