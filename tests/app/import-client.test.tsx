@@ -274,3 +274,33 @@ describe('ImportClient — the Preview and Import buttons are busy-guarded', () 
     expect(container.textContent).toContain('commit exploded');
   });
 });
+
+describe('ImportClient — NEW-5 fix-round: loanMatchFailed gets the same honest note as engineFailed', () => {
+  it('appends a loan-matching note to the summary without hiding the row counts', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockImplementationOnce(async () => ({ ok: true, json: async () => previewBody({ totalRows: 4 }) }))
+        .mockImplementationOnce(async () => ({
+          ok: true,
+          json: async () => ({ rowsAdded: 4, rowsDuplicate: 0, rowsError: 0, needsReview: 1, engineFailed: false, loanMatchFailed: true }),
+        })),
+    );
+
+    const { container, getByRole } = render(
+      <ImportClient
+        accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
+        profiles={PROFILES}
+        history={[]}
+        simplefinManaged={[]}
+      />,
+    );
+    fireEvent.submit(container.querySelector('form')!);
+    await waitFor(() => expect(container.textContent).toContain('Preview —'));
+    fireEvent.click(getByRole('button', { name: /^Import \d+ transactions$/ }));
+
+    await waitFor(() => expect(container.textContent).toMatch(/loan payment matching failed/i));
+    expect(container.textContent).toContain('4 added');
+  });
+});

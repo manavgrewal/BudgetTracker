@@ -10,7 +10,9 @@ import type { BillingCycle } from '@/lib/warranty/constants';
  * Loan money-tracking (spec 2026-08-17 §13).
  *
  * MUST-13.1: interest_rate_bps is DISPLAY ONLY. Nothing in this file multiplies, accrues,
- * projects or amortises with it, and tests/ops/loan-invariants.test.ts asserts that by grep.
+ * projects or amortises with it. Task 14 is expected to lock that in with its own grep-style
+ * invariant test, the same way tests/lib/loans/invariants.test.ts (added by Task 10's round-3
+ * fix) locks in transactions.amount_cents' immutability.
  *
  * MUST-13.2: loan payments STAY in their spending category and in every budget. Nothing here
  * writes is_transfer, category_id or attributed_user_id, and nothing here touches the
@@ -226,16 +228,25 @@ function activeRules(tx: ReturnType<typeof getDb>): ActiveRule[] {
  * `unassignTransactionFromLoan` and `reverseLoanLinksForTransactions` below. A payment
  * against a loan already at zero still produces a link row with applied_cents = 0 — the
  * payment is recorded, the balance stays at zero, and nothing is silently swallowed.
+ *
+ * NEW-2 fix-round: `balanceCents` is `number | null` because `assignTransactionToLoan` can
+ * target a loan whose balance is genuinely UNKNOWN (never anchored). An unknown balance
+ * cannot be moved in either direction, so `applied` is forced to 0 — recording the link (the
+ * assignment itself is still real and still shown) without ever fabricating a move. Treating
+ * null as 0 here was the exact bug: a disbursement against an unset balance would otherwise
+ * record a phantom `applied_cents`, and a LATER unassign — after a person finally anchors the
+ * balance — would subtract that phantom figure off a real number it had nothing to do with.
  */
 function link(
   tx: ReturnType<typeof getDb>,
-  input: { txnId: number; itemId: number; signedAmountCents: number; balanceCents: number; source: 'rule' | 'manual'; at: string },
+  input: { txnId: number; itemId: number; signedAmountCents: number; balanceCents: number | null; source: 'rule' | 'manual'; at: string },
 ): number | null {
   const magnitude = Math.abs(input.signedAmountCents);
   const isPayment = input.signedAmountCents < 0;
   // Payments clamp at zero; disbursements/adjustments apply in full (no ceiling exists for
-  // how much can be added back onto an outstanding balance).
-  const applied = isPayment ? Math.max(0, Math.min(magnitude, input.balanceCents)) : magnitude;
+  // how much can be added back onto an outstanding balance) -- except when the balance is
+  // unknown, in which case neither direction applies anything (NEW-2).
+  const applied = input.balanceCents === null ? 0 : isPayment ? Math.max(0, Math.min(magnitude, input.balanceCents)) : magnitude;
   const delta = isPayment ? -applied : applied;
   const result = tx
     .insert(loanPayments)
@@ -286,6 +297,11 @@ function candidates(tx: ReturnType<typeof getDb>, txnIds: number[]): Candidate[]
         .all(),
     );
   }
+  // NEW-6 fix-round: each chunk is sorted internally, but the CALLER's id list is chunked by
+  // position, not by value, so ids above ID_CHUNK were no longer globally ascending once
+  // concatenated. Restoring it here keeps "first rule by id wins" (MUST-13.4) and
+  // "first match by date" style guarantees stable regardless of list size.
+  out.sort((a, b) => a.id - b.id);
   return out;
 }
 
@@ -466,11 +482,13 @@ export function assignTransactionToLoan(input: { txnId: number; itemId: number; 
     if (txn.amountCents === 0) throw new Error('A zero-amount transaction cannot be a loan payment.');
     // F1 ruling: manual assign supports BOTH signs — a negative txn decrements the balance
     // (a payment), a positive one increments it (a disbursement or an adjustment).
+    // NEW-2 fix-round: item.balance is passed through UNCOALESCED -- `?? 0` here used to
+    // treat "unknown balance" as "zero balance", see link()'s docblock.
     const applied = link(tx, {
       txnId: input.txnId,
       itemId: input.itemId,
       signedAmountCents: txn.amountCents,
-      balanceCents: item.balance ?? 0,
+      balanceCents: item.balance,
       source: 'manual',
       at: stamp,
     });
@@ -491,6 +509,15 @@ export function assignTransactionToLoan(input: { txnId: number; itemId: number; 
  * a balance out of NULL the moment any link was reversed; the `is not null` guard instead
  * makes the update match zero rows when the balance is already unknown, same as every other
  * read here treating NULL as "we don't track this loan's balance", not "it is zero".
+ *
+ * NEW-1 fix-round: the restore is clamped at zero (`max(0, ...)`), the same inexactness trade
+ * the forward payment clamp already makes. Two links against one loan do not commute when the
+ * balance has moved in between (a disbursement followed by a payment that clamped can leave
+ * less room than the disbursement's own applied_cents), so undoing just one of them in
+ * isolation can ask for a balance below zero — which used to hit the `current_balance_cents
+ * >= 0` CHECK and throw a raw SqliteError instead of ever reaching a state a person could see.
+ * Clamping trades perfect reconstruction for "never crash, never go negative", which is the
+ * same trade every other clamp in this file already makes.
  */
 export function unassignTransactionFromLoan(input: { txnId: number; itemId: number }): boolean {
   return getDb().transaction((tx) => {
@@ -507,7 +534,7 @@ export function unassignTransactionFromLoan(input: { txnId: number; itemId: numb
     if (row.appliedCents > 0) {
       const restore = row.txnAmountCents < 0 ? row.appliedCents : -row.appliedCents;
       tx.update(warrantyItems)
-        .set({ currentBalanceCents: sql`${warrantyItems.currentBalanceCents} + ${restore}` })
+        .set({ currentBalanceCents: sql`max(0, ${warrantyItems.currentBalanceCents} + ${restore})` })
         .where(and(eq(warrantyItems.id, input.itemId), sql`${warrantyItems.currentBalanceCents} is not null`))
         .run();
     }
@@ -527,6 +554,12 @@ export function unassignTransactionFromLoan(input: { txnId: number; itemId: numb
  * same loan in one undo.
  *
  * F2 fix-round: same "don't fabricate a balance out of NULL" guard as unassign.
+ *
+ * NEW-1 fix-round: same zero-clamp as unassign, and for the same reason it matters MORE
+ * here — this runs inside undoImport's own transaction, and an uncaught CHECK-constraint
+ * SqliteError would abort that ENTIRE transaction, rolling back the delete of every OTHER
+ * sole transaction the undo was supposed to remove, not just this loan's. Clamping makes
+ * that abort structurally impossible rather than merely unlikely.
  */
 export function reverseLoanLinksForTransactions(txnIds: number[]): number {
   if (txnIds.length === 0) return 0;
@@ -552,7 +585,7 @@ export function reverseLoanLinksForTransactions(txnIds: number[]): number {
   for (const [itemId, restore] of byItem) {
     if (restore === 0) continue;
     db.update(warrantyItems)
-      .set({ currentBalanceCents: sql`${warrantyItems.currentBalanceCents} + ${restore}` })
+      .set({ currentBalanceCents: sql`max(0, ${warrantyItems.currentBalanceCents} + ${restore})` })
       .where(and(eq(warrantyItems.id, itemId), sql`${warrantyItems.currentBalanceCents} is not null`))
       .run();
   }

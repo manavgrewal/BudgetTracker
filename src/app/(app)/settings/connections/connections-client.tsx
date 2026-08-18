@@ -103,7 +103,10 @@ export function ConnectionsClient({
       .map((a) => `${a.accountName}: ${a.added} added, ${a.duplicates} already had, ${a.skippedPending} still pending, ${a.errors} errors`)
       .join(' · ');
     const engineNote = result.engineFailed ? ' Categorization failed, so the new rows are waiting in the review queue.' : '';
-    setNotice(`${perAccount || 'Nothing to import.'} — ${result.remainingRequests} of ${dailyLimit} requests left today.${engineNote}`);
+    // NEW-5 fix-round: same honest-note treatment as engineFailed — applyLoanMatchers is
+    // internally guarded (MUST-13.5) so a matcher failure never fails the sync either.
+    const loanNote = result.loanMatchFailed ? ' Loan payment matching failed for these rows.' : '';
+    setNotice(`${perAccount || 'Nothing to import.'} — ${result.remainingRequests} of ${dailyLimit} requests left today.${engineNote}${loanNote}`);
   }
 
   return (

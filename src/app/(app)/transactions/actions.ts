@@ -248,11 +248,33 @@ export async function unassignFromLoanAction(formData: FormData): Promise<Action
     itemId: formData.get('itemId'),
   });
   if (!parsed.success) return { error: 'Invalid request.' };
-  if (!unassignTransactionFromLoan({ txnId: parsed.data.transactionId, itemId: parsed.data.itemId })) {
-    return { error: 'That transaction is not linked to this loan.' };
+
+  // Read BEFORE unassigning: amount_cents is immutable (src/db/schema.ts), so this still
+  // reflects the link's direction after the loan_payments row is gone (NEW-3, below).
+  const txn = getTransaction(parsed.data.transactionId);
+
+  let unassigned: boolean;
+  try {
+    unassigned = unassignTransactionFromLoan({ txnId: parsed.data.transactionId, itemId: parsed.data.itemId });
+  } catch (error) {
+    // NEW-1 fix-round: the reversal itself is now clamped at zero and should not throw in
+    // ordinary use, but a residual failure must still come back as a normal action error,
+    // never a stack trace.
+    return { error: error instanceof Error ? error.message : 'Could not unassign that transaction.' };
   }
+  if (!unassigned) return { error: 'That transaction is not linked to this loan.' };
+
   revalidatePath('/transactions');
   revalidatePath('/dashboard');
   revalidatePath('/reports');
+
+  // NEW-3 fix-round: the old message ("gone back up") was FALSE for a disbursement, whose
+  // unassign moves the balance back DOWN. Same sign-recovery the engine itself relies on
+  // (unassignTransactionFromLoan / reverseLoanLinksForTransactions): negative = a payment, so
+  // reversing it raises the balance; positive = a disbursement/adjustment, so reversing it
+  // lowers it.
+  if (txn !== null && txn.amountCents > 0) {
+    return { message: 'Unassigned. The balance has gone back down by exactly what came off it.' };
+  }
   return { message: 'Unassigned. The balance has gone back up by exactly what came off it.' };
 }

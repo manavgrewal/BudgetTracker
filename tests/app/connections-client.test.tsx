@@ -129,4 +129,21 @@ describe('ConnectionsClient — a bridge error with zero accounts is a FAILED sy
 
     expect(await findByText(/review queue/i)).toBeTruthy();
   });
+
+  it('NEW-5 fix-round: says so when loan payment matching failed', async () => {
+    stubSync({
+      accounts: [{ accountName: 'Bridge Chequing', added: 2, duplicates: 0, skippedPending: 0, errors: 0, currencyWarning: null }],
+      errlist: [],
+      remainingRequests: 19,
+      engineFailed: false,
+      loanMatchFailed: true,
+    });
+
+    const { getByText, findByText } = render(
+      <ConnectionsClient connection={CONNECTION} links={[]} accounts={[]} remainingRequests={20} dailyLimit={20} />,
+    );
+    fireEvent.click(getByText('Sync now'));
+
+    expect(await findByText(/loan payment matching failed/i)).toBeTruthy();
+  });
 });

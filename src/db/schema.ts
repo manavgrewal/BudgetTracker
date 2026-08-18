@@ -104,6 +104,12 @@ export const transactions = sqliteTable(
     displayDescription: text('display_description'),
     displaySource: text('display_source', { enum: ['manual', 'rename'] }),
     normalizedMerchant: text('normalized_merchant').notNull(),
+    // amount_cents is IMMUTABLE after insert -- no writer in src/ ever updates it (a signed
+    // magnitude fixed at import/entry time). src/lib/loans.ts's sign-recovery reversal
+    // (unassignTransactionFromLoan, reverseLoanLinksForTransactions) and debtOverTime()
+    // both re-derive a loan_payments row's direction from THIS column at read time rather
+    // than storing it a second time, which is only correct because it never changes.
+    // tests/lib/loans/invariants.test.ts asserts by grep that nothing ever writes it again.
     amountCents: integer('amount_cents').notNull(),
     categoryId: integer('category_id').references(() => categories.id),
     categorizationSource: text('categorization_source', {

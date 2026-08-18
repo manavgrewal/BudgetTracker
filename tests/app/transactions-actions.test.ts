@@ -195,4 +195,59 @@ describe('MUST-14.8 … MUST-14.11: assign and unassign', () => {
     expect((await assignToLoanAction(formData({ transactionId: '1', itemId: '1' }))).error).toBe(CROSS_ORIGIN_ERROR);
     expect((await unassignFromLoanAction(formData({ transactionId: '1', itemId: '1' }))).error).toBe(CROSS_ORIGIN_ERROR);
   });
+
+  it('NEW-3 fix-round: a payment unassign says the balance went back UP', async () => {
+    setup();
+    const { itemId, txnId } = seedLoanAndSpend(2_000_000, -45_000);
+    await assignToLoanAction(formData({ transactionId: String(txnId), itemId: String(itemId) }));
+    const result = await unassignFromLoanAction(formData({ transactionId: String(txnId), itemId: String(itemId) }));
+    expect(result.message).toBe('Unassigned. The balance has gone back up by exactly what came off it.');
+  });
+
+  it('NEW-3 fix-round: a disbursement unassign says the balance went back DOWN, not up', async () => {
+    setup();
+    const { itemId, txnId } = seedLoanAndSpend(2_000_000, 60_000);
+    await assignToLoanAction(formData({ transactionId: String(txnId), itemId: String(itemId) }));
+    expect(balanceOf(itemId)).toBe(2_060_000);
+    const result = await unassignFromLoanAction(formData({ transactionId: String(txnId), itemId: String(itemId) }));
+    expect(result.message).toBe('Unassigned. The balance has gone back down by exactly what came off it.');
+    expect(balanceOf(itemId)).toBe(2_000_000);
+  });
+
+  it('NEW-1 fix-round: a residual failure comes back as a normal action error, never a thrown stack trace', async () => {
+    const { sqlite } = setup();
+    const { itemId, txnId } = seedLoanAndSpend(2_000_000, -45_000);
+    await assignToLoanAction(formData({ transactionId: String(txnId), itemId: String(itemId) }));
+    sqlite.prepare('drop table loan_payments').run();
+    // If unassignFromLoanAction did not catch this, the underlying SqliteError would reject
+    // this promise and the `await` below would throw, failing the test on its own.
+    const result = await unassignFromLoanAction(formData({ transactionId: String(txnId), itemId: String(itemId) }));
+    expect(result.error).toBeTruthy();
+  });
+
+  it('NEW-1 fix-round: reversing a disbursement that pushed the balance past what a later payment left room for clamps at zero instead of crashing', async () => {
+    setup();
+    // The exact probe: a 10,000 balance, a +60,000 disbursement (-> 70,000), then a -70,000
+    // payment that clamps the balance to zero. Unassigning the disbursement afterwards would
+    // naively ask for 0 - 60,000 = -60,000, which used to hit the CHECK and throw.
+    const car = seedLoanItem({ balanceCents: 10_000 });
+    const disbTxn = current!.db.get<{ id: number }>(sql`
+      insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, created_by, created_at, updated_at)
+      values (${ctx!.accountId}, '2026-03-03', 'HONDA FIN DISBURSEMENT', ${normalizeMerchant('HONDA FIN DISBURSEMENT')}, 60000, ${ctx!.userId}, ${nowIso()}, ${nowIso()})
+      returning id`);
+    await assignToLoanAction(formData({ transactionId: String(disbTxn.id), itemId: String(car) }));
+    expect(balanceOf(car)).toBe(70_000);
+
+    const paymentTxn = current!.db.get<{ id: number }>(sql`
+      insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, created_by, created_at, updated_at)
+      values (${ctx!.accountId}, '2026-03-04', 'HONDA FIN PAYMENT', ${normalizeMerchant('HONDA FIN PAYMENT')}, -70000, ${ctx!.userId}, ${nowIso()}, ${nowIso()})
+      returning id`);
+    await assignToLoanAction(formData({ transactionId: String(paymentTxn.id), itemId: String(car) }));
+    expect(balanceOf(car)).toBe(0);
+
+    const result = await unassignFromLoanAction(formData({ transactionId: String(disbTxn.id), itemId: String(car) }));
+    expect(result.error).toBeUndefined();
+    expect(result.message).toBeTruthy();
+    expect(balanceOf(car)).toBe(0);
+  });
 });

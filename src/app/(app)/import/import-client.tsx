@@ -133,11 +133,13 @@ export function ImportClient({
       // itself failed (flow.ts catches runEngine and reports engineFailed
       // instead of throwing) — they're categoryless, so the review queue
       // picks them up regardless of whether the engine ran.
-      setSummary(
-        body.engineFailed
-          ? `${body.rowsAdded} imported, categorization failed — rows are in the review queue.`
-          : `${body.rowsAdded} added, ${body.rowsDuplicate} duplicates skipped, ${body.rowsError} errors, ${body.needsReview} need review.`,
-      );
+      const base = body.engineFailed
+        ? `${body.rowsAdded} imported, categorization failed — rows are in the review queue.`
+        : `${body.rowsAdded} added, ${body.rowsDuplicate} duplicates skipped, ${body.rowsError} errors, ${body.needsReview} need review.`;
+      // NEW-5 fix-round: applyLoanMatchers is internally guarded (MUST-13.5) the same way
+      // runEngine is caught above, so a matcher failure never fails the import either — it
+      // just needs the same honest note engineFailed already gets.
+      setSummary(body.loanMatchFailed ? `${base} Loan payment matching failed for these rows.` : base);
     } finally {
       setBusy(false);
     }

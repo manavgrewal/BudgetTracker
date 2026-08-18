@@ -198,3 +198,96 @@ describe('F2: reverse paths never fabricate a balance out of NULL', () => {
     expect(ctx.balanceOf(itemId)).toBeNull();
   });
 });
+
+describe('NEW-1 fix-round: reversal clamps at zero instead of crashing past it', () => {
+  it('the exact probe: 10,000 +60,000 disb -> 70,000; -70,000 payment -> 0 clamped; unassign disb does not crash and clamps at 0', () => {
+    const { itemId } = ctx.seedLoan({ balanceCents: 10_000 });
+    const disbTxn = ctx.spend('HONDA FIN DISBURSEMENT', 60_000);
+    expect(assignTransactionToLoan({ txnId: disbTxn, itemId })).toEqual({ linked: true, appliedCents: 60_000 });
+    expect(ctx.balanceOf(itemId)).toBe(70_000);
+
+    const paymentTxn = ctx.spend('HONDA FIN PAYMENT', -70_000);
+    expect(assignTransactionToLoan({ txnId: paymentTxn, itemId })).toEqual({ linked: true, appliedCents: 70_000 });
+    expect(ctx.balanceOf(itemId)).toBe(0);
+
+    // Naively this asks for 0 - 60,000 = -60,000, which used to hit the warranty_items CHECK
+    // and throw a raw SqliteError. It must instead clamp at zero.
+    expect(unassignTransactionFromLoan({ txnId: disbTxn, itemId })).toBe(true);
+    expect(ctx.balanceOf(itemId)).toBe(0);
+  });
+
+  it('the same shape inside undoImport completes instead of aborting the whole undo', () => {
+    const { itemId } = ctx.seedLoan({ balanceCents: 10_000 });
+    saveLoanRule({ itemId, merchantContains: 'HONDA FIN', accountId: null, enabled: true });
+
+    const disbRow: CandidateRow = {
+      rowIndex: 0,
+      rawDate: '2026-08-01',
+      date: '2026-08-01',
+      rawDescription: 'HONDA FIN DISBURSEMENT',
+      amountCents: 60_000,
+      cells: [],
+    };
+    // A rule never auto-links a positive transaction (F1 ruling) -- assign it manually, the
+    // same way a person would, then let the rule pick up the payment on import.
+    const disbHashed = computeRowHashes(ctx.accountId, [disbRow]);
+    const disbCommit = commitImport({ accountId: ctx.accountId, profileId: null, filename: 'disb.csv', importedBy: ctx.userId, rows: disbHashed, errors: [] });
+    assignTransactionToLoan({ txnId: disbCommit.insertedTransactionIds[0], itemId });
+    expect(ctx.balanceOf(itemId)).toBe(70_000);
+
+    const paymentRow: CandidateRow = {
+      rowIndex: 0,
+      rawDate: '2026-08-02',
+      date: '2026-08-02',
+      rawDescription: 'HONDA FIN PAYMENT',
+      amountCents: -70_000,
+      cells: [],
+    };
+    const paymentHashed = computeRowHashes(ctx.accountId, [paymentRow]);
+    const paymentCommit = commitImport({ accountId: ctx.accountId, profileId: null, filename: 'payment.csv', importedBy: ctx.userId, rows: paymentHashed, errors: [] });
+    applyLoanMatchers(paymentCommit.insertedTransactionIds);
+    expect(ctx.balanceOf(itemId)).toBe(0);
+
+    // Undoing the DISBURSEMENT's import: the naive reversal asks for a negative balance. It
+    // must clamp, not throw -- and critically, the undo must still complete and actually
+    // delete the sole disbursement transaction, rather than aborting mid-transaction (a
+    // thrown CHECK violation here would roll back the whole enclosing db.transaction,
+    // including the delete of the transaction itself).
+    const result = undoImport(disbCommit.importId);
+    expect(result.deleted).toBe(1);
+    expect(result.loanLinksReversed).toBe(1);
+    expect(ctx.balanceOf(itemId)).toBe(0);
+    expect(
+      ctx.t.sqlite.prepare('select count(*) as n from transactions where id = ?').get(disbCommit.insertedTransactionIds[0]) as { n: number },
+    ).toEqual({ n: 0 });
+  });
+});
+
+describe('NEW-2 fix-round: an unknown balance cannot be moved in either direction', () => {
+  it('the exact probe: NULL balance, +50,000 assign, anchor to 100,000, unassign leaves 100,000', () => {
+    const { itemId } = ctx.seedLoan({ balanceCents: null });
+    expect(ctx.balanceOf(itemId)).toBeNull();
+
+    const txnId = ctx.spend('LOAN DISBURSEMENT', 50_000);
+    // Recorded (linked: true), but nothing was actually applied -- the balance is unknown.
+    expect(assignTransactionToLoan({ txnId, itemId })).toEqual({ linked: true, appliedCents: 0 });
+    expect(ctx.balanceOf(itemId)).toBeNull();
+
+    // A person later anchors the balance -- independent of the assign above.
+    ctx.t.sqlite
+      .prepare("update warranty_items set current_balance_cents = 100000, balance_updated_at = '2026-08-18T00:00:00.000Z' where id = ?")
+      .run(itemId);
+    expect(ctx.balanceOf(itemId)).toBe(100_000);
+
+    // The old bug: unassign would subtract the phantom 50,000 off the real anchored figure.
+    expect(unassignTransactionFromLoan({ txnId, itemId })).toBe(true);
+    expect(ctx.balanceOf(itemId)).toBe(100_000);
+  });
+
+  it('a payment against an unknown balance also records applied_cents = 0', () => {
+    const { itemId } = ctx.seedLoan({ balanceCents: null });
+    const txnId = ctx.spend('HONDA FIN SVC', -45_000);
+    expect(assignTransactionToLoan({ txnId, itemId })).toEqual({ linked: true, appliedCents: 0 });
+    expect(ctx.balanceOf(itemId)).toBeNull();
+  });
+});
