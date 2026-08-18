@@ -290,6 +290,27 @@ const SAMPLES_BY_EVENT: Record<string, RenderInput[]> = {
     { event: 'update_available', currentVersion: '1.3.1', latestVersion: '1.4.0', severity: 'patch', publishedAt: null, canApplyInApp: true },
     { event: 'update_available', currentVersion: '1.3.1', latestVersion: '1.4.0', severity: 'minor', publishedAt: '2026-08-16T09:00:00Z', canApplyInApp: false },
   ],
+  budget_pace: [
+    { event: 'budget_pace', scope: 'household', categoryName: 'C', month: '2026-08', limitCents: 60000, spentCents: 41000, dayOfMonth: 12, projectedCents: 105900 },
+  ],
+  unusual_transaction: [
+    { event: 'unusual_transaction', merchant: 'M', accountName: 'A', dateIso: '2026-08-14', amountCents: -41288, baselineCents: 12100, baselineKind: 'merchant', categoryName: 'C' },
+    { event: 'unusual_transaction', merchant: 'M', accountName: 'A', dateIso: '2026-08-14', amountCents: -41288, baselineCents: 12100, baselineKind: 'category', categoryName: null },
+  ],
+  subscription_creep: [
+    { event: 'subscription_creep', merchant: 'M', dateIso: '2026-08-14', newAmountCents: 2099, baselineCents: 1649, priorCount: 3 },
+  ],
+  duplicate_charge: [
+    { event: 'duplicate_charge', merchant: 'M', amountCents: -8950, earlierDateIso: '2026-08-12', laterDateIso: '2026-08-13' },
+  ],
+  predicted_vs_actual: [
+    { event: 'predicted_vs_actual', month: '2026-07', household: [{ name: 'C', expectedCents: 1, actualCents: 2 }], personal: [], totalDeltaCents: 1 },
+    { event: 'predicted_vs_actual', month: '2026-07', household: [], personal: [{ name: 'C', expectedCents: 2, actualCents: 1 }], totalDeltaCents: -1 },
+  ],
+  suggested_budget_refresh: [
+    { event: 'suggested_budget_refresh', month: '2026-08', household: [{ name: 'C', nowCents: 2, wasCents: 1 }], personal: [], changedCount: 1 },
+    { event: 'suggested_budget_refresh', month: '2026-08', household: [{ name: 'C', nowCents: 2, wasCents: null }], personal: [], changedCount: 1 },
+  ],
 };
 
 describe('MUST-10.4: no notification body contains a link', () => {
@@ -306,6 +327,162 @@ describe('MUST-10.4: no notification body contains a link', () => {
         expect(`${subject}\n${body}`, `event ${def.id}`).not.toMatch(/https?:\/\//);
       }
     }
+  });
+});
+
+describe('spec section 9: the six predictive messages', () => {
+  it('budget_pace names the limit, the days elapsed, the projection and the overshoot', () => {
+    const { subject, body } = renderEvent({
+      event: 'budget_pace',
+      scope: 'household',
+      categoryName: 'Groceries',
+      month: '2026-08',
+      limitCents: 60000,
+      spentCents: 41000,
+      dayOfMonth: 12,
+      projectedCents: 105900,
+    });
+    expect(subject).toBe('On pace to go over: Groceries (August 2026)');
+    expect(body).toContain('Household Groceries budget for August 2026 is $600.00.');
+    expect(body).toContain('You have spent $410.00 in 12 days.');
+    expect(body).toContain('the month ends near $1,059.00, about $459.00 over.');
+  });
+
+  it('budget_pace says "Your" for a personal budget', () => {
+    const { body } = renderEvent({
+      event: 'budget_pace',
+      scope: 'personal',
+      categoryName: 'Groceries',
+      month: '2026-08',
+      limitCents: 60000,
+      spentCents: 41000,
+      dayOfMonth: 12,
+      projectedCents: 105900,
+    });
+    expect(body.startsWith('Your Groceries budget')).toBe(true);
+  });
+
+  it('unusual_transaction names the merchant baseline it used', () => {
+    const { subject, body } = renderEvent({
+      event: 'unusual_transaction',
+      merchant: 'CANADIAN TIRE',
+      accountName: 'Joint Chequing',
+      dateIso: '2026-08-14',
+      amountCents: -41288,
+      baselineCents: 12100,
+      baselineKind: 'merchant',
+      categoryName: 'Home & Garden',
+    });
+    expect(subject).toBe('Unusual charge: CANADIAN TIRE $412.88');
+    expect(body).toContain('on 2026-08-14');
+    expect(body).toContain('Joint Chequing');
+    expect(body).toContain('3.4 times the $121.00 you usually spend at CANADIAN TIRE');
+  });
+
+  it('unusual_transaction says so when it fell back to the category baseline', () => {
+    const { body } = renderEvent({
+      event: 'unusual_transaction',
+      merchant: 'CANADIAN TIRE',
+      accountName: 'Joint Chequing',
+      dateIso: '2026-08-14',
+      amountCents: -41288,
+      baselineCents: 12100,
+      baselineKind: 'category',
+      categoryName: 'Home & Garden',
+    });
+    expect(body).toContain('the $121.00 that Home & Garden charges usually run');
+  });
+
+  it('subscription_creep names both amounts, the rise and the percentage', () => {
+    const { subject, body } = renderEvent({
+      event: 'subscription_creep',
+      merchant: 'NETFLIX',
+      dateIso: '2026-08-14',
+      newAmountCents: 2099,
+      baselineCents: 1649,
+      priorCount: 3,
+    });
+    expect(subject).toBe('Price went up: NETFLIX');
+    expect(body).toBe(
+      'NETFLIX charged $20.99 on 2026-08-14. The last 3 charges were $16.49. That is $4.50 more, about 27 percent.',
+    );
+  });
+
+  it('MUST-14.10: duplicate_charge says it may be a real second charge', () => {
+    const { subject, body } = renderEvent({
+      event: 'duplicate_charge',
+      merchant: 'BELL CANADA',
+      amountCents: -8950,
+      earlierDateIso: '2026-08-12',
+      laterDateIso: '2026-08-13',
+    });
+    expect(subject).toBe('Possible duplicate: BELL CANADA $89.50');
+    expect(body).toBe(
+      'BELL CANADA charged $89.50 on 2026-08-12 and again on 2026-08-13. ' +
+        'It may be a real second charge, or the bank may have reported one charge twice.',
+    );
+  });
+
+  it('MUST-9.27: predicted_vs_actual says the expected figures were recomputed', () => {
+    const { subject, body } = renderEvent({
+      event: 'predicted_vs_actual',
+      month: '2026-07',
+      household: [
+        { name: 'Groceries', expectedCents: 62000, actualCents: 71340 },
+        { name: 'Gas', expectedCents: 20000, actualCents: 18000 },
+      ],
+      personal: [],
+      totalDeltaCents: 21000,
+    });
+    expect(subject).toBe('July 2026: what we expected against what happened');
+    expect(body).toContain('$620.00 expected, $713.40 actual, $93.40 difference');
+    expect(body).toContain('$200.00 expected, $180.00 actual, -$20.00 difference');
+    expect(body).toContain('July 2026 came in $210.00 over what the last six months pointed at.');
+    expect(body).toContain('recomputed');
+  });
+
+  it('MUST-9.30 composition: a long category name cannot cut a figure off the line', () => {
+    const { body } = renderEvent({
+      event: 'predicted_vs_actual',
+      month: '2026-07',
+      household: [{ name: 'C'.repeat(200), expectedCents: 62000, actualCents: 71340 }],
+      personal: [],
+      totalDeltaCents: 9340,
+    });
+    // padded() only ever truncates the category name, which is what NAME_MAX is for. Every
+    // figure is appended after it has run, so all three survive intact.
+    expect(body).toContain('$620.00 expected, $713.40 actual, $93.40 difference');
+    expect(body).not.toContain('C'.repeat(81));
+  });
+
+  it('MUST-14.10: suggested_budget_refresh says nothing has been changed', () => {
+    const { subject, body } = renderEvent({
+      event: 'suggested_budget_refresh',
+      month: '2026-08',
+      household: [
+        { name: 'Groceries', nowCents: 78000, wasCents: 60000 },
+        { name: 'Gas', nowCents: 12000, wasCents: null },
+      ],
+      personal: [],
+      changedCount: 5,
+    });
+    expect(subject).toBe('New month: 5 suggested budgets changed');
+    expect(body).toContain('$780.00 suggested, $600.00 set');
+    expect(body).toContain('$120.00 suggested, no limit set');
+    expect(body).toContain('Open Budgets to apply any of these. Nothing has been changed.');
+  });
+
+  it('MUST-9.37: every name passes through truncateText', () => {
+    const long = 'M'.repeat(200);
+    const { subject, body } = renderEvent({
+      event: 'duplicate_charge',
+      merchant: long,
+      amountCents: -8950,
+      earlierDateIso: '2026-08-12',
+      laterDateIso: '2026-08-13',
+    });
+    expect(subject).not.toContain(long);
+    expect(body).not.toContain(long);
   });
 });
 

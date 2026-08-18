@@ -211,6 +211,37 @@ describe('MUST-11.3: the matrix is generated from the registry', () => {
     expect(container.textContent).toMatch(/backup/i);
   });
 
+  it('MUST-17.2: the six v1.4.0 events render for a member with no component edit', () => {
+    // The file's convention, at every one of its existing render sites: props() returns the
+    // whole NotificationsPageData and is spread. There is no `data` prop.
+    render(<NotificationsClient {...props({ role: 'member' })} />);
+    for (const id of [
+      'budget_pace',
+      'unusual_transaction',
+      'subscription_creep',
+      'duplicate_charge',
+      'predicted_vs_actual',
+      'suggested_budget_refresh',
+    ]) {
+      expect(document.querySelector(`input[name="pref:${id}:telegram"]`)).not.toBeNull();
+      expect(document.querySelector(`input[name="pref:${id}:email"]`)).not.toBeNull();
+    }
+  });
+
+  it('MUST-9.3: none of the six needs admin rights', () => {
+    const memberIds = eventsFor('member').map((event) => event.id);
+    for (const id of [
+      'budget_pace',
+      'unusual_transaction',
+      'subscription_creep',
+      'duplicate_charge',
+      'predicted_vs_actual',
+      'suggested_budget_refresh',
+    ]) {
+      expect(memberIds).toContain(id);
+    }
+  });
+
   it('renders the five knobs with their defaults in the hint text', () => {
     const { container, getByLabelText } = render(<NotificationsClient {...props()} />);
     for (const name of ['comingDueDays', 'budgetThresholdPct', 'staleImportWeeks', 'dailyHour', 'digestWeekday', 'digestHour']) {

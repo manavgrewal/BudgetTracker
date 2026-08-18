@@ -7,15 +7,21 @@ import {
   NOTIFICATION_EVENTS,
   backupFailedKey,
   budgetExceededKey,
+  budgetPaceKey,
   budgetThresholdKey,
   comingDueKey,
+  duplicateChargeKey,
   eventDef,
   eventsFor,
   isChannel,
   isNotificationEventId,
   newSigninKey,
+  predictedVsActualKey,
   restoreOutcomeKey,
   staleImportKey,
+  subscriptionCreepKey,
+  suggestedBudgetRefreshKey,
+  unusualTransactionKey,
   updateAvailableKey,
   weeklyDigestKey,
 } from '@/lib/notify/events';
@@ -31,11 +37,11 @@ describe('MUST-2.1: events.ts is pure and client-safe', () => {
   });
 });
 
-describe('§4.2: the eight launch events', () => {
-  it('has exactly nine entries with unique, well-formed ids', () => {
-    expect(NOTIFICATION_EVENTS).toHaveLength(9);
+describe('the fifteen registered events', () => {
+  it('has exactly fifteen entries with unique, well-formed ids', () => {
+    expect(NOTIFICATION_EVENTS).toHaveLength(15);
     const ids = NOTIFICATION_EVENTS.map((e) => e.id);
-    expect(new Set(ids).size).toBe(9);
+    expect(new Set(ids).size).toBe(15);
     for (const id of ids) expect(id).toMatch(/^[a-z][a-z0-9_]*$/);
   });
 
@@ -52,12 +58,29 @@ describe('§4.2: the eight launch events', () => {
       ['restore_outcome', 'admin', 'immediate', true],
       ['stale_import', 'all', 'daily_slot', false],
       ['update_available', 'admin', 'tick', true],
+      ['budget_pace', 'all', 'daily_slot', true],
+      ['unusual_transaction', 'all', 'tick', true],
+      ['subscription_creep', 'all', 'daily_slot', true],
+      ['duplicate_charge', 'all', 'tick', true],
+      ['predicted_vs_actual', 'all', 'daily_slot', false],
+      ['suggested_budget_refresh', 'all', 'daily_slot', false],
     ]);
   });
 
   it('MUST-4.1: the default-on set is the wrong-or-imminent half', () => {
     const on = NOTIFICATION_EVENTS.filter((e) => e.defaultEnabled).map((e) => e.id).sort();
-    expect(on).toEqual(['backup_failed', 'budget_exceeded', 'coming_due', 'new_signin', 'restore_outcome', 'update_available']);
+    expect(on).toEqual([
+      'backup_failed',
+      'budget_exceeded',
+      'budget_pace',
+      'coming_due',
+      'duplicate_charge',
+      'new_signin',
+      'restore_outcome',
+      'subscription_creep',
+      'unusual_transaction',
+      'update_available',
+    ]);
   });
 
   it('gives every event a label and a one-sentence blurb', () => {
@@ -79,8 +102,8 @@ describe('lookup helpers', () => {
   it('MUST-4.3: eventsFor("member") excludes both admin events', () => {
     expect(eventsFor('member').map((e) => e.id)).not.toContain('backup_failed');
     expect(eventsFor('member').map((e) => e.id)).not.toContain('restore_outcome');
-    expect(eventsFor('member')).toHaveLength(6);
-    expect(eventsFor('admin')).toHaveLength(9);
+    expect(eventsFor('member')).toHaveLength(12);
+    expect(eventsFor('admin')).toHaveLength(15);
   });
 
   it('exposes the two channels', () => {
@@ -125,7 +148,7 @@ describe('MUST-3.11: the exact dedup key strings', () => {
 
 describe('MUST-6.1: the update_available registry entry', () => {
   it('brings the registry to nine and is admin-audience, default-on, tick-triggered', () => {
-    expect(NOTIFICATION_EVENTS).toHaveLength(9);
+    expect(NOTIFICATION_EVENTS).toHaveLength(15);
     const entry = eventDef('update_available');
     expect(entry).toEqual({
       id: 'update_available',
@@ -145,5 +168,32 @@ describe('MUST-6.1: the update_available registry entry', () => {
   it('MUST-6.3: the dedup key is per version and only ever goes up', () => {
     expect(updateAvailableKey('1.4.0')).toBe('update:1.4.0');
     expect(updateAvailableKey('1.4.0')).not.toBe(updateAvailableKey('1.5.0'));
+  });
+});
+
+describe('spec section 9: the six predictive dedup keys', () => {
+  it('builds every key shape in the table', () => {
+    expect(budgetPaceKey('household', 7, '2026-08')).toBe('pace:h:7:2026-08');
+    expect(budgetPaceKey('personal', 7, '2026-08')).toBe('pace:p:7:2026-08');
+    expect(unusualTransactionKey(4211)).toBe('unusual:4211');
+    expect(subscriptionCreepKey(4211)).toBe('creep:4211');
+    expect(duplicateChargeKey(31, 44)).toBe('dupe:31:44');
+    expect(predictedVsActualKey('2026-07')).toBe('predvs:2026-07');
+    expect(suggestedBudgetRefreshKey('2026-08')).toBe('suggest:2026-08');
+  });
+
+  it('MUST-9.22: a duplicate pair keys the same way whichever row the scan reaches first', () => {
+    expect(duplicateChargeKey(44, 31)).toBe(duplicateChargeKey(31, 44));
+  });
+
+  it('a pace key never collides with a threshold or an exceeded key', () => {
+    expect(budgetPaceKey('household', 7, '2026-08')).not.toBe(budgetExceededKey('household', 7, '2026-08'));
+    expect(budgetPaceKey('household', 7, '2026-08')).not.toBe(budgetThresholdKey('household', 7, '2026-08', 80));
+  });
+
+  it('carries neither the user nor the channel, which the unique index already holds', () => {
+    for (const key of [budgetPaceKey('personal', 7, '2026-08'), unusualTransactionKey(1), predictedVsActualKey('2026-07')]) {
+      expect(key).not.toMatch(/telegram|email|user/);
+    }
   });
 });

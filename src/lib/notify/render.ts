@@ -1,5 +1,6 @@
 import { daysBetweenIso, monthLabel } from '@/lib/dates';
 import { formatCents } from '@/lib/money';
+import { divRound } from '@/lib/predict/stats';
 import { ITEM_KIND_LABELS, expiryPhraseForKind, type ItemKind } from '@/lib/warranty/constants';
 
 /**
@@ -26,6 +27,21 @@ export function truncateText(value: string, max: number): string {
 export interface DigestLine {
   name: string;
   cents: number;
+}
+
+/** One category's line in the predicted-against-actual report (spec section 9.6). */
+export interface PredictedLine {
+  name: string;
+  expectedCents: number;
+  actualCents: number;
+}
+
+/** One category's line in the suggested-budget refresh (spec section 9.7). */
+export interface RefreshLine {
+  name: string;
+  nowCents: number;
+  /** null when the category has no resolved limit for the month. */
+  wasCents: number | null;
 }
 
 export type RenderInput =
@@ -86,6 +102,57 @@ export type RenderInput =
       severity: 'patch' | 'minor' | 'major';
       publishedAt: string | null;
       canApplyInApp: boolean;
+    }
+  | {
+      event: 'budget_pace';
+      scope: 'household' | 'personal';
+      categoryName: string;
+      month: string;
+      limitCents: number;
+      spentCents: number;
+      dayOfMonth: number;
+      projectedCents: number;
+    }
+  | {
+      event: 'unusual_transaction';
+      merchant: string;
+      accountName: string;
+      dateIso: string;
+      /** Signed, negative for a spend. */
+      amountCents: number;
+      baselineCents: number;
+      baselineKind: 'merchant' | 'category';
+      categoryName: string | null;
+    }
+  | {
+      event: 'subscription_creep';
+      merchant: string;
+      dateIso: string;
+      newAmountCents: number;
+      baselineCents: number;
+      priorCount: number;
+    }
+  | {
+      event: 'duplicate_charge';
+      merchant: string;
+      /** Signed, negative for a spend. */
+      amountCents: number;
+      earlierDateIso: string;
+      laterDateIso: string;
+    }
+  | {
+      event: 'predicted_vs_actual';
+      month: string;
+      household: readonly PredictedLine[];
+      personal: readonly PredictedLine[];
+      totalDeltaCents: number;
+    }
+  | {
+      event: 'suggested_budget_refresh';
+      month: string;
+      household: readonly RefreshLine[];
+      personal: readonly RefreshLine[];
+      changedCount: number;
     };
 
 function money(cents: number): string {
@@ -113,6 +180,33 @@ function publishedLine(publishedAt: string | null): string {
 function padded(lines: readonly DigestLine[], indent = '  '): string[] {
   const width = lines.reduce((max, line) => Math.max(max, truncateText(line.name, NAME_MAX).length), 0);
   return lines.map((line) => `${indent}${truncateText(line.name, NAME_MAX).padEnd(width + 2)}${money(line.cents)}`);
+}
+
+/**
+ * MUST-9.30: the existing two-column padded() helper aligns the category name against the
+ * expected figure; the other two figures are appended after it has run.
+ *
+ * Nothing composite is ever handed to padded(). It applies truncateText(name, NAME_MAX), so a
+ * composite left column would let an 80-character category name cut the last dollar amount
+ * off the line. Only the category name goes in, which is what NAME_MAX is for.
+ *
+ * Every figure goes through money(), which never prints a leading plus (MUST-9.39), so a
+ * category that came in under its expectation reads -$20.00 and one that came in over reads
+ * $93.40. Section 9.6's example line shows a plus; MUST-9.39 is the binding rule.
+ */
+function predictedLines(rows: readonly PredictedLine[]): string[] {
+  return padded(rows.map((row) => ({ name: row.name, cents: row.expectedCents }))).map((line, index) => {
+    const row = rows[index];
+    return `${line} expected, ${money(row.actualCents)} actual, ${money(row.actualCents - row.expectedCents)} difference`;
+  });
+}
+
+/** Same composition, with "no limit set" where the category has never had one. */
+function refreshLines(rows: readonly RefreshLine[]): string[] {
+  return padded(rows.map((row) => ({ name: row.name, cents: row.nowCents }))).map((line, index) => {
+    const was = rows[index].wasCents;
+    return `${line} suggested, ${was === null ? 'no limit set' : `${money(was)} set`}`;
+  });
 }
 
 function renderDigest(input: Extract<RenderInput, { event: 'weekly_digest' }>): string {
@@ -264,6 +358,86 @@ export function renderEvent(input: RenderInput): { subject: string; body: string
       return {
         subject,
         body: `You are running ${input.currentVersion}. Version ${input.latestVersion} is published. ${tail}${publishedLine(input.publishedAt)}`,
+      };
+    }
+    case 'budget_pace': {
+      const category = truncateText(input.categoryName, NAME_MAX);
+      const label = monthLabel(input.month);
+      return {
+        subject: `On pace to go over: ${category} (${label})`,
+        body:
+          `${scopeWord(input.scope)} ${category} budget for ${label} is ${money(input.limitCents)}. ` +
+          `You have spent ${money(input.spentCents)} in ${input.dayOfMonth} days. ` +
+          `At that rate the month ends near ${money(input.projectedCents)}, ` +
+          `about ${money(input.projectedCents - input.limitCents)} over.`,
+      };
+    }
+    case 'unusual_transaction': {
+      const merchant = truncateText(input.merchant, NAME_MAX);
+      const account = truncateText(input.accountName, NAME_MAX);
+      const spend = Math.abs(input.amountCents);
+      // A multiple is not an amount, so it is not money()'s business (MUST-9.39). It is still
+      // integer arithmetic: tenths through divRound, then split, rather than a float divide
+      // and toFixed. MUST-3.5's rule is scoped to src/lib/predict/, but there is no reason to
+      // introduce the one float in the codebase that does not need to exist.
+      const tenths = divRound(spend * 10, input.baselineCents);
+      const multiple = `${Math.trunc(tenths / 10)}.${tenths % 10}`;
+      const usual =
+        input.baselineKind === 'merchant'
+          ? `the ${money(input.baselineCents)} you usually spend at ${merchant}`
+          : `the ${money(input.baselineCents)} that ${truncateText(input.categoryName ?? 'those', NAME_MAX)} charges usually run`;
+      return {
+        subject: `Unusual charge: ${merchant} ${money(spend)}`,
+        body:
+          `${merchant} charged ${money(spend)} on ${input.dateIso} (${account}). ` +
+          `This is about ${multiple} times ${usual}.`,
+      };
+    }
+    case 'subscription_creep': {
+      const merchant = truncateText(input.merchant, NAME_MAX);
+      const rise = input.newAmountCents - input.baselineCents;
+      const pct = divRound(rise * 100, input.baselineCents);
+      return {
+        subject: `Price went up: ${merchant}`,
+        body:
+          `${merchant} charged ${money(input.newAmountCents)} on ${input.dateIso}. ` +
+          `The last ${input.priorCount} charges were ${money(input.baselineCents)}. ` +
+          `That is ${money(rise)} more, about ${pct} percent.`,
+      };
+    }
+    case 'duplicate_charge': {
+      const merchant = truncateText(input.merchant, NAME_MAX);
+      const amount = money(Math.abs(input.amountCents));
+      return {
+        subject: `Possible duplicate: ${merchant} ${amount}`,
+        body:
+          `${merchant} charged ${amount} on ${input.earlierDateIso} and again on ${input.laterDateIso}. ` +
+          'It may be a real second charge, or the bank may have reported one charge twice.',
+      };
+    }
+    case 'predicted_vs_actual': {
+      const label = monthLabel(input.month);
+      const blocks: string[] = [];
+      if (input.household.length > 0) blocks.push(['Household', ...predictedLines(input.household)].join('\n'));
+      if (input.personal.length > 0) blocks.push(['Yours', ...predictedLines(input.personal)].join('\n'));
+      blocks.push(
+        `Across every category with a suggestion, ${label} came in ${money(Math.abs(input.totalDeltaCents))} ` +
+          `${input.totalDeltaCents >= 0 ? 'over' : 'under'} what the last six months pointed at.`,
+      );
+      // MUST-9.27: nothing was stored in advance, and the message says so rather than letting
+      // the reader take "predicted" for a recorded forecast.
+      blocks.push('The expected figures are recomputed from the six months before that one. Nothing was recorded in advance.');
+      return { subject: `${label}: what we expected against what happened`, body: blocks.join('\n\n') };
+    }
+    case 'suggested_budget_refresh': {
+      const blocks: string[] = [];
+      if (input.household.length > 0) blocks.push(['Household', ...refreshLines(input.household)].join('\n'));
+      if (input.personal.length > 0) blocks.push(['Yours', ...refreshLines(input.personal)].join('\n'));
+      // MUST-9.33: the message never applies anything.
+      blocks.push('Open Budgets to apply any of these. Nothing has been changed.');
+      return {
+        subject: `New month: ${input.changedCount} suggested budget${input.changedCount === 1 ? '' : 's'} changed`,
+        body: blocks.join('\n\n'),
       };
     }
   }

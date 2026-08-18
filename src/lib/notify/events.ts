@@ -117,6 +117,54 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
     trigger: 'tick',
     defaultEnabled: true,
   },
+  {
+    id: 'budget_pace',
+    label: 'On pace to go over budget',
+    blurb: 'A category is heading past its limit before the month is out.',
+    audience: 'all',
+    trigger: 'daily_slot',
+    defaultEnabled: true,
+  },
+  {
+    id: 'unusual_transaction',
+    label: 'An unusually large charge',
+    blurb: 'A charge is several times what that merchant usually costs.',
+    audience: 'all',
+    trigger: 'tick',
+    defaultEnabled: true,
+  },
+  {
+    id: 'subscription_creep',
+    label: 'A recurring charge went up',
+    blurb: 'A subscription or bill came in higher than the last few did.',
+    audience: 'all',
+    trigger: 'daily_slot',
+    defaultEnabled: true,
+  },
+  {
+    id: 'duplicate_charge',
+    label: 'A possible duplicate charge',
+    blurb: 'The same merchant charged the same amount twice within a few days.',
+    audience: 'all',
+    trigger: 'tick',
+    defaultEnabled: true,
+  },
+  {
+    id: 'predicted_vs_actual',
+    label: 'Last month, predicted against actual',
+    blurb: 'Early each month, how the month just gone compared with what the six months before it pointed at.',
+    audience: 'all',
+    trigger: 'daily_slot',
+    defaultEnabled: false,
+  },
+  {
+    id: 'suggested_budget_refresh',
+    label: 'New month, new suggested budgets',
+    blurb: 'Early each month, the categories whose suggested budget has moved away from the limit you have set.',
+    audience: 'all',
+    trigger: 'daily_slot',
+    defaultEnabled: false,
+  },
 ];
 
 export function eventDef(id: string): NotificationEventDef | undefined {
@@ -195,4 +243,48 @@ export function staleImportKey(mondayIso: string): string {
  */
 export function updateAvailableKey(version: string): string {
   return `update:${version}`;
+}
+
+/**
+ * Once per scope, per category, per month, EVER (MUST-9.8). It fires on the first day at or
+ * after the 7th on which the projection crosses the threshold, and never again that month,
+ * whether the projection later gets worse or better. Re-alerting on a moving projection is
+ * how a useful alert becomes an ignored one.
+ *
+ * MUST-9.9 (pruning safety): the key carries the month and the evaluator only ever visits the
+ * current month, so a row pruned by the 400-day sweep belongs to a month never evaluated again.
+ */
+export function budgetPaceKey(scope: BudgetScopeKey, categoryId: number, month: string): string {
+  return `pace:${scopeLetter(scope)}:${categoryId}:${month}`;
+}
+
+/** Once per transaction, ever. 14 days of lookback against 400 days of retention (MUST-9.14). */
+export function unusualTransactionKey(transactionId: number): string {
+  return `unusual:${transactionId}`;
+}
+
+/**
+ * Once per price change, ever, keyed on the INCREASED charge. Next month's charge at the new
+ * price does not fire again, because by then the median of the preceding charges has moved
+ * (MUST-9.17). A second rise is a different transaction id and a legitimately new message.
+ */
+export function subscriptionCreepKey(transactionId: number): string {
+  return `creep:${transactionId}`;
+}
+
+/** MUST-9.22: the two ids sorted ascending, so the same pair keys the same either way round. */
+export function duplicateChargeKey(lowerId: number, higherId: number): string {
+  const first = Math.min(lowerId, higherId);
+  const second = Math.max(lowerId, higherId);
+  return `dupe:${first}:${second}`;
+}
+
+/** Once per reported month, ever. The evaluator only ever visits the immediately previous one. */
+export function predictedVsActualKey(month: string): string {
+  return `predvs:${month}`;
+}
+
+/** Once per current month, ever. Same pruning argument as predictedVsActualKey. */
+export function suggestedBudgetRefreshKey(month: string): string {
+  return `suggest:${month}`;
 }
