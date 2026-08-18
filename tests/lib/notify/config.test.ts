@@ -137,6 +137,21 @@ describe('§3.3: per-user targets', () => {
     expect(() => saveTelegramTarget({ userId, destination: '5551234', botToken: null, enabled: true })).toThrow();
   });
 
+  it('Round 2 fix (LOW): refuses to enable a telegram target with an empty chat ID, even called directly', () => {
+    const userId = insertTestUser(t.db);
+    expect(() => saveTelegramTarget({ userId, destination: '', botToken: TOKEN, enabled: true })).toThrow();
+    expect(getTarget(userId, 'telegram')).toBeNull();
+  });
+
+  it('a token-only save (empty chat ID, enabled false) is fine — the invariant only guards enabled=true', () => {
+    const userId = insertTestUser(t.db);
+    saveTelegramTarget({ userId, destination: '', botToken: TOKEN, enabled: false });
+    const target = getTarget(userId, 'telegram');
+    expect(target?.destination).toBe('');
+    expect(target?.secretSet).toBe(true);
+    expect(target?.enabled).toBe(false);
+  });
+
   it('an email target stores no secret at all', () => {
     const userId = insertTestUser(t.db);
     saveEmailTarget({ userId, destination: 'sam@example.com', enabled: true });

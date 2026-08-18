@@ -174,21 +174,29 @@ export async function saveTelegramTargetAction(_prev: NotificationsState, formDa
     return { error: 'A bot token is required the first time you save this channel.' };
   }
 
-  // Fix (chicken-and-egg): the chat ID is required to ENABLE the channel, never merely to
-  // save the token — Detect chat ID needs a saved token before it can find one. Rejecting
-  // here (rather than in the schema) keeps "save the token alone" and "save with an empty
-  // chat ID while enabled" as two clearly distinct outcomes.
-  if (parsed.data.enabled && parsed.data.destination.length === 0) {
+  const emptyDestination = parsed.data.destination.length === 0;
+  const savingNewToken = botToken !== null;
+
+  // Round 2 fix (HIGH): the Enabled checkbox defaults to CHECKED for a brand-new target
+  // (guides.tsx step 6 — paste the token, press Save — produces exactly token + empty chat
+  // ID + enabled=on). A hard rejection here used to refuse the WHOLE save, token included,
+  // which is the user's original chicken-and-egg report all over again. So: a save that is
+  // ALSO writing a token is never hard-rejected for an empty chat ID — it silently forces
+  // enabled to false and stores the token, exactly like an explicit token-only save. The
+  // hard rejection is reserved for the other case: an EXISTING target, no token change, chat
+  // ID still empty, and the user deliberately ticking Enabled — a real attempt to turn on an
+  // incomplete channel, which deserves a clear "not yet" rather than a silent no-op.
+  if (emptyDestination && parsed.data.enabled && !savingNewToken) {
     return { error: 'Enter a chat ID (or press Detect chat ID below) before enabling Telegram.' };
   }
 
-  saveTelegramTarget({ userId: user.id, destination: parsed.data.destination, botToken, enabled: parsed.data.enabled });
+  const enabled = emptyDestination ? false : parsed.data.enabled;
+  saveTelegramTarget({ userId: user.id, destination: parsed.data.destination, botToken, enabled });
   revalidatePath(PATH);
   return {
-    message:
-      parsed.data.destination.length === 0
-        ? 'Token saved. Press Detect chat ID, or enter it manually, then save again.'
-        : 'Telegram saved. Press Send test message to prove it works.',
+    message: emptyDestination
+      ? 'Token saved. Add your chat ID (press Detect) and save again to enable.'
+      : 'Telegram saved. Press Send test message to prove it works.',
   };
 }
 
@@ -253,6 +261,11 @@ async function runTest(userId: number, channel: Channel, opts: { relayOnly: bool
   } else {
     const target = getTarget(userId, channel);
     if (!target) return { error: 'Set this channel up first.' };
+    // Round 2 fix (MED): a token-only Telegram target (empty chat ID, always saved disabled
+    // per the guard above) must never place a live call to Telegram with chat_id ''. Checked
+    // BEFORE checkTestSend below, so pressing the button against an incomplete target burns
+    // no quota either — same reasoning as the missing-target and missing-relay guards.
+    if (channel === 'telegram' && target.destination.length === 0) return { error: 'Set this channel up first.' };
     if (channel === 'email' && getSmtp() === null) {
       return { error: 'An admin needs to set up outbound email before this can send.' };
     }

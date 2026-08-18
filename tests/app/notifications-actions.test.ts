@@ -239,7 +239,7 @@ describe('Fix: the bot token is saveable ALONE, before a chat ID is known (chick
   it('token-only save round-trip: token stored, destination stays empty, enabled stays false', async () => {
     const result = await actions.saveTelegramTargetAction({}, form({ destination: '', botToken: TOKEN }));
     expect(result.error).toBeUndefined();
-    expect(result.message).toBe('Token saved. Press Detect chat ID, or enter it manually, then save again.');
+    expect(result.message).toBe('Token saved. Add your chat ID (press Detect) and save again to enable.');
 
     const stored = getTarget(currentUser.value.id, 'telegram');
     expect(stored?.secretSet).toBe(true);
@@ -287,6 +287,55 @@ describe('Fix: the bot token is saveable ALONE, before a chat ID is known (chick
     expect(stored?.destination).toBe('5551234');
     expect(stored?.enabled).toBe(true);
     expect(stored?.secretSet).toBe(true);
+  });
+
+  // Round 2 regression: the actual reported bug. notifications-client.tsx's Enabled checkbox
+  // used to default to CHECKED for a brand-new target, so the exact form state a first-time
+  // user submits by following guides.tsx step 6 verbatim (paste token, press Save, nothing
+  // else touched) is token + empty chat ID + enabled=on — not enabled omitted. This is the
+  // regression test for that real DOM default, not the earlier tests' hand-picked "enabled
+  // omitted" state.
+  it('Round 2 regression: first-time save with the DOM default (token + empty chat ID + Enabled checked) saves the token instead of rejecting everything', async () => {
+    const result = await actions.saveTelegramTargetAction({}, form({ destination: '', botToken: TOKEN, enabled: 'on' }));
+    expect(result.error).toBeUndefined();
+    expect(result.message).toBe('Token saved. Add your chat ID (press Detect) and save again to enable.');
+
+    const stored = getTarget(currentUser.value.id, 'telegram');
+    expect(stored?.secretSet).toBe(true);
+    expect(stored?.destination).toBe('');
+    expect(stored?.enabled).toBe(false);
+  });
+
+  it('Round 2: the hard rejection is reserved for an EXISTING target being toggled on with no other change', async () => {
+    // First-time save with the DOM default (enabled=on) must NOT be rejected (tested above).
+    // Only a later save that changes nothing but the checkbox — no new token, chat ID still
+    // empty — hits the hard "not yet" rejection.
+    await actions.saveTelegramTargetAction({}, form({ destination: '', botToken: TOKEN, enabled: 'on' }));
+    const result = await actions.saveTelegramTargetAction({}, form({ destination: '', botToken: '', enabled: 'on' }));
+    expect(result.error).toBe('Enter a chat ID (or press Detect chat ID below) before enabling Telegram.');
+    expect(getTarget(currentUser.value.id, 'telegram')?.enabled).toBe(false);
+  });
+});
+
+describe('Round 2 fix (MED): a token-only Telegram target cannot fire a live test send', () => {
+  it('testTargetAction refuses with "Set this channel up first." and spends no quota', async () => {
+    await actions.saveTelegramTargetAction({}, form({ destination: '', botToken: TOKEN }));
+    let calls = 0;
+    setNotifySenderForTests(async () => {
+      calls += 1;
+    });
+    for (let i = 0; i < 5; i += 1) {
+      const result = await actions.testTargetAction(form({ channel: 'telegram' }));
+      expect(result.error).toBe('Set this channel up first.');
+    }
+    expect(calls).toBe(0);
+
+    // Confirm the guard is about the empty destination, not a missing token: filling in a
+    // chat ID and enabling the channel lets a test send through immediately afterwards.
+    await actions.saveTelegramTargetAction({}, form({ destination: '5551234', botToken: '', enabled: 'on' }));
+    const sent = await actions.testTargetAction(form({ channel: 'telegram' }));
+    expect(sent.message).toBeDefined();
+    expect(calls).toBe(1);
   });
 });
 

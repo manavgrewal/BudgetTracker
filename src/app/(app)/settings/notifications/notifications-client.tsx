@@ -316,10 +316,24 @@ function TelegramFields({
             onChange={(event) => setChatId(event.target.value)}
           />
         </Field>
-        <label className="flex items-center gap-2 text-sm text-ink">
-          <input type="checkbox" name="enabled" defaultChecked={telegram?.enabled ?? true} />
-          Enabled
-        </label>
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="flex items-center gap-2 text-sm text-ink">
+            {/* Round 2 fix (HIGH): defaults to the SAVED enabled state, never true, so a
+                brand-new target's checkbox starts unchecked instead of silently asking to
+                enable a channel that has no chat ID yet. Disabled outright while the chat ID
+                field is empty — a disabled checkbox is excluded from the submitted form
+                entirely, so the server always sees enabled=false in that state regardless of
+                what was checked before the field was cleared. */}
+            <input
+              type="checkbox"
+              name="enabled"
+              defaultChecked={telegram?.enabled ?? false}
+              disabled={chatId.trim().length === 0}
+            />
+            Enabled
+          </label>
+          {chatId.trim().length === 0 ? <span className={hintClass}>Enter a chat ID first.</span> : null}
+        </div>
         <div>
           <SubmitButton>Save</SubmitButton>
         </div>
@@ -363,7 +377,10 @@ function TelegramFields({
       <div className="flex flex-wrap gap-2">
         <form action={runTelegramTest}>
           <input type="hidden" name="channel" value="telegram" />
-          <SubmitButton variant="secondary" disabled={!telegram}>
+          {/* Round 2 fix (MED): a token-only target (saved, but with no chat ID yet) has
+              nowhere to send a test message — disabled on the saved destination, not the
+              live chatId field, matching the Detect button's use of telegram?.secretSet. */}
+          <SubmitButton variant="secondary" disabled={!telegram?.destination}>
             Send test message
           </SubmitButton>
         </form>

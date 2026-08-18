@@ -266,6 +266,16 @@ export function saveTelegramTarget(input: {
   enabled: boolean;
   at?: Date;
 }): void {
+  // Round 2 fix (LOW, defense in depth): the action layer is what normally keeps enabled
+  // and destination in sync, but this function is the ONE place every caller — action,
+  // script, future feature — funnels through to write a Telegram target. A Telegram row
+  // with enabled=true and an empty chat ID is never valid: isEventEnabled/hasAnyEnabledTarget
+  // would treat it as live and fire against chat_id ''. Throwing here means that invariant
+  // holds even if a future caller forgets the action layer's own guard.
+  if (input.enabled && input.destination.length === 0) {
+    throw new Error('A Telegram target cannot be enabled without a chat ID.');
+  }
+
   const at = nowIso(input.at ?? new Date());
   const existing = getDb()
     .select({ payload: notificationTargets.secretEncrypted, destination: notificationTargets.destination })

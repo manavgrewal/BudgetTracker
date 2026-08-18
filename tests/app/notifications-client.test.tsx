@@ -299,6 +299,82 @@ describe('Fix: the Chat ID field explains the token-first flow while it is still
   });
 });
 
+// The page has three "Enabled" checkboxes (SMTP, Telegram, Email), all named "enabled" in
+// separate <form>s, so neither text nor name alone is unique. Scoping from the Chat ID
+// input's own <form> (unique by its #telegram-chat id) is what pins this to the Telegram one.
+function telegramEnabledCheckbox(container: HTMLElement): HTMLInputElement {
+  const chatIdInput = container.querySelector('#telegram-chat') as HTMLInputElement;
+  const form = chatIdInput.closest('form') as HTMLFormElement;
+  return form.querySelector('input[name="enabled"]') as HTMLInputElement;
+}
+
+describe('Round 2 fix (HIGH): the Telegram Enabled checkbox defaults to the saved state and is disabled without a chat ID', () => {
+  it('is unchecked and disabled for a brand-new target — the exact state guides.tsx step 6 leaves the form in', () => {
+    const { container } = render(<NotificationsClient {...props()} />);
+    const checkbox = telegramEnabledCheckbox(container);
+    expect(checkbox.checked).toBe(false);
+    expect(checkbox.disabled).toBe(true);
+    expect(container.textContent).toContain('Enter a chat ID first.');
+  });
+
+  it('is unchecked and disabled for a saved token-only target (empty chat ID)', () => {
+    const { container } = render(
+      <NotificationsClient
+        {...props({
+          targets: { telegram: target({ channel: 'telegram', destination: '', secretSet: true, enabled: false }), email: null },
+        })}
+      />,
+    );
+    const checkbox = telegramEnabledCheckbox(container);
+    expect(checkbox.checked).toBe(false);
+    expect(checkbox.disabled).toBe(true);
+  });
+
+  it('is enabled and reflects the saved state once a chat ID exists', () => {
+    const { container } = render(
+      <NotificationsClient
+        {...props({
+          targets: { telegram: target({ channel: 'telegram', destination: '5551234', secretSet: true, enabled: true }), email: null },
+        })}
+      />,
+    );
+    const checkbox = telegramEnabledCheckbox(container);
+    expect(checkbox.checked).toBe(true);
+    expect(checkbox.disabled).toBe(false);
+  });
+
+  it('typing a chat ID into the field re-enables the checkbox', () => {
+    const { container, getByLabelText } = render(<NotificationsClient {...props()} />);
+    const chatIdInput = getByLabelText(/chat id/i) as HTMLInputElement;
+    expect(telegramEnabledCheckbox(container).disabled).toBe(true);
+    fireEvent.change(chatIdInput, { target: { value: '5551234' } });
+    expect(telegramEnabledCheckbox(container).disabled).toBe(false);
+  });
+});
+
+describe('Round 2 fix (MED): Send test message is disabled without a saved chat ID', () => {
+  it('is disabled for a token-only target and enabled once a destination is saved', () => {
+    const withoutDestination = render(
+      <NotificationsClient
+        {...props({
+          targets: { telegram: target({ channel: 'telegram', destination: '', secretSet: true, enabled: false }), email: null },
+        })}
+      />,
+    );
+    expect((withoutDestination.getByText('Send test message') as HTMLButtonElement).disabled).toBe(true);
+    cleanup();
+
+    const withDestination = render(
+      <NotificationsClient
+        {...props({
+          targets: { telegram: target({ channel: 'telegram', destination: '5551234', secretSet: true, enabled: true }), email: null },
+        })}
+      />,
+    );
+    expect((withDestination.getByText('Send test message') as HTMLButtonElement).disabled).toBe(false);
+  });
+});
+
 describe('MUST-11.8: the guide closing line matches the rendered button label', () => {
   it('asserts against the button, not a duplicated literal', () => {
     const { getByText, container } = render(
