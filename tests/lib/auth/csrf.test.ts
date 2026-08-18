@@ -8,7 +8,7 @@ function headersFor(init: Record<string, string>): Headers {
 }
 
 function envWith(trustProxy: boolean): AppEnv {
-  return { secretKey: 'x'.repeat(32), trustProxy, tz: 'UTC', port: 3000, dataDir: '/data' };
+  return { secretKey: 'x'.repeat(32), trustProxy, tz: 'UTC', port: 3000, dataDir: '/data', watchtowerUrl: null, watchtowerToken: null };
 }
 
 describe('isSameOrigin', () => {

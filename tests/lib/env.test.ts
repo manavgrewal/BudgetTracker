@@ -48,6 +48,8 @@ describe('readEnv', () => {
       tz: DEFAULT_TZ,
       port: DEFAULT_PORT,
       dataDir: DEFAULT_DATA_DIR,
+      watchtowerUrl: null,
+      watchtowerToken: null,
     });
   });
 
@@ -254,5 +256,24 @@ describe('readEnv — zero-config SECRET_KEY file resolution', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+});
+
+describe('MUST-7.2: the two optional Watchtower variables', () => {
+  it('are null when absent and null when empty', () => {
+    const base = { SECRET_KEY: 'x'.repeat(40), DATA_DIR: '/tmp/bt-env-test' };
+    expect(readEnv(base).watchtowerUrl).toBeNull();
+    expect(readEnv(base).watchtowerToken).toBeNull();
+    expect(readEnv({ ...base, WATCHTOWER_URL: '', WATCHTOWER_TOKEN: '' }).watchtowerUrl).toBeNull();
+    expect(readEnv({ ...base, WATCHTOWER_URL: '', WATCHTOWER_TOKEN: '' }).watchtowerToken).toBeNull();
+  });
+
+  it('are read and trimmed, and a malformed URL does NOT stop the app booting', () => {
+    const base = { SECRET_KEY: 'x'.repeat(40), DATA_DIR: '/tmp/bt-env-test' };
+    const env = readEnv({ ...base, WATCHTOWER_URL: '  http://watchtower:8080/v1/update ', WATCHTOWER_TOKEN: ' tok ' });
+    expect(env.watchtowerUrl).toBe('http://watchtower:8080/v1/update');
+    expect(env.watchtowerToken).toBe('tok');
+    // MUST-8.7: validation happens at the point of use, not here.
+    expect(() => readEnv({ ...base, WATCHTOWER_URL: 'not a url', WATCHTOWER_TOKEN: 'tok' })).not.toThrow();
   });
 });

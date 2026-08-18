@@ -9,6 +9,16 @@ export interface AppEnv {
   tz: string;
   port: number;
   dataDir: string;
+  /**
+   * v1.3.1 (spec §7.2). Both optional, both absent on a build-from-source install; the
+   * prebuilt-image compose file in install/synology-compose-pull.yml sets them.
+   *
+   * readEnv() deliberately does NOT validate the URL. A malformed value must not stop the
+   * app booting — it is validated at the point of use by assertWatchtowerUrl() and reported
+   * on the Updates card instead (MUST-8.7).
+   */
+  watchtowerUrl: string | null;
+  watchtowerToken: string | null;
 }
 
 // Re-exported so every existing importer of DEFAULT_TZ from '@/lib/env' keeps working
@@ -146,5 +156,7 @@ export function readEnv(source: Partial<NodeJS.ProcessEnv> = process.env): AppEn
     tz: readTz(source),
     port,
     dataDir,
+    watchtowerUrl: (source.WATCHTOWER_URL ?? '').trim().length > 0 ? (source.WATCHTOWER_URL as string).trim() : null,
+    watchtowerToken: (source.WATCHTOWER_TOKEN ?? '').trim().length > 0 ? (source.WATCHTOWER_TOKEN as string).trim() : null,
   };
 }
