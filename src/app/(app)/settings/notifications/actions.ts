@@ -39,6 +39,7 @@ export interface DetectChatIdState {
 
 const TOKEN_FIRST = 'Save your bot token first.';
 const PATH = '/settings/notifications';
+export const NO_RELAY_ERROR = 'An admin needs to set up outbound email before this can send.';
 
 /** MUST-12.5: a host, not a URL. No scheme, no whitespace, no path. */
 const hostSchema = z
@@ -264,6 +265,10 @@ export async function testTargetAction(formData: FormData): Promise<Notification
  * writes no outbox row, but it DOES update last_error / last_success_at / verified_at.
  */
 async function runTest(userId: number, channel: Channel, opts: { relayOnly: boolean }): Promise<NotificationsState> {
+  // One read, used by both the guard and the send below. better-sqlite3 is synchronous and
+  // nothing between here and the send awaits any I/O, so there is no TOCTOU window for a
+  // second read to close -- the third copy of this check was unreachable (MUST-17.7).
+  const relay = channel === 'email' ? getSmtp() : null;
   let destination: string;
 
   if (opts.relayOnly) {
@@ -274,8 +279,7 @@ async function runTest(userId: number, channel: Channel, opts: { relayOnly: bool
     // exists once the relay itself has been saved, so it stands in as the destination
     // whenever the calling admin has no target of their own; a configured target is still
     // preferred when one exists.
-    const relay = getSmtp();
-    if (!relay) return { error: 'An admin needs to set up outbound email before this can send.' };
+    if (!relay) return { error: NO_RELAY_ERROR };
     destination = getTarget(userId, 'email')?.destination ?? relay.fromEmail;
   } else {
     const target = getTarget(userId, channel);
@@ -285,9 +289,7 @@ async function runTest(userId: number, channel: Channel, opts: { relayOnly: bool
     // BEFORE checkTestSend below, so pressing the button against an incomplete target burns
     // no quota either — same reasoning as the missing-target and missing-relay guards.
     if (channel === 'telegram' && target.destination.length === 0) return { error: 'Set this channel up first.' };
-    if (channel === 'email' && getSmtp() === null) {
-      return { error: 'An admin needs to set up outbound email before this can send.' };
-    }
+    if (channel === 'email' && relay === null) return { error: NO_RELAY_ERROR };
     destination = target.destination;
   }
 
@@ -308,20 +310,20 @@ async function runTest(userId: number, channel: Channel, opts: { relayOnly: bool
       credential = getTelegramToken(userId);
       await deliver({ channel: 'telegram', destination, botToken: credential, subject, body });
     } else {
-      const relay = getSmtp();
-      if (!relay) return { error: 'An admin needs to set up outbound email before this can send.' };
+      // `relay` is non-null on every path that reaches here: both branches above return when
+      // it is missing.
       credential = getSmtpPassword();
       await deliver({
         channel: 'email',
         destination,
         smtp: {
-          host: relay.host,
-          port: relay.port,
-          security: relay.security,
-          username: relay.username,
+          host: relay!.host,
+          port: relay!.port,
+          security: relay!.security,
+          username: relay!.username,
           password: credential,
-          fromEmail: relay.fromEmail,
-          fromName: relay.fromName,
+          fromEmail: relay!.fromEmail,
+          fromName: relay!.fromName,
         },
         subject,
         body,

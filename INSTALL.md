@@ -24,15 +24,16 @@ Next.js build. Docker pulls a ready-to-run multi-arch image (linux/amd64 + linux
    generates its own SECRET_KEY at first boot (see the note under Prerequisites). Want to
    manage the key yourself instead? Uncomment the `SECRET_KEY:` line in the compose file first.
 
-**Updates are automatic with this path.** `install/synology-compose-pull.yml` includes a
-Watchtower companion container that checks GHCR daily and recreates `budget-tracker` when a
-newer `:latest` image is published — nothing to run by hand. See "Updating" below for the
+**Updates are driven from inside the app with this path, and start off.** `install/synology-compose-pull.yml`
+includes a Watchtower companion container the app can ask to update — but until an admin opens
+**Settings -> About** and presses **Enable update checks**, this install receives no updates at
+all. See "Updating a prebuilt-image install" below for what turning it on does and the
 pinned-version alternative.
 
 Pin a specific release instead of always tracking the newest image by changing `:latest` to a
 version tag in the compose file's `image:` line, e.g. `ghcr.io/vibelogiccode/budgettracker:1.2.0`.
-Doing so also opts out of the automatic updates described above — Watchtower only replaces a
-container when a newer image lands for the tag it is already running.
+Doing so opts out of updates entirely — Watchtower only replaces a container when a newer image
+lands for the tag it is already running.
 
 > **First image lands with the v1.2.0 tag.** The image is published by
 > `.github/workflows/release-image.yml` once the `v1.2.0` tag is pushed — before that, GHCR has
@@ -195,15 +196,30 @@ something valid on your system, and start it — no SECRET_KEY to set.
 
 ---
 
-## Updating
+## Updating a prebuilt-image install
+
+If you installed with the **prebuilt-image quick start** above (`install/synology-compose-pull.yml`),
+updates are driven from inside the app, not from a script — and, starting in 1.3.1, **they are off until an admin turns them on.**
+Open **Settings -> About** and press **Enable update checks**. Once that is on, the app asks
+GitHub once a day whether a newer version has been published: bug-fix and feature releases
+install themselves, and a major version always asks first, showing exactly what changed before
+you approve it.
+
+**If your compose file predates 1.3.1,** it still has Watchtower's old daily poll and needs no
+action to keep updating — but moving to the new file is worth doing anyway, since only the new
+file lets you see and control updates from Settings → About. See "Moving to in-app updates
+(1.3.1)" in [docs/INSTALL-SYNOLOGY.md](docs/INSTALL-SYNOLOGY.md#updating) for the three-step
+migration; the same replace-the-compose-file approach works on any Docker host, not just
+Synology.
+
+## Updating a build-from-source install
 
 **This section covers the build-from-source path** (`docker-compose.yml`, the install scripts,
-and `update.sh`/`update.ps1`). If you installed with the prebuilt-image quick start above, skip
-this — updates there are automatic via the Watchtower companion in
-`install/synology-compose-pull.yml`.
+and `update.sh`/`update.ps1`). If you installed with the prebuilt-image quick start above, use the
+section above instead.
 
-**Updates are manual.** Nothing schedules them, nothing auto-updates, and the app never nags you
-with an "update available" banner. You run this when you decide to:
+**Updates are manual.** Nothing schedules them and nothing auto-updates. You run this when you
+decide to:
 
 ```bash
 ./install/update.sh          # Linux, macOS, Pi, Synology-over-SSH

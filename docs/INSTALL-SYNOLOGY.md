@@ -153,12 +153,18 @@ under **Hyper Backup** (and enable its client-side encryption) for offsite copie
 
 ## Updating
 
-**If you installed with Option A (the prebuilt GHCR image): updates are automatic, and there is
-nothing to do.** The compose file includes a Watchtower companion container that checks GHCR
-once a day, pulls a newer `:latest` image the moment one is published, and recreates the
-`budget-tracker` container against it. Database migrations run automatically on boot, so the
-brief restart is safe and unattended. Check **Settings → About** any time to see the version
-currently running.
+**If you installed with Option A (the prebuilt GHCR image): updates are driven from inside the
+app, and — new in 1.3.1 — they are off until an admin turns them on.** Open **Settings → About**
+and press **Enable update checks**. Once that is on, the app asks GitHub once a day whether a
+newer version has been published: bug-fix and feature releases install themselves, and a major
+version always asks first, showing exactly what changed before you approve it. Database
+migrations run automatically on boot, so the brief restart is safe and unattended. Check
+**Settings → About** any time to see the version currently running.
+
+Watchtower also now listens on an HTTP endpoint (port 8080 inside its own container) so the app
+can ask it to update. That port is never published to the host, so the endpoint is reachable
+only by service name from this project's private network — the same way the container's own
+healthcheck stays internal.
 
 **Note:** Container Manager's **Image** tab **Update** button does not work for GHCR images —
 it only detects updates for images hosted on Docker Hub. That gap is exactly why the compose
@@ -166,8 +172,9 @@ file ships Watchtower: without it, an install pulling `:latest` from GHCR has no
 at all through the GUI.
 
 **Manual updates (if you pinned a version tag instead of tracking `:latest`):** pinning opts you
-out of auto-updates — Watchtower only replaces a container when a newer image lands for the tag
-it is already running, so a pinned numeric tag is left alone. To move to a new version by hand:
+out of updates entirely — Watchtower only replaces a container when a newer image lands for the
+tag it is already running, so a pinned numeric tag is left alone. To move to a new version by
+hand:
 
 1. Container Manager → **Project** → `budget-tracker` → **Stop**.
 2. **Action** → **Edit** (or the project's **YAML Configurations** tab) → change the `image:`
@@ -181,6 +188,18 @@ this Watchtower companion existed, add it once:
 2. **YAML Configurations** → replace the whole YAML with the current contents of
    [`install/synology-compose-pull.yml`](../install/synology-compose-pull.yml).
 3. **Save** / **Build**, then start the project again.
+
+### Moving to in-app updates (1.3.1)
+
+1. Container Manager → **Project** → `budget-tracker` → **Stop**.
+2. **YAML Configurations** → replace the whole YAML with the current contents of
+   `install/synology-compose-pull.yml`.
+3. **Save** / **Build**, then start the project again — then open **Settings → About** and
+   press **Enable update checks**.
+
+Step 3's second half is not optional garnish. The new compose file no longer polls on a timer,
+so until you press that button this install receives no updates at all. It is one click, on a
+page you already visit to see which version you are running.
 
 The first Watchtower cycle also fixes a stale local `:latest` image automatically — it compares
 image digests, not just tags, so it re-pulls even if your NAS already has something cached under

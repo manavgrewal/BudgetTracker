@@ -166,7 +166,10 @@ describe('update.sh — manual-only, semver-safe, self-rolling-back', () => {
     expect(result.stdout).toMatch(/manual only/i);
     expect(result.stdout).toMatch(/no scheduler/i);
     expect(result.stdout).toMatch(/no auto-update/i);
-    expect(result.stdout).toMatch(/no in-app banner/i);
+    // v1.3.1 (MUST-16.8): the "no in-app banner" claim is no longer true of the product as a
+    // whole, so this script now says which path it is and where the other one lives.
+    expect(result.stdout).toMatch(/Settings -> About/);
+    expect(result.stdout).toMatch(/build-from-\s*source/i);
   });
 
   it('refreshes the base image', () => {
@@ -383,6 +386,8 @@ describe('PowerShell scripts', () => {
       expect(source).toContain(`$${flag}`);
     }
     expect(source).toMatch(/manual only/i);
+    expect(source).toMatch(/Settings -> About/);
+    expect(source).toMatch(/build-from-\s*source/i);
     expect(source).toContain('node:22-bookworm-slim');
     expect(source).toContain('npm');
     expect(source).toMatch(/PATCH AND MINOR ONLY/i);
@@ -497,13 +502,26 @@ describe('INSTALL.md', () => {
     expect(install).toContain('-shm');
   });
 
-  it('describes the update flow as manual-only with rollback (spec v1.4)', () => {
-    expect(install).toMatch(/Updates are manual/i);
-    expect(install).toMatch(/never nags|no.*banner/i);
-    expect(install).toMatch(/patch and minor/i);
-    expect(install).toMatch(/rolls back automatically|auto-?rollback/i);
-    expect(install).toContain('budget-tracker:previous');
-    expect(install).toContain('--no-deps');
+  it('describes the build-from-source update flow as manual-only with rollback', () => {
+    // MUST-16.9: re-scoped. INSTALL.md now covers BOTH paths, and the manual-only claim is
+    // true of exactly one of them; asserting it against the whole document would make the
+    // prebuilt-image section unwritable.
+    const start = install.indexOf('## Updating a build-from-source install');
+    expect(start).toBeGreaterThan(-1);
+    const section = install.slice(start);
+    expect(section).toMatch(/Updates are manual/i);
+    expect(section).toMatch(/patch and minor/i);
+    expect(section).toMatch(/rolls back automatically|auto-?rollback/i);
+    expect(section).toContain('budget-tracker:previous');
+    expect(section).toContain('--no-deps');
+  });
+
+  it('MUST-16.9: a short prebuilt-image section above it covers the opt-in in-app check', () => {
+    const prebuilt = install.indexOf('## Updating a prebuilt-image install');
+    expect(prebuilt).toBeGreaterThan(-1);
+    expect(prebuilt).toBeLessThan(install.indexOf('## Updating a build-from-source install'));
+    expect(install.slice(prebuilt)).toMatch(/Settings -> About/);
+    expect(install.slice(prebuilt)).toMatch(/off until|opt-in/i);
   });
 
   it('has the four required FAQ entries', () => {

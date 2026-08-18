@@ -193,6 +193,10 @@ function buildRequest(row: PendingRow): { request: DeliveryRequest } | { dead: s
     };
   }
 
+  // NOT the same as the re-read removed from runTest in v1.3.1 (spec MUST-17.7/17.8). THIS one
+  // is live and mandated by MUST-7.5's pre-send revalidation: enqueue and pump are separated in
+  // time -- minutes, or hours across a retry ladder -- so the relay genuinely can be changed or
+  // removed in between. Do not "simplify" it by analogy with runTest's.
   const relay = getSmtp();
   if (!relay || !relay.enabled) return { dead: CHANNEL_REMOVED_ERROR };
   let password: string;

@@ -14,7 +14,7 @@ import {
   saveUserSettings,
   setPref,
 } from '@/lib/notify/config';
-import { resetNotifyRateLimitsForTests } from '@/lib/notify/ratelimit';
+import { resetNotifyRateLimitsForTests, TEST_SEND_MAX_PER_USER } from '@/lib/notify/ratelimit';
 import { resetNotifySenderForTests, setNotifySenderForTests, NotifyError } from '@/lib/notify/send';
 import { resetOutboxPumpForTests } from '@/lib/notify/outbox';
 
@@ -40,6 +40,7 @@ vi.mock('@/lib/notify/send/telegram', async (importOriginal) => ({
 }));
 
 const actions = await import('@/app/(app)/settings/notifications/actions');
+const { NO_RELAY_ERROR } = actions;
 
 let t: TestDb;
 
@@ -488,7 +489,17 @@ describe('Review fix (IMPORTANT): testSmtpAction can verify a fresh relay before
 
   it('still refuses when no relay has been saved at all — the relay-exists guard runs before quota is spent', async () => {
     const result = await actions.testSmtpAction();
-    expect(result.error).toBe('An admin needs to set up outbound email before this can send.');
+    expect(result.error).toBe(NO_RELAY_ERROR);
+    // The title claims the guard runs BEFORE the limiter. Prove it: after the refusal, a
+    // properly configured relay must still have all three test sends available. Swapping the
+    // guard and the limiter in runTest would leave the assertion above green and this one red.
+    saveSmtp({ preset: 'custom', host: 'localhost', port: 25, security: 'none', username: 'u', password: 'p', fromEmail: 'a@b.com', fromName: 'BT', enabled: true });
+    saveEmailTarget({ userId: currentUser.value.id, destination: 'sam@example.com', enabled: true });
+    setNotifySenderForTests(async () => {});
+    for (let i = 0; i < TEST_SEND_MAX_PER_USER; i += 1) {
+      expect((await actions.testSmtpAction()).error).toBeUndefined();
+    }
+    expect((await actions.testSmtpAction()).error).toMatch(/Too many test messages/);
   });
 });
 
@@ -557,13 +568,19 @@ describe('MUST-3.7: savePreferencesAction writes only changed toggles', () => {
     });
     setPref(other, 'weekly_digest', 'email', true);
 
+    // Without a configured channel the pref save skips every channel, so this test used to
+    // pass even with a forged userId doing nothing at all. A target for the CALLER makes the
+    // write path real (MUST-17.4).
+    saveEmailTarget({ userId: currentUser.value.id, destination: 'me@example.com', enabled: true });
+
     // Even with a userId field present in the body, the other member's settings survive
     // untouched — the id comes from the session, never a field.
     await actions.savePreferencesAction(
       {},
       form({
         userId: String(other),
-        'pref:weekly_digest:email': 'off',
+        // 'pref:weekly_digest:email' is OMITTED: that is what unchecked looks like. Sending
+        // the string 'off' would have been read as CHECKED (MUST-17.5).
         comingDueDays: '14',
         budgetThresholdPct: '80',
         staleImportWeeks: '3',
@@ -584,7 +601,13 @@ describe('MUST-3.7: savePreferencesAction writes only changed toggles', () => {
     const row = t.sqlite
       .prepare('select enabled from notification_prefs where user_id = ? and event_id = ? and channel = ?')
       .get(other, 'weekly_digest', 'email') as { enabled: number } | undefined;
+    // The other member's row survives...
     expect(row?.enabled).toBe(1);
+    // ...and the caller's OWN pref was written, which is the half that was vacuous before.
+    const mine = t.sqlite
+      .prepare('select enabled from notification_prefs where user_id = ? and event_id = ? and channel = ?')
+      .get(currentUser.value.id, 'weekly_digest', 'email') as { enabled: number } | undefined;
+    expect(mine).toBeUndefined(); // omitted == unchecked == the registry default (OFF), so no row
 
     // The caller's own settings, meanwhile, WERE written.
     expect(getUserSettings(currentUser.value.id)).toEqual({
@@ -599,10 +622,16 @@ describe('MUST-3.7: savePreferencesAction writes only changed toggles', () => {
 
   it('MUST-4.3: a member cannot enable an admin-only event', async () => {
     currentUser.value.role = 'member';
+    // Without a configured channel the pref save skips every channel, so this test used to
+    // pass even if eventsFor() returned every event. A target makes the write path real.
+    saveEmailTarget({ userId: currentUser.value.id, destination: 'sam@example.com', enabled: true });
     await actions.savePreferencesAction(
       {},
       form({
         'pref:backup_failed:email': 'on',
+        // A second, NON-admin toggle in the same form, so the assertion below distinguishes
+        // the audience filter from the dormancy skip wearing its name.
+        'pref:weekly_digest:email': 'on',
         comingDueDays: '14',
         budgetThresholdPct: '80',
         staleImportWeeks: '3',
@@ -611,8 +640,8 @@ describe('MUST-3.7: savePreferencesAction writes only changed toggles', () => {
         digestHour: '8',
       }),
     );
-    const rows = t.sqlite.prepare(`select event_id from notification_prefs where event_id = 'backup_failed'`).all();
-    expect(rows).toHaveLength(0);
+    expect(t.sqlite.prepare(`select event_id from notification_prefs where event_id = 'backup_failed'`).all()).toHaveLength(0);
+    expect(t.sqlite.prepare(`select event_id from notification_prefs where event_id = 'weekly_digest'`).all()).toHaveLength(1);
   });
 });
 

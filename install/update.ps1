@@ -2,10 +2,12 @@
 .SYNOPSIS
   Budget Tracker updater for Windows: manual, semver-safe, self-rolling-back.
 .DESCRIPTION
-  Deliberately MANUAL ONLY (spec section 9): no scheduler, no auto-update, no
-  in-app banner. Dependency updates stay inside the lockfile's caret ranges
-  (patch and minor only); major upgrades are never taken automatically.
-  .\data is never touched by any branch, including the rollback.
+  Deliberately MANUAL ONLY (spec section 9): no scheduler, no auto-update
+  (the prebuilt-image install has an opt-in in-app check; this is the
+  build-from-source path). Dependency updates stay inside the lockfile's
+  caret ranges (patch and minor only); major upgrades are never taken
+  automatically. .\data is never touched by any branch, including the
+  rollback.
 #>
 [CmdletBinding()]
 param(
@@ -147,7 +149,7 @@ function Invoke-Rollback {
 
 Set-Location $ProjectDir
 if ($DryRun) { Write-Output '*** DRY RUN - nothing will be changed. ***' }
-Write-Output 'This updater is manual only: no scheduler, no auto-update, no in-app banner.'
+Write-Output 'This updater is manual only: no scheduler, no auto-update. (The prebuilt-image install has an opt-in in-app update check at Settings -> About; this script is the build-from-source path and is unaffected by it.)'
 
 $beforeVersion = Get-AppVersion
 $beforeDeps = Get-DependencyFingerprint

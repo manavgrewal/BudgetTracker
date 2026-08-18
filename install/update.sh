@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Budget Tracker — manual update with automatic rollback.
 #
-# Deliberately MANUAL ONLY (spec section 9): no scheduler, no auto-update, no
-# in-app "update available" banner. You run this when you want to.
+# Deliberately MANUAL ONLY (spec section 9): no scheduler, no auto-update
+# (the prebuilt-image install has an opt-in in-app check; this is the
+# build-from-source path). You run this when you want to.
 #
 # Dependency updates are SEMVER-SAFE: npm update stays inside the lockfile's
 # caret ranges, so patch and minor only. Major upgrades are never taken
@@ -170,7 +171,7 @@ rollback() {
 
 cd "$PROJECT_DIR"
 [ "$DRY_RUN" -eq 0 ] || say "*** DRY RUN — nothing will be changed. ***"
-say "This updater is manual only: no scheduler, no auto-update, no in-app banner."
+say "This updater is manual only: no scheduler, no auto-update. (The prebuilt-image install has an opt-in in-app update check at Settings -> About; this script is the build-from-source path and is unaffected by it.)"
 
 BEFORE_VERSION="$(app_version)"
 BEFORE_DEPS="$(dependency_fingerprint)"

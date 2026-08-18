@@ -176,14 +176,39 @@ describe('install/synology-compose-pull.yml', () => {
     expect(budgetTrackerService).toMatch(/labels:\s*\n\s*com\.centurylinklabs\.watchtower\.enable:\s*"true"/);
   });
 
-  it('ships a label-scoped watchtower companion for automatic updates', () => {
+  it('ships a label-scoped watchtower companion driven by the app over the HTTP API', () => {
     expect(watchtowerService).toContain('image: containrrr/watchtower:latest');
     expect(watchtowerService).toContain('container_name: budget-tracker-watchtower');
     expect(watchtowerService).toMatch(/restart:\s*unless-stopped/);
     expect(watchtowerService).toContain('/var/run/docker.sock:/var/run/docker.sock');
     expect(watchtowerService).toMatch(/WATCHTOWER_LABEL_ENABLE:\s*"true"/);
     expect(watchtowerService).toMatch(/WATCHTOWER_CLEANUP:\s*"true"/);
-    expect(watchtowerService).toMatch(/WATCHTOWER_POLL_INTERVAL:\s*"86400"/);
+    // v1.3.1 (MUST-16.1): HTTP-API mode replaces the daily poll.
+    expect(watchtowerService).toMatch(/WATCHTOWER_HTTP_API_UPDATE:\s*"true"/);
+    expect(watchtowerService).toMatch(/WATCHTOWER_HTTP_API_TOKEN:\s*"[^"]+"/);
+    expect(watchtowerService).not.toContain('WATCHTOWER_POLL_INTERVAL');
+  });
+
+  it('MUST-16.2: the watchtower service publishes NO port to the host, ever', () => {
+    // An unauthenticated-by-default container-control endpoint on the LAN is exactly the
+    // thing the private-network argument in MUST-8.2 depends on not existing.
+    expect(watchtowerService).not.toMatch(/^\s*ports:/m);
+  });
+
+  it('MUST-16.3: the app service carries both variables, and the token matches Watchtower\'s', () => {
+    expect(budgetTrackerService).toMatch(/WATCHTOWER_URL:\s*"http:\/\/watchtower:8080\/v1\/update"/);
+    const appToken = /WATCHTOWER_TOKEN:\s*"([^"]+)"/.exec(budgetTrackerService)?.[1];
+    const watchtowerToken = /WATCHTOWER_HTTP_API_TOKEN:\s*"([^"]+)"/.exec(watchtowerService)?.[1];
+    expect(appToken).toBeDefined();
+    expect(appToken).toBe(watchtowerToken);
+  });
+
+  it('MUST-16.4 / MUST-16.5: the header says updates are off until an admin turns them on', () => {
+    expect(pullCompose).not.toMatch(/UPDATES ARE AUTOMATIC BY DEFAULT/);
+    expect(pullCompose).toMatch(/Settings -> About/);
+    expect(pullCompose).toMatch(/RECEIVES NO UPDATES AT\s*#?\s*ALL/);
+    expect(pullCompose).toMatch(/docker\.sock/);
+    expect(pullCompose).toMatch(/never published to the host/i);
   });
 
   it('does not give watchtower the app-container hardening (it needs the Docker socket, not a locked-down filesystem)', () => {
@@ -191,9 +216,9 @@ describe('install/synology-compose-pull.yml', () => {
     expect(watchtowerService).not.toContain('cap_drop:');
   });
 
-  it('documents auto-updates as the default and explains the Watchtower security trade-off in plain English', () => {
+  it('documents how updates work now and how to opt out of them entirely', () => {
     expect(pullCompose).toMatch(/automatic/i);
-    expect(pullCompose).toMatch(/opts? out of auto-updates|opting out/i);
+    expect(pullCompose).toMatch(/opts? OUT of updates entirely|opting out/i);
     expect(pullCompose).toMatch(/docker\.sock/);
     expect(pullCompose).toMatch(/label/i);
   });

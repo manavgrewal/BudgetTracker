@@ -84,6 +84,20 @@ describe('Dockerfile', () => {
       runtimeStage.indexOf('node_modules/tesseract.js-core'),
     );
   });
+
+  it('MUST-17.2 / MUST-17.3: the check directive is a parser directive at the top of the file', () => {
+    const firstTwo = dockerfile.split('\n').slice(0, 2).map((line) => line.trim());
+    expect(firstTwo[0]).toBe('# syntax=docker/dockerfile:1');
+    expect(firstTwo[1]).toBe('# check=skip=SecretsUsedInArgOrEnv');
+  });
+
+  it('MUST-17.3: the skip can never quietly start excusing a real secret in the shipped layer', () => {
+    const runtime = dockerfile.slice(dockerfile.lastIndexOf('FROM node:22-bookworm-slim AS runner'));
+    expect(runtime).not.toMatch(/^ENV SECRET_KEY=/m);
+    // ...and the one ENV it does excuse is still the fixed build-stage placeholder.
+    expect(dockerfile).toContain('ENV SECRET_KEY=build-time-placeholder-secret-key-0123456789');
+    expect(dockerfile).toMatch(/build-stage-only string, not a credential/);
+  });
 });
 
 describe('.dockerignore', () => {

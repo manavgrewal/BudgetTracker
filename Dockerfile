@@ -1,4 +1,5 @@
 # syntax=docker/dockerfile:1
+# check=skip=SecretsUsedInArgOrEnv
 
 ############################################
 # 1. Dependencies
@@ -22,8 +23,10 @@ RUN npm ci
 FROM node:22-bookworm-slim AS builder
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
-# Placeholder so any module that reads env at import time can load during the build.
-# It is never baked into the runtime image.
+# Placeholder so any module that reads env at import time can load during the build. It is
+# never baked into the runtime image. This literal is why the file carries
+# `# check=skip=SecretsUsedInArgOrEnv` at the top: the value is a fixed, public,
+# build-stage-only string, not a credential.
 ENV SECRET_KEY=build-time-placeholder-secret-key-0123456789
 
 COPY --from=deps /app/node_modules ./node_modules
