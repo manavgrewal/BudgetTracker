@@ -42,18 +42,26 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-function loader(created: { path: string; options: Record<string, unknown> }[], classCount: number) {
+function loader(
+  created: { path: string; options: Record<string, unknown> }[],
+  classCount: number,
+  released?: string[],
+) {
   return async () => ({
     InferenceSession: {
       create: async (modelPath: string, options: Record<string, unknown>) => {
         created.push({ path: modelPath, options });
+        const release = async () => {
+          released?.push(modelPath);
+        };
         if (modelPath.includes('rec')) {
           return fakeSession({
             outputMetadata: [{ name: 'y', shape: [1, 'T', classCount] }],
             run: async () => ({ y: { data: new Float32Array(classCount), dims: [1, 1, classCount] } }),
+            release,
           });
         }
-        return fakeSession();
+        return fakeSession({ release });
       },
     },
     Tensor: class {
@@ -171,8 +179,9 @@ describe('shape guards', () => {
     expect(sessions.clsInputWidth).toBe(CLS_INPUT_WIDTH);
   });
 
-  it('throws when the classifier does not have exactly two classes (MUST-4.24)', async () => {
+  it('throws when the classifier does not have exactly two classes (MUST-4.24), releasing every session already created', async () => {
     const { classCount } = await import('@/lib/warranty/ocr/onnx/dict').then((m) => m.loadRecDictionary());
+    const released: string[] = [];
     setOrtLoaderForTests(async () => ({
       InferenceSession: {
         create: async (modelPath: string) =>
@@ -180,6 +189,9 @@ describe('shape guards', () => {
             outputMetadata: modelPath.includes('rec')
               ? [{ name: 'y', shape: [1, 'T', classCount] }]
               : [{ name: 'y', shape: [1, 4] }],
+            release: async () => {
+              released.push(modelPath);
+            },
           }),
       },
       Tensor: class {
@@ -191,11 +203,18 @@ describe('shape guards', () => {
       },
     }));
     await expect(getOnnxOcrSessions()).rejects.toThrow(/2 classes/);
+    // det, cls and rec are all created before the class-count guard runs, so all three must
+    // be released rather than leaked when the guard throws.
+    expect(released).toHaveLength(3);
   });
 
-  it('throws when the recognition width disagrees with the dictionary (MUST-3.16)', async () => {
-    setOrtLoaderForTests(loader([], 7));
+  it('throws when the recognition width disagrees with the dictionary (MUST-3.16), releasing every session already created', async () => {
+    const created: { path: string; options: Record<string, unknown> }[] = [];
+    const released: string[] = [];
+    setOrtLoaderForTests(loader(created, 7, released));
     await expect(getOnnxOcrSessions()).rejects.toThrow(/en_dict\.txt/);
+    expect(created).toHaveLength(3);
+    expect(released).toHaveLength(3);
   });
 });
 

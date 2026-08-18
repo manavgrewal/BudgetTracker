@@ -115,34 +115,52 @@ async function build(): Promise<OnnxOcrSessions> {
   requireVerifiedOnnxOcrAssets();
   const assets = resolveOnnxOcrAssets();
   const ort = await loader();
-  const det = await ort.InferenceSession.create(assets.detPath, { ...SESSION_OPTIONS });
-  const cls = await ort.InferenceSession.create(assets.clsPath, { ...SESSION_OPTIONS });
-  const rec = await ort.InferenceSession.create(assets.recPath, { ...SESSION_OPTIONS });
+  // Every create below is wrapped so a shape guard that throws after only some of the three
+  // sessions exist still releases them. Without this, a bad cls or rec asset leaks whichever
+  // native sessions were already created, every time getOnnxOcrSessions() is retried.
+  const created: OrtSessionLike[] = [];
+  try {
+    const det = await ort.InferenceSession.create(assets.detPath, { ...SESSION_OPTIONS });
+    created.push(det);
+    const cls = await ort.InferenceSession.create(assets.clsPath, { ...SESSION_OPTIONS });
+    created.push(cls);
+    const rec = await ort.InferenceSession.create(assets.recPath, { ...SESSION_OPTIONS });
+    created.push(rec);
 
-  const clsOut = cls.outputMetadata?.[0]?.shape;
-  const clsClasses = clsOut?.[clsOut.length - 1];
-  if (clsClasses !== 2) {
-    throw new Error(
-      `The orientation model declares ${String(clsClasses)} output classes; it must declare exactly 2 classes.`,
-    );
+    const clsOut = cls.outputMetadata?.[0]?.shape;
+    const clsClasses = clsOut?.[clsOut.length - 1];
+    if (clsClasses !== 2) {
+      throw new Error(
+        `The orientation model declares ${String(clsClasses)} output classes; it must declare exactly 2 classes.`,
+      );
+    }
+
+    const runRec = runnerFor(ort, rec);
+    const recClassCount = await readRecClassCount(rec, runRec);
+    const dictionary = loadRecDictionary();
+    assertRecClassCount(dictionary, recClassCount);
+
+    const sessions: OnnxOcrSessions = {
+      runDet: runnerFor(ort, det),
+      runCls: runnerFor(ort, cls),
+      runRec,
+      clsInputHeight: lastStaticDim(cls.inputMetadata?.[0]?.shape, 2, CLS_INPUT_HEIGHT),
+      clsInputWidth: lastStaticDim(cls.inputMetadata?.[0]?.shape, 3, CLS_INPUT_WIDTH),
+      recClassCount,
+      dictionary: dictionary.entries,
+    };
+    live = { sessions, raw: [det, cls, rec] };
+    return sessions;
+  } catch (error) {
+    for (const session of created) {
+      try {
+        await session.release();
+      } catch (releaseError) {
+        console.warn('[ocr] session release failed', releaseError);
+      }
+    }
+    throw error;
   }
-
-  const runRec = runnerFor(ort, rec);
-  const recClassCount = await readRecClassCount(rec, runRec);
-  const dictionary = loadRecDictionary();
-  assertRecClassCount(dictionary, recClassCount);
-
-  const sessions: OnnxOcrSessions = {
-    runDet: runnerFor(ort, det),
-    runCls: runnerFor(ort, cls),
-    runRec,
-    clsInputHeight: lastStaticDim(cls.inputMetadata?.[0]?.shape, 2, CLS_INPUT_HEIGHT),
-    clsInputWidth: lastStaticDim(cls.inputMetadata?.[0]?.shape, 3, CLS_INPUT_WIDTH),
-    recClassCount,
-    dictionary: dictionary.entries,
-  };
-  live = { sessions, raw: [det, cls, rec] };
-  return sessions;
 }
 
 /** Lazily created, and created together. At most three sessions exist at a time. */
