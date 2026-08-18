@@ -583,6 +583,14 @@ function EditForm({
   const [currentBalance, setCurrentBalance] = useState(
     item.currentBalanceCents === null ? '' : (item.currentBalanceCents / 100).toFixed(2),
   );
+  // Fix wave item 4 (pre-tag follow-up): pinned via useState at mount, exactly like
+  // `currentBalance` above -- NOT recomputed from the `item` prop on every render. A same-tab
+  // revalidate (e.g. another action's revalidatePath) can update `item` while this form is
+  // still open, and reading it live here would silently move the seed the action diffs
+  // against out from under the open form.
+  const [currentBalanceSeed] = useState(
+    item.currentBalanceCents === null ? '' : (item.currentBalanceCents / 100).toFixed(2),
+  );
   const loanApplicable = loanFieldsAllowedForKind(selectedKind);
   useEffect(() => {
     if (!loanApplicable) {
@@ -600,18 +608,16 @@ function EditForm({
           <input type="hidden" name="itemId" value={item.id} />
           <input type="hidden" name="transactionId" value={item.transactionId ?? ''} />
           <input type="hidden" name="staged" value="[]" />
-          {/* Fix wave item 4: the balance this form was RENDERED with, from the `item` prop
-              at mount -- deliberately NOT the live `currentBalance` state above, and NOT
-              gated on whether the loan fields are currently shown, so it still reflects the
-              true render-time value even if the person switches the Type dropdown away from
-              a loan kind mid-edit. The action compares the posted `currentBalance` against
+          {/* Fix wave item 4: the balance this form was RENDERED with, pinned in the
+              `currentBalanceSeed` state above at mount -- deliberately NOT the live
+              `currentBalance` state, NOT re-read from the `item` prop on every render, and
+              NOT gated on whether the loan fields are currently shown, so it still reflects
+              the true render-time value even if the person switches the Type dropdown away
+              from a loan kind mid-edit, or another action's revalidate updates `item` while
+              this form stays open. The action compares the posted `currentBalance` against
               THIS to tell "untouched" from "edited", instead of against whatever is stored
               in the database at save time -- see actions.ts's readItemInput docblock. */}
-          <input
-            type="hidden"
-            name="currentBalanceSeed"
-            value={item.currentBalanceCents === null ? '' : (item.currentBalanceCents / 100).toFixed(2)}
-          />
+          <input type="hidden" name="currentBalanceSeed" value={currentBalanceSeed} />
 
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Name" className="sm:col-span-2">

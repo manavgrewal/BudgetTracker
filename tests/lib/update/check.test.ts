@@ -128,7 +128,7 @@ describe('MUST-5.7: the five outcomes', () => {
     expect(outboxRows().map((r) => r.event_id)).toContain('update_available');
   });
 
-  it('patch with NO Watchtower — enqueues, and the body says the install cannot update itself', async () => {
+  it('patch with NO Watchtower — enqueues, and the body says there is no in-app update trigger', async () => {
     withWatchtower(false);
     setAutoApply(true);
     stubRelease(`v${APP_VERSION.split('.').slice(0, 2).join('.')}.${Number(APP_VERSION.split('.')[2]) + 1}`);
@@ -137,7 +137,7 @@ describe('MUST-5.7: the five outcomes', () => {
     expect(result.notified).toBe(true);
     expect(watchtowerCalls).toBe(0);
     const body = t.sqlite.prepare(`select body from notification_outbox limit 1`).get() as { body: string };
-    expect(body.body).toContain('cannot update itself');
+    expect(body.body).toContain('no in-app update trigger');
   });
 
   it('MUST-5.8 / AC8: a major NEVER applies, under any combination of settings', async () => {

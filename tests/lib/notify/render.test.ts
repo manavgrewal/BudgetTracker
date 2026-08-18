@@ -326,7 +326,8 @@ describe('MUST-6.4 / MUST-6.5: update_available renders three bodies and no URL'
     expect(subject).toBe('Budget Tracker 1.4.0 is available (major update)');
     expect(body).toBe(
       'You are running 1.3.1. Version 1.4.0 is a major update, so this app will not install it on its own. ' +
-        'Open Settings → About for the release notes, then update by hand.',
+        "This install has no in-app update trigger; see Settings for how to update by hand. " +
+        "The release notes are on the project's GitHub releases page.",
     );
     expect(body).not.toContain('press Review and update');
   });
@@ -342,7 +343,7 @@ describe('MUST-6.4 / MUST-6.5: update_available renders three bodies and no URL'
 
   it('minor with no apply path', () => {
     const { body } = renderEvent({ ...base, severity: 'minor', canApplyInApp: false });
-    expect(body).toContain('This install cannot update itself');
+    expect(body).toContain('This install has no in-app update trigger');
   });
 
   it('renders publishedAt with the app\'s one timestamp convention and carries no URL', () => {

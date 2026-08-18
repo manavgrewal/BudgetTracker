@@ -234,9 +234,14 @@ export function renderEvent(input: RenderInput): { subject: string; body: string
         // §7.4's fallback, updates-client.tsx's !canApplyInApp branch — has no such button to
         // press, so it gets the honest manual-update wording instead of an instruction it
         // cannot follow.
+        // Pre-tag follow-up: Settings → About only shows the LOCAL bundled changelog, which
+        // is unreachable-as-"the release notes" on a no-apply-path install that hasn't
+        // updated yet -- reworded to point at the actual source instead (no URL, per
+        // MUST-10.4), following the patch/minor tail's honest-template phrasing below.
         const tail = input.canApplyInApp
           ? 'Open Settings, read what changed, and press Review and update when you are ready.'
-          : 'Open Settings → About for the release notes, then update by hand.';
+          : "This install has no in-app update trigger; see Settings for how to update by hand. " +
+            "The release notes are on the project's GitHub releases page.";
         return {
           subject,
           body:
@@ -249,9 +254,13 @@ export function renderEvent(input: RenderInput): { subject: string; body: string
       // app's one timestamp convention and nothing else. Version strings are re-serialised
       // from parsed integers upstream (MUST-4.2), so nothing from the remote payload reaches
       // a message body unparsed.
+      // Pre-tag follow-up: "cannot update itself" is false for a pre-1.3.1-compose install --
+      // an old Watchtower can still auto-pull it even though this app has no apply path to
+      // trigger one. Reworded to the neutral, truthful claim: no in-app trigger, not "no
+      // updating happens".
       const tail = input.canApplyInApp
         ? 'Automatic updates are switched off, so open Settings and press Update now when you want it.'
-        : 'This install cannot update itself — see Settings for how to update it by hand.';
+        : 'This install has no in-app update trigger; see Settings for how it updates.';
       return {
         subject,
         body: `You are running ${input.currentVersion}. Version ${input.latestVersion} is published. ${tail}${publishedLine(input.publishedAt)}`,
