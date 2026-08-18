@@ -50,6 +50,13 @@
       "when": 1755734400000,
       "tag": "0006_notifications",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1755820800000,
+      "tag": "0007_loans",
+      "breakpoints": true
     }
   ]
 }

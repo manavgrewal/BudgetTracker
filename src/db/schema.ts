@@ -368,6 +368,31 @@ export const warrantyItems = sqliteTable(
      */
     billingCycle: text('billing_cycle', { enum: ['monthly', 'annual'] }),
     billingAmountCents: integer('billing_amount_cents'),
+    /**
+     * v1.3.1, added by drizzle/0007_loans.sql. Declared last -- same
+     * ALTER-TABLE-ADD-COLUMN convention as typeId and the billing pair above. All four
+     * nullable, and only an item whose TYPE has kind 'loan' ever carries a non-NULL value.
+     *
+     * NOT represented here -- SQL only:
+     *   - CHECK (principal_cents IS NULL OR principal_cents >= 0)
+     *   - CHECK (interest_rate_bps IS NULL OR (>= 0 AND <= 1000000))
+     *   - CHECK (current_balance_cents IS NULL OR current_balance_cents >= 0)
+     *
+     * MUST-13.1: interest_rate_bps is DISPLAY ONLY. Basis points, so 5.49% is 549. No code
+     * path multiplies, accrues, projects or amortises with it, and a grep invariant in
+     * tests/ops/loan-invariants.test.ts keeps it that way.
+     *
+     * MUST-11.7/MUST-11.8: current_balance_cents and balance_updated_at are both set or
+     * both NULL -- a CROSS-COLUMN rule, enforced in src/lib/warranty/items.ts rather than
+     * by a CHECK, because ALTER TABLE ADD COLUMN does not re-validate existing rows against
+     * a CHECK added that way. balance_updated_at is the HUMAN anchor: it is written only
+     * when a person types a balance, never by a matched payment, which is exactly what
+     * makes the debt reconstruction in src/lib/loans.ts well-defined.
+     */
+    principalCents: integer('principal_cents'),
+    interestRateBps: integer('interest_rate_bps'),
+    currentBalanceCents: integer('current_balance_cents'),
+    balanceUpdatedAt: text('balance_updated_at'),
   },
   (t) => [
     index('warranty_items_expiry_idx').on(t.expiryDate),
@@ -591,5 +616,87 @@ export const notificationOutbox = sqliteTable(
     uniqueIndex('notification_outbox_dedup_uq').on(t.userId, t.channel, t.dedupKey),
     index('notification_outbox_due_idx').on(t.status, t.nextAttemptAt),
     index('notification_outbox_user_idx').on(t.userId, t.id),
+  ],
+);
+
+/**
+ * Loan payment matching (spec 2026-08-17 §11.4). Mirrors drizzle/0007_loans.sql.
+ *
+ * NOT represented here — SQL only:
+ *   - CHECK (length(trim(merchant_contains)) >= 3)
+ *   - the coalesce(account_id, -1) EXPRESSION inside loan_matcher_rules_uq, which is what
+ *     makes "the same rule twice" impossible in the account-agnostic case too. A plain
+ *     uniqueIndex() on (itemId, merchantContains, accountId) would let two NULLs through,
+ *     so it is deliberately NOT declared below: a weaker index with the same name is worse
+ *     than none, because a future drizzle-kit push could use it to replace the real one.
+ *
+ * MUST-11.10: the three-character minimum is a real guard, not tidiness. A one- or
+ * two-character substring matches most merchant strings in a household's history, and the
+ * first import after such a rule was saved would assign every transaction to a loan. It is
+ * enforced in SQL and again in zod.
+ *
+ * MUST-11.11: merchant_contains is compared against transactions.normalized_merchant, which
+ * normalizeMerchant() UPPERCASES. The stored value is uppercased on write and compared with
+ * instr(...) > 0 against the uppercased parameter — no lower() wrapper on either side.
+ */
+export const loanMatcherRules = sqliteTable(
+  'loan_matcher_rules',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    itemId: integer('item_id')
+      .notNull()
+      .references(() => warrantyItems.id, { onDelete: 'cascade' }),
+    merchantContains: text('merchant_contains').notNull(),
+    /** NULL means "any account". */
+    accountId: integer('account_id').references(() => accounts.id, { onDelete: 'cascade' }),
+    enabled: integer('enabled', { mode: 'boolean' }).notNull().default(true),
+    createdAt: text('created_at').notNull(),
+    updatedAt: text('updated_at').notNull(),
+  },
+  (t) => [index('loan_matcher_rules_item_idx').on(t.itemId)],
+);
+
+/**
+ * The link row between a transaction and a loan (spec 2026-08-17 §11.5). Mirrors
+ * drizzle/0007_loans.sql.
+ *
+ * NOT represented here — SQL only:
+ *   - CHECK (amount_cents > 0)
+ *   - CHECK (applied_cents >= 0 AND applied_cents <= amount_cents)
+ *   - CHECK (source IN ('rule','manual'))
+ *
+ * MUST-11.14: TWO amount columns, deliberately. amount_cents is the honest record of the
+ * payment; applied_cents is what the balance actually moved by, which differs whenever the
+ * decrement clamped at zero. A reversal adds back applied_cents, so it restores the balance
+ * exactly, with no drift, in every clamping case.
+ *
+ * MUST-11.15: loan_payments_txn_item_uq IS the idempotency guard, the same shape
+ * notification_outbox_dedup_uq takes. Every link insert is INSERT ... ON CONFLICT DO
+ * NOTHING and `changes === 0` means "already linked, do not decrement"; the decrement runs
+ * in the same transaction, conditional on changes > 0, so a crash between "decide to apply"
+ * and "record that we applied" is impossible — they are one statement.
+ *
+ * MUST-11.16: (txn_id, item_id), not (txn_id) — one transaction may legitimately fund two
+ * loans. The rule path never exploits this (MUST-13.4); only a person can create the second.
+ */
+export const loanPayments = sqliteTable(
+  'loan_payments',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    txnId: integer('txn_id')
+      .notNull()
+      .references(() => transactions.id, { onDelete: 'cascade' }),
+    itemId: integer('item_id')
+      .notNull()
+      .references(() => warrantyItems.id, { onDelete: 'cascade' }),
+    amountCents: integer('amount_cents').notNull(),
+    appliedCents: integer('applied_cents').notNull(),
+    source: text('source', { enum: ['rule', 'manual'] }).notNull(),
+    createdAt: text('created_at').notNull(),
+  },
+  (t) => [
+    uniqueIndex('loan_payments_txn_item_uq').on(t.txnId, t.itemId),
+    index('loan_payments_item_idx').on(t.itemId, t.id),
+    index('loan_payments_txn_idx').on(t.txnId),
   ],
 );
