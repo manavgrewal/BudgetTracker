@@ -54,7 +54,7 @@ import {
   saveLoanRuleAction,
   updateWarrantyAction,
 } from '@/app/(app)/warranties/actions';
-import { MAX_RULES_PER_LOAN } from '@/lib/loans';
+import { MAX_RULES_PER_LOAN, listLoanRules } from '@/lib/loans';
 import { createWarrantyItem, getWarrantyItem, listWarrantyReceipts } from '@/lib/warranty/items';
 import { MAX_FILES_PER_UPLOAD, receiptFileExists } from '@/lib/warranty/receipts';
 import { writeSidecar, writeStagedReceipt } from '@/lib/warranty/staging';
@@ -677,11 +677,11 @@ describe('MUST-14.4 / MUST-14.7 / MUST-14.14: the loan readers and the rule acti
   // -- so editing only the item's NAME used to silently wipe principal/rate/balance/anchor on
   // every loan. The Loan fieldset now round-trips the item's existing values (seeded into the
   // edit form's controlled inputs), so an edit that resubmits them unchanged must leave them
-  // unchanged too. balanceUpdatedAt is asserted non-null rather than byte-identical: submitting
-  // a non-empty balance always re-stamps "now" by design (MUST-11.8's readable code above), so
-  // the regression this guards against is the field going to NULL, not the exact instant it
-  // reads.
-  it('regression (Task 9 review, MED): editing only the name of a loan with a live balance leaves principal/rate/balance intact', async () => {
+  // unchanged too. F6 fix-round: balanceUpdatedAt is asserted BYTE-IDENTICAL, not merely
+  // non-null -- readItemInput() now only re-stamps the anchor when the parsed balance actually
+  // DIFFERS from what's already stored, so an unrelated edit that resubmits the same figure
+  // must not move it at all.
+  it('regression (Task 9 review, MED / F6 fix-round): editing only the name of a loan with a live balance leaves principal/rate/balance/anchor byte-identical', async () => {
     const to = await redirectPath(() =>
       createWarrantyAction({}, formData(loanForm({ principal: '30,000.00', interestRate: '5.49', currentBalance: '25,000.00' }))),
     );
@@ -709,6 +709,72 @@ describe('MUST-14.4 / MUST-14.7 / MUST-14.14: the loan readers and the rule acti
     expect(after.principalCents).toBe(before.principalCents);
     expect(after.interestRateBps).toBe(before.interestRateBps);
     expect(after.currentBalanceCents).toBe(before.currentBalanceCents);
+    expect(after.balanceUpdatedAt).toBe(before.balanceUpdatedAt);
+  });
+
+  it('F6 fix-round: a CHANGED balance still gets a fresh anchor', async () => {
+    const to = await redirectPath(() =>
+      createWarrantyAction({}, formData(loanForm({ principal: '30,000.00', interestRate: '5.49', currentBalance: '25,000.00' }))),
+    );
+    const id = Number(to.split('/').pop());
+    const before = getWarrantyItem(id)!;
+
+    await updateWarrantyAction(
+      {},
+      formData(
+        baseFields({
+          itemId: String(id),
+          typeId: String(before.typeId),
+          principal: '30,000.00',
+          interestRate: '5.49',
+          currentBalance: '24,000.00',
+        }),
+      ),
+    );
+    const after = getWarrantyItem(id)!;
+    expect(after.currentBalanceCents).toBe(2_400_000);
     expect(after.balanceUpdatedAt).not.toBeNull();
+    expect(after.balanceUpdatedAt).not.toBe(before.balanceUpdatedAt);
+  });
+});
+
+describe('F9 fix-round: the backfill checkbox only treats "on" as checked', () => {
+  it('an omitted backfill field skips backfillLoanRule entirely (no "past payments linked" copy)', async () => {
+    const itemId = seedLoanItem();
+    const result = await saveLoanRuleAction({}, formData({ itemId: String(itemId), merchantContains: 'HONDA FIN' }));
+    expect(result.message).toBe('Rule saved. It will apply to payments that arrive from now on.');
+  });
+
+  it('backfill="on" still runs the historical pass', async () => {
+    const itemId = seedLoanItem();
+    const result = await saveLoanRuleAction(
+      {},
+      formData({ itemId: String(itemId), merchantContains: 'HONDA FIN', backfill: 'on' }),
+    );
+    expect(result.message).toMatch(/past payments linked/);
+  });
+});
+
+describe('F10 fix-round: deleteLoanRuleAction verifies the rule belongs to itemId', () => {
+  it('refuses to delete a rule that exists but belongs to a DIFFERENT item', async () => {
+    const itemA = seedLoanItem();
+    const itemB = seedLoanItem();
+    await saveLoanRuleAction({}, formData({ itemId: String(itemA), merchantContains: 'HONDA FIN' }));
+    const ruleId = listLoanRules(itemA)[0]!.id;
+
+    const result = await deleteLoanRuleAction(formData({ id: String(ruleId), itemId: String(itemB) }));
+    expect(result.error).toBe('That rule no longer exists.');
+    // Untouched -- still there under its real item.
+    expect(listLoanRules(itemA)).toHaveLength(1);
+  });
+
+  it('deletes the rule when the pair actually matches', async () => {
+    const itemId = seedLoanItem();
+    await saveLoanRuleAction({}, formData({ itemId: String(itemId), merchantContains: 'HONDA FIN' }));
+    const ruleId = listLoanRules(itemId)[0]!.id;
+
+    const result = await deleteLoanRuleAction(formData({ id: String(ruleId), itemId: String(itemId) }));
+    expect(result.message).toBeTruthy();
+    expect(listLoanRules(itemId)).toHaveLength(0);
   });
 });

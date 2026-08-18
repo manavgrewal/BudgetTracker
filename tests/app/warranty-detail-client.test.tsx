@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, cleanup, screen, fireEvent, waitFor } from '@testing-library/react';
 import { WarrantyDetailClient } from '@/app/(app)/warranties/[id]/warranty-detail-client';
-import { updateWarrantyAction } from '@/app/(app)/warranties/actions';
+import { deleteLoanRuleAction, updateWarrantyAction } from '@/app/(app)/warranties/actions';
 import type { WarrantyItemRow, WarrantyReceiptRow } from '@/lib/warranty/items';
 
 vi.mock('@/app/(app)/warranties/actions', () => ({
@@ -292,11 +292,17 @@ describe('WarrantyDetailClient', () => {
 
   // v1.3.1: widened -- a loan's billing pair is its regular payment amount/cadence, so the
   // Billing row now renders for a loan too, using the loan cycle-suffix wording ("per year").
-  it('renders the Billing row for a loan-kind item, using the loan cycle wording', () => {
+  // F5 fix-round: this row's own label is now routed through the kind matrix too (it used to
+  // be hard-coded "Billing" for every kind, which is what produced the duplicate "Billing" /
+  // "Payment" pair the fix-round found -- see the "the loan surfaces" describe block below for
+  // the de-duplication test).
+  it('renders the Payment row (not Billing) for a loan-kind item, using the loan cycle wording', () => {
     const { container } = renderDetail({ item: item({ kind: 'loan', billingCycle: 'annual', billingAmountCents: 5000 }) });
-    const dt = Array.from(container.querySelectorAll('dt')).find((el) => el.textContent === 'Billing')!;
+    const dt = Array.from(container.querySelectorAll('dt')).find((el) => el.textContent === 'Payment')!;
     expect(dt).toBeTruthy();
     expect(dt.nextElementSibling?.textContent).toBe('$50.00 per year');
+    // F5: exactly one row for the payment/cycle info -- no leftover "Billing" duplicate.
+    expect(Array.from(container.querySelectorAll('dt')).some((el) => el.textContent === 'Billing')).toBe(false);
   });
 
   it("shows the edit form's Billing fields for a subscription type and hides them for warranty", () => {
@@ -424,5 +430,59 @@ describe('MUST-14.1 / MUST-14.3 / MUST-14.5 / MUST-14.6 / MUST-12.3: the loan su
     expect(screen.getByRole('button', { name: /remove/i })).toBeTruthy();
     const backfill = screen.getByRole('checkbox', { name: /also link matching payments/i }) as HTMLInputElement;
     expect(backfill.checked).toBe(false);
+  });
+
+  // F3 fix-round: Remove now goes through useActionState (like Add rule), so a stale delete --
+  // the rule already gone, e.g. removed from another tab -- surfaces its error instead of
+  // failing silently.
+  it('F3 fix-round: a stale Remove (already deleted elsewhere) shows the error', async () => {
+    vi.mocked(deleteLoanRuleAction).mockResolvedValueOnce({ error: 'That rule no longer exists.' });
+    renderDetail({
+      item: item({ typeId: 3, typeName: 'Car loan', kind: 'loan' }),
+      receipts: [],
+      rules: [{ id: 1, itemId: 42, merchantContains: 'HONDA FIN', accountId: null, enabled: true }],
+      accounts: [],
+    });
+    fireEvent.click(screen.getByRole('button', { name: /remove/i }));
+    await waitFor(() => {
+      expect(screen.getByText('That rule no longer exists.')).toBeTruthy();
+    });
+  });
+
+  // F8 fix-round: a plain-voice heads-up next to the balance, shown only once there is
+  // something that COULD be unassigned.
+  it('F8 fix-round: shows the unassign/statement hint once a loan has linked payments, not before', () => {
+    renderDetail({
+      item: item({ kind: 'loan', currentBalanceCents: 1_500_000, balanceUpdatedAt: '2026-08-01T00:00:00.000Z' }),
+      paymentCount: 0,
+    });
+    expect(screen.queryByText(/removing an old payment can push the balance/i)).toBeNull();
+    cleanup();
+
+    renderDetail({
+      item: item({ kind: 'loan', currentBalanceCents: 1_500_000, balanceUpdatedAt: '2026-08-01T00:00:00.000Z' }),
+      paymentCount: 3,
+    });
+    expect(screen.getByText(/removing an old payment can push the balance/i)).toBeTruthy();
+    // Plain voice: no em dash in the hint itself.
+    expect(screen.getByText(/removing an old payment can push the balance/i).textContent).not.toContain('—');
+  });
+
+  // F11 fix-round: the money block's Detail rows are dt/dd pairs and must live inside a real
+  // <dl>, not a bare <div>, for valid HTML and correct a11y pairing.
+  it('F11 fix-round: the money block wraps its Detail rows in a <dl>', () => {
+    const { container } = renderDetail({
+      item: item({
+        kind: 'loan',
+        principalCents: 3_000_000,
+        interestRateBps: 549,
+        currentBalanceCents: 1_500_000,
+        balanceUpdatedAt: '2026-08-01T00:00:00.000Z',
+      }),
+      paymentCount: 4,
+      lastPaymentAt: '2026-08-10T00:00:00.000Z',
+    });
+    const dt = Array.from(container.querySelectorAll('dt')).find((el) => el.textContent === 'Original')!;
+    expect(dt.closest('dl')).toBeTruthy();
   });
 });

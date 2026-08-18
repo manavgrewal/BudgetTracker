@@ -160,7 +160,10 @@ describe('MUST-14.8 … MUST-14.11: assign and unassign', () => {
   it('links and decrements; a second assign to the same loan is a reported no-op', async () => {
     setup();
     const { itemId, txnId } = seedLoanAndSpend(2_000_000, -45_000);
-    expect((await assignToLoanAction(formData({ transactionId: String(txnId), itemId: String(itemId) }))).message).toBe('Assigned.');
+    // F2 fix-round: "Assigned." alone became the honest amount-and-direction message below.
+    expect((await assignToLoanAction(formData({ transactionId: String(txnId), itemId: String(itemId) }))).message).toBe(
+      'Assigned. $450.00 came off the balance.',
+    );
     expect(balanceOf(itemId)).toBe(1_955_000);
     expect((await assignToLoanAction(formData({ transactionId: String(txnId), itemId: String(itemId) }))).message).toBe(
       'That transaction is already linked to this loan.',
@@ -196,21 +199,21 @@ describe('MUST-14.8 … MUST-14.11: assign and unassign', () => {
     expect((await unassignFromLoanAction(formData({ transactionId: '1', itemId: '1' }))).error).toBe(CROSS_ORIGIN_ERROR);
   });
 
-  it('NEW-3 fix-round: a payment unassign says the balance went back UP', async () => {
+  it('NEW-3 / F1 fix-round: a payment unassign says the balance went back UP, with the amount', async () => {
     setup();
     const { itemId, txnId } = seedLoanAndSpend(2_000_000, -45_000);
     await assignToLoanAction(formData({ transactionId: String(txnId), itemId: String(itemId) }));
     const result = await unassignFromLoanAction(formData({ transactionId: String(txnId), itemId: String(itemId) }));
-    expect(result.message).toBe('Unassigned. The balance has gone back up by exactly what came off it.');
+    expect(result.message).toBe('Unassigned. The balance has gone back up by $450.00.');
   });
 
-  it('NEW-3 fix-round: a disbursement unassign says the balance went back DOWN, not up', async () => {
+  it('NEW-3 / F1 fix-round: a disbursement unassign says the balance went back DOWN, not up, with the amount', async () => {
     setup();
     const { itemId, txnId } = seedLoanAndSpend(2_000_000, 60_000);
     await assignToLoanAction(formData({ transactionId: String(txnId), itemId: String(itemId) }));
     expect(balanceOf(itemId)).toBe(2_060_000);
     const result = await unassignFromLoanAction(formData({ transactionId: String(txnId), itemId: String(itemId) }));
-    expect(result.message).toBe('Unassigned. The balance has gone back down by exactly what came off it.');
+    expect(result.message).toBe('Unassigned. The balance has gone back down by $600.00.');
     expect(balanceOf(itemId)).toBe(2_000_000);
   });
 
@@ -249,5 +252,104 @@ describe('MUST-14.8 … MUST-14.11: assign and unassign', () => {
     expect(result.error).toBeUndefined();
     expect(result.message).toBeTruthy();
     expect(balanceOf(car)).toBe(0);
+  });
+
+  it('F2 fix-round: a disbursement says the balance went up, with amount and direction', async () => {
+    setup();
+    const { itemId, txnId } = seedLoanAndSpend(2_000_000, 60_000);
+    const result = await assignToLoanAction(formData({ transactionId: String(txnId), itemId: String(itemId) }));
+    expect(result.message).toBe('Assigned. The balance went up $600.00 (money in).');
+  });
+
+  it('F2 fix-round: assigning against an UNKNOWN balance says so honestly, and applies nothing', async () => {
+    setup();
+    const loanType = createItemType(`Loan ${randomUUID()}`, 'loan');
+    const itemId = createWarrantyItem({
+      name: 'Unknown Balance Loan',
+      vendor: null,
+      model: null,
+      serial: null,
+      purchaseDate: '2026-01-01',
+      warrantyMonths: null,
+      isLifetime: false,
+      priceCents: null,
+      ownerUserId: ctx!.userId,
+      transactionId: null,
+      typeId: loanType.id,
+      notes: null,
+      principalCents: null,
+      interestRateBps: null,
+      currentBalanceCents: null,
+      balanceUpdatedAt: null,
+    });
+    const txn = current!.db.get<{ id: number }>(sql`
+      insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, created_by, created_at, updated_at)
+      values (${ctx!.accountId}, '2026-03-05', 'HONDA FIN PAYMENT', ${normalizeMerchant('HONDA FIN PAYMENT')}, -45000, ${ctx!.userId}, ${nowIso()}, ${nowIso()})
+      returning id`);
+    const result = await assignToLoanAction(formData({ transactionId: String(txn.id), itemId: String(itemId) }));
+    expect(result.message).toBe('Assigned. The balance was unknown, so it did not move.');
+    expect(balanceOf(itemId)).toBeNull();
+  });
+
+  it('F2 fix-round: assigning a payment against an already-zero balance says nothing came off', async () => {
+    setup();
+    const itemId = seedLoanItem({ balanceCents: 0 });
+    const txn = current!.db.get<{ id: number }>(sql`
+      insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, created_by, created_at, updated_at)
+      values (${ctx!.accountId}, '2026-03-05', 'HONDA FIN PAYMENT', ${normalizeMerchant('HONDA FIN PAYMENT')}, -45000, ${ctx!.userId}, ${nowIso()}, ${nowIso()})
+      returning id`);
+    const result = await assignToLoanAction(formData({ transactionId: String(txn.id), itemId: String(itemId) }));
+    expect(result.message).toBe('Assigned. The balance was already $0.00, so nothing came off.');
+    expect(balanceOf(itemId)).toBe(0);
+  });
+
+  it('F2 fix-round: a payment larger than the remaining balance clamps and says the balance is now $0.00', async () => {
+    setup();
+    const itemId = seedLoanItem({ balanceCents: 10_000 });
+    const txn = current!.db.get<{ id: number }>(sql`
+      insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, created_by, created_at, updated_at)
+      values (${ctx!.accountId}, '2026-03-05', 'HONDA FIN PAYMENT', ${normalizeMerchant('HONDA FIN PAYMENT')}, -45000, ${ctx!.userId}, ${nowIso()}, ${nowIso()})
+      returning id`);
+    const result = await assignToLoanAction(formData({ transactionId: String(txn.id), itemId: String(itemId) }));
+    expect(result.message).toBe('Assigned. $100.00 came off; the balance is now $0.00.');
+    expect(balanceOf(itemId)).toBe(0);
+  });
+
+  it('F1 fix-round: unassigning a link that never moved the balance says so, without claiming a restore', async () => {
+    setup();
+    const loanType = createItemType(`Loan ${randomUUID()}`, 'loan');
+    const itemId = createWarrantyItem({
+      name: 'Unknown Balance Loan 2',
+      vendor: null,
+      model: null,
+      serial: null,
+      purchaseDate: '2026-01-01',
+      warrantyMonths: null,
+      isLifetime: false,
+      priceCents: null,
+      ownerUserId: ctx!.userId,
+      transactionId: null,
+      typeId: loanType.id,
+      notes: null,
+      principalCents: null,
+      interestRateBps: null,
+      currentBalanceCents: null,
+      balanceUpdatedAt: null,
+    });
+    const txn = current!.db.get<{ id: number }>(sql`
+      insert into transactions (account_id, date, raw_description, normalized_merchant, amount_cents, created_by, created_at, updated_at)
+      values (${ctx!.accountId}, '2026-03-06', 'HONDA FIN PAYMENT', ${normalizeMerchant('HONDA FIN PAYMENT')}, -45000, ${ctx!.userId}, ${nowIso()}, ${nowIso()})
+      returning id`);
+    await assignToLoanAction(formData({ transactionId: String(txn.id), itemId: String(itemId) }));
+    const result = await unassignFromLoanAction(formData({ transactionId: String(txn.id), itemId: String(itemId) }));
+    expect(result.error).toBeUndefined();
+    expect(result.message).toBe("Unassigned. That link never moved the balance, so there's nothing to restore.");
+  });
+
+  it('F12 fix-round: an omitted loan selection gets a friendly prompt instead of "Invalid request."', async () => {
+    setup();
+    const { txnId } = seedLoanAndSpend(2_000_000, -45_000);
+    const result = await assignToLoanAction(formData({ transactionId: String(txnId), itemId: '' }));
+    expect(result.error).toBe('Pick a loan first.');
   });
 });

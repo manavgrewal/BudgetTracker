@@ -152,15 +152,18 @@ export function WarrantyDetailClient({
     return reRunOcrAction(prev, formData);
   }, initial);
 
-  // v1.3.1: the Payment matching sub-card's own add-rule state, reported inline within the
-  // card rather than through the top FormError/Notice above -- it is not one of the five
-  // actions the activeSlot mechanism disambiguates between. Remove is a plain server action
-  // reference (deleteLoanRuleAction already takes just `formData`, matching a <form action>
-  // directly): its own revalidatePath call refreshes `rules` from the server automatically.
+  // v1.3.1: the Payment matching sub-card's own add/remove-rule state, reported inline within
+  // the card rather than through the top FormError/Notice above -- it is not one of the five
+  // actions the activeSlot mechanism disambiguates between.
   const [ruleState, addRule] = useActionState(saveLoanRuleAction, initial);
-  const removeRule = async (formData: FormData) => {
-    await deleteLoanRuleAction(formData);
-  };
+  // F3 fix-round: routed through useActionState (like addRule), not a bare fire-and-forget
+  // reference -- a stale delete (the rule already removed in another tab) now surfaces "That
+  // rule no longer exists." instead of failing silently. revalidateAll's own revalidatePath
+  // call still refreshes `rules` from the server either way.
+  const [deleteRuleState, removeRule] = useActionState(
+    (_prev: WarrantyActionState, formData: FormData) => deleteLoanRuleAction(formData),
+    initial,
+  );
 
   const slotState =
     activeSlot === 'edit'
@@ -292,7 +295,12 @@ export function WarrantyDetailClient({
                   // one alone either lies ("— / month", cycle set but no amount) or silently drops
                   // a value the member entered (amount set but no cycle shown) -- exactly the kind
                   // of blank-reads-as-broken defect task B set out to eliminate for the end date.
-                  <Detail label="Billing">
+                  // F5 fix-round: this is now the ONLY billing/payment row on the page -- it used
+                  // to be duplicated by a second "Payment" row in the money block below, showing
+                  // the exact same cycle+amount twice under two different labels. The label
+                  // itself is routed through the kind matrix (MUST-12.3) so a loan reads
+                  // "Payment", not "Billing".
+                  <Detail label={billingSectionLabelForKind(item.kind)}>
                     {item.billingCycle !== null && item.billingAmountCents !== null ? (
                       <>
                         <Money cents={item.billingAmountCents} plain /> {billingCycleSuffixForKind(item.kind, item.billingCycle)}
@@ -336,18 +344,32 @@ export function WarrantyDetailClient({
                       )}
                     </>
                   )}
+                  {/* F8 fix-round: a plain-voice heads-up next to the number people are about to
+                      unassign a payment from -- removing an old link doesn't just undo one
+                      transaction in isolation, it can leave the balance ahead of what the
+                      household's latest paper statement says, and that's worth saying before
+                      someone clicks Unassign expecting a plain undo. */}
+                  {paymentCount === 0 ? null : (
+                    <p className="text-xs text-subtle">
+                      Removing an old payment can push the balance above your latest statement figure.
+                    </p>
+                  )}
                   {payoffFraction === null ? null : <LoanProgressBar fraction={payoffFraction} label={item.name} />}
-                  {item.principalCents === null ? null : <Detail label="Original">{formatCents(item.principalCents)}</Detail>}
-                  {item.interestRateBps === null ? null : (
-                    <Detail label="Rate">{(item.interestRateBps / 100).toFixed(2)}%</Detail>
+                  {/* F11 fix-round: the Detail rows below are dt/dd pairs and belong inside a
+                      dl, same as the summary grid above -- they were previously loose divs. */}
+                  {item.principalCents === null &&
+                  item.interestRateBps === null &&
+                  lastPaymentAt === null &&
+                  paymentCount === 0 ? null : (
+                    <dl className="flex flex-col gap-2">
+                      {item.principalCents === null ? null : <Detail label="Original">{formatCents(item.principalCents)}</Detail>}
+                      {item.interestRateBps === null ? null : (
+                        <Detail label="Rate">{(item.interestRateBps / 100).toFixed(2)}%</Detail>
+                      )}
+                      {lastPaymentAt === null ? null : <Detail label="Last payment">{lastPaymentAt.slice(0, 10)}</Detail>}
+                      {paymentCount === 0 ? null : <Detail label="Payments linked">{paymentCount}</Detail>}
+                    </dl>
                   )}
-                  {item.billingCycle === null || item.billingAmountCents === null ? null : (
-                    <Detail label="Payment">
-                      {formatCents(item.billingAmountCents)} {billingCycleSuffixForKind(item.kind, item.billingCycle)}
-                    </Detail>
-                  )}
-                  {lastPaymentAt === null ? null : <Detail label="Last payment">{lastPaymentAt.slice(0, 10)}</Detail>}
-                  {paymentCount === 0 ? null : <Detail label="Payments linked">{paymentCount}</Detail>}
                 </div>
               )}
             </CardBody>
@@ -366,32 +388,38 @@ export function WarrantyDetailClient({
               takes it off the balance. The payment still counts in your budget and in your reports.
             </p>
             {rules.length === 0 ? null : (
-              <TableWrap bare>
-                <thead>
-                  <tr>
-                    <th scope="col">Merchant contains</th>
-                    <th scope="col">Account</th>
-                    <th scope="col"></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rules.map((rule) => (
-                    <tr key={rule.id}>
-                      <td className="font-medium text-ink">{rule.merchantContains}</td>
-                      <td className="text-muted">
-                        {rule.accountId === null ? 'Any account' : (accounts.find((a) => a.id === rule.accountId)?.name ?? 'Any account')}
-                      </td>
-                      <td className="text-right">
-                        <form action={removeRule}>
-                          <input type="hidden" name="id" value={rule.id} />
-                          <input type="hidden" name="itemId" value={item.id} />
-                          <SubmitButton className="btn btn--ghost btn--sm">Remove</SubmitButton>
-                        </form>
-                      </td>
+              <>
+                <TableWrap bare>
+                  <thead>
+                    <tr>
+                      <th scope="col">Merchant contains</th>
+                      <th scope="col">Account</th>
+                      <th scope="col"></th>
                     </tr>
-                  ))}
-                </tbody>
-              </TableWrap>
+                  </thead>
+                  <tbody>
+                    {rules.map((rule) => (
+                      <tr key={rule.id}>
+                        <td className="font-medium text-ink">{rule.merchantContains}</td>
+                        <td className="text-muted">
+                          {rule.accountId === null ? 'Any account' : (accounts.find((a) => a.id === rule.accountId)?.name ?? 'Any account')}
+                        </td>
+                        <td className="text-right">
+                          <form action={removeRule}>
+                            <input type="hidden" name="id" value={rule.id} />
+                            <input type="hidden" name="itemId" value={item.id} />
+                            <SubmitButton className="btn btn--ghost btn--sm">Remove</SubmitButton>
+                          </form>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </TableWrap>
+                {/* F3 fix-round: the stale-delete case (removed already, e.g. in another tab)
+                    now has somewhere to surface -- "That rule no longer exists." -- instead of
+                    the click silently doing nothing. */}
+                <FormError message={deleteRuleState.error} />
+              </>
             )}
             <form action={addRule} className="flex flex-col gap-3">
               <input type="hidden" name="itemId" value={item.id} />

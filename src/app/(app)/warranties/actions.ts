@@ -187,11 +187,26 @@ function readTypeId(formData: FormData): number | null {
   return parsed.data;
 }
 
-function readItemInput(formData: FormData, fallbackOwnerId: number) {
+/**
+ * F6 fix-round: `existingBalance` is the item's balance/anchor AS ALREADY STORED, supplied
+ * only by updateWarrantyAction (createWarrantyAction has no "existing" row, so a non-empty
+ * balance there always gets a fresh anchor, unchanged). When the parsed figure is the SAME
+ * cents value already on file, the anchor is carried forward untouched instead of being
+ * re-stamped to "now" -- an unrelated edit (the loan fieldset simply re-submitting whatever
+ * was already there) must not move MUST-11.8's anchor. Only a balance that actually DIFFERS
+ * (including from-null and to-null transitions, both already handled by the null branch)
+ * gets a fresh nowIso().
+ */
+function readItemInput(
+  formData: FormData,
+  fallbackOwnerId: number,
+  existingBalance?: { cents: number | null; updatedAt: string | null },
+) {
   const owner = readOptionalId(formData, 'ownerUserId') ?? fallbackOwnerId;
   // Hoisted so the anchor written just below can be derived from the SAME parsed value,
   // rather than re-reading (and re-parsing) the balance field a second time.
   const balanceCents = readBalanceCents(formData);
+  const balanceUnchanged = existingBalance !== undefined && existingBalance.cents === balanceCents;
   return warrantyInputSchema(todayIso()).safeParse({
     name: str(formData, 'name'),
     vendor: str(formData, 'vendor'),
@@ -215,7 +230,7 @@ function readItemInput(formData: FormData, fallbackOwnerId: number) {
     // payment, never by an unassign, never by an import undo. It answers "when did a person
     // last tell us the truth about this balance", which is exactly the question the debt
     // reconstruction needs.
-    balanceUpdatedAt: balanceCents === null ? null : nowIso(),
+    balanceUpdatedAt: balanceCents === null ? null : balanceUnchanged ? (existingBalance!.updatedAt ?? nowIso()) : nowIso(),
   });
 }
 
@@ -306,9 +321,15 @@ export async function updateWarrantyAction(
   const id = idField.safeParse(formData.get('itemId'));
   if (!id.success) return { error: 'Invalid request.' };
 
+  // F6 fix-round: fetched BEFORE readItemInput so the anchor comparison has something to
+  // compare against -- an unrelated edit (name only, the loan fieldset resubmitting the same
+  // balance it was seeded with) must not re-stamp balance_updated_at to "now".
+  const existing = getWarrantyItem(id.data);
+  if (!existing) return { error: 'That item no longer exists.' };
+
   let savedKind: ItemKind = 'warranty';
   try {
-    const parsed = readItemInput(formData, 0);
+    const parsed = readItemInput(formData, 0, { cents: existing.currentBalanceCents, updatedAt: existing.balanceUpdatedAt });
     if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Could not save that item.' };
     if (!typeExistsOrNull(parsed.data.typeId)) return { error: ITEM_TYPE_MISSING_ERROR };
     if (!updateWarrantyItem(id.data, parsed.data)) return { error: 'That item no longer exists.' };
@@ -447,7 +468,10 @@ export async function saveLoanRuleAction(_prev: WarrantyActionState, formData: F
     itemId: str(formData, 'itemId'),
     merchantContains: str(formData, 'merchantContains'),
     accountId: accountRaw.length === 0 ? null : accountRaw,
-    backfill: formData.get('backfill') !== null,
+    // F9 fix-round: 'on' is the ONLY value a real checked checkbox ever posts -- checking
+    // `!== null` also treated any other stray value as checked, which is stricter to get
+    // wrong than it looks: MUST-13.9's whole point is that the backfill pass is opt-IN.
+    backfill: formData.get('backfill') === 'on',
   });
   if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Could not save that rule.' };
 
@@ -495,7 +519,14 @@ export async function deleteLoanRuleAction(formData: FormData): Promise<Warranty
     .object({ id: z.coerce.number().int().positive(), itemId: z.coerce.number().int().positive() })
     .safeParse({ id: formData.get('id'), itemId: formData.get('itemId') });
   if (!parsed.success) return { error: 'Invalid request.' };
-  if (!deleteLoanRule(parsed.data.id)) return { error: 'That rule no longer exists.' };
+  // F10 fix-round: the rule must actually belong to the claimed itemId, not merely exist
+  // somewhere -- a mismatched (tampered, or a stale-tab race against a rule that moved) pair
+  // would otherwise delete an unrelated rule and revalidate the wrong item's page. Checking
+  // via listLoanRules(itemId) rather than deleteLoanRule's own boolean return is what makes
+  // this a real existence-under-this-item check rather than a global one.
+  const rule = listLoanRules(parsed.data.itemId).find((r) => r.id === parsed.data.id);
+  if (rule === undefined) return { error: 'That rule no longer exists.' };
+  deleteLoanRule(parsed.data.id);
   revalidateAll(parsed.data.itemId);
   return { message: 'Rule removed. Payments already linked are untouched.' };
 }

@@ -167,7 +167,9 @@ describe('MUST-14.8 / MUST-14.9: the row control', () => {
     expect(screen.queryByText('Assign')).toBeNull();
   });
 
-  it('an unlinked row renders the select; a linked row renders the name and Unassign', () => {
+  it('a linked row shows the link and Unassign, AND keeps the assign select reachable (F4 fix-round)', () => {
+    // F4: the select used to disappear entirely once a row had a link, which made the
+    // over-link warn path (MUST-14.10) unreachable from the UI. It must stay visible.
     render(
       <TransactionsClient
         {...baseProps}
@@ -179,9 +181,28 @@ describe('MUST-14.8 / MUST-14.9: the row control', () => {
         }}
       />,
     );
-    expect(screen.getByText('Civic')).toBeTruthy();
     expect(screen.getByText('Unassign')).toBeTruthy();
-    expect(screen.queryByText('Assign to loan…')).toBeNull();
+    // "Civic" appears twice now -- the link's own name, and the (still-visible) select's
+    // option -- so this is an AllBy, not a plain getByText.
+    expect(screen.getAllByText('Civic').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText('Assign to loan…')).toBeTruthy();
+  });
+
+  it('renders every link on a row, each with its own Unassign (F4 fix-round: a combined payment)', () => {
+    render(
+      <TransactionsClient
+        {...baseProps}
+        loanOptions={[{ id: 7, name: 'Civic' }, { id: 9, name: 'Boat' }]}
+        loanLinks={{
+          [linkedRowId]: [
+            { id: 1, txnId: linkedRowId, itemId: 7, itemName: 'Civic', amountCents: 45000, appliedCents: 45000, source: 'manual' },
+            { id: 2, txnId: linkedRowId, itemId: 9, itemName: 'Boat', amountCents: 45000, appliedCents: 45000, source: 'manual' },
+          ],
+        }}
+      />,
+    );
+    expect(screen.getAllByText('Unassign')).toHaveLength(2);
+    expect(screen.getByText('Boat', { selector: 'span.text-xs' })).toBeTruthy();
   });
 
   it('an unlinked row renders the select when there ARE loans', () => {

@@ -319,32 +319,49 @@ export function TransactionsClient({
                   )}
                   {/* MUST-14.8: a transfer never carries a loan control, and neither does a
                       page that was given no loans. The established precedent for a per-row
-                      action is the link above. */}
-                  {row.isTransfer || loanOptions.length === 0 ? null : (loanLinks[row.id] ?? []).length > 0 ? (
-                    <span className="flex items-center gap-1.5">
-                      <span className="text-xs text-muted">{loanLinks[row.id]![0]!.itemName}</span>
-                      <form action={unassignLoan}>
+                      action is the link above.
+                      F4 fix-round: EVERY link on the row gets its own line and its own
+                      Unassign, not just the first -- a combined payment split across two
+                      loans used to hide the second link entirely. The assign select is now
+                      ALWAYS shown alongside existing links (not replaced by them), which is
+                      what makes the over-link warn path (MUST-14.10) reachable from the UI at
+                      all -- it used to be dead code once a row had one link, since the
+                      control that could create a second one had already disappeared. */}
+                  {row.isTransfer || loanOptions.length === 0 ? null : (
+                    <span className="flex flex-col items-end gap-1">
+                      {(loanLinks[row.id] ?? []).map((link) => (
+                        <span key={link.id} className="flex items-center gap-1.5">
+                          <span className="text-xs text-muted">{link.itemName}</span>
+                          <form action={unassignLoan}>
+                            <input type="hidden" name="transactionId" value={row.id} />
+                            <input type="hidden" name="itemId" value={link.itemId} />
+                            <SubmitButton className="btn btn--ghost btn--sm">Unassign</SubmitButton>
+                          </form>
+                        </span>
+                      ))}
+                      <form action={assignLoan} className="flex items-center gap-1.5">
                         <input type="hidden" name="transactionId" value={row.id} />
-                        <input type="hidden" name="itemId" value={loanLinks[row.id]![0]!.itemId} />
-                        <SubmitButton className="btn btn--ghost btn--sm">Unassign</SubmitButton>
+                        {/* F12 fix-round: `required` blocks the browser from submitting with
+                            nothing picked, and the blank option is `disabled` so it can only
+                            ever be the placeholder, never a real (empty) selection -- paired
+                            with assignToLoanAction's own server-side check for the friendly
+                            "Pick a loan first." message a stripped/tampered request would
+                            otherwise get back as a bare "Invalid request." */}
+                        <select
+                          name="itemId"
+                          defaultValue=""
+                          required
+                          aria-label={`Assign transaction ${row.id} to a loan`}
+                          className={rowControl}
+                        >
+                          <option value="" disabled>Assign to loan…</option>
+                          {loanOptions.map((loan) => (
+                            <option key={loan.id} value={loan.id}>{loan.name}</option>
+                          ))}
+                        </select>
+                        <button type="submit" className="btn btn--ghost btn--sm px-2 text-xs">Assign</button>
                       </form>
                     </span>
-                  ) : (
-                    <form action={assignLoan} className="flex items-center gap-1.5">
-                      <input type="hidden" name="transactionId" value={row.id} />
-                      <select
-                        name="itemId"
-                        defaultValue=""
-                        aria-label={`Assign transaction ${row.id} to a loan`}
-                        className={rowControl}
-                      >
-                        <option value="">Assign to loan…</option>
-                        {loanOptions.map((loan) => (
-                          <option key={loan.id} value={loan.id}>{loan.name}</option>
-                        ))}
-                      </select>
-                      <button type="submit" className="btn btn--ghost btn--sm px-2 text-xs">Assign</button>
-                    </form>
                   )}
                 </td>
               </tr>

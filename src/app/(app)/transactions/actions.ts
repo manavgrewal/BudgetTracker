@@ -7,7 +7,8 @@ import { isSameOrigin } from '@/lib/auth/csrf';
 import { requireUser } from '@/lib/auth/session';
 import { getOrCreateCashAccount } from '@/lib/accounts';
 import { assignTransactionToLoan, loanLinksForTransactions, unassignTransactionFromLoan } from '@/lib/loans';
-import { parseAmountToCents } from '@/lib/money';
+import { formatCents, parseAmountToCents } from '@/lib/money';
+import { getWarrantyItem } from '@/lib/warranty/items';
 import { isIsoDate } from '@/lib/dates';
 import {
   bulkSetAttribution,
@@ -212,6 +213,14 @@ const loanLinkSchema = z.object({
 export async function assignToLoanAction(formData: FormData): Promise<ActionState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
   await requireUser();
+
+  // F12 fix-round: checked BEFORE the generic schema parse so an omitted/blank selection (the
+  // client now also guards this with `required`, but a stripped or hand-crafted request can
+  // still arrive without it) reads as a friendly prompt rather than zod's generic
+  // "Invalid request." -- the same courtesy every other choose-first control in this app owes
+  // a person who submitted before picking anything.
+  if (String(formData.get('itemId') ?? '').trim().length === 0) return { error: 'Pick a loan first.' };
+
   const parsed = loanLinkSchema.safeParse({
     transactionId: formData.get('transactionId'),
     itemId: formData.get('itemId'),
@@ -230,14 +239,39 @@ export async function assignToLoanAction(formData: FormData): Promise<ActionStat
   if (!result.linked) return { message: 'That transaction is already linked to this loan.' };
 
   // MUST-14.10: over-linking SUCCEEDS and warns. A refusal here would block a legitimate
-  // combined payment; silence would hide a typo.
+  // combined payment; silence would hide a typo. This still takes priority over the F2 honest
+  // amount-and-direction copy below -- a person linking a SECOND loan to the same money needs
+  // to know that first, regardless of what happened to either loan's own balance.
   const txn = getTransaction(parsed.data.transactionId);
   const links = loanLinksForTransactions([parsed.data.transactionId]).get(parsed.data.transactionId) ?? [];
-  const linked = links.reduce((sum, link) => sum + link.amountCents, 0);
-  if (txn !== null && linked > Math.abs(txn.amountCents)) {
+  const totalLinked = links.reduce((sum, link) => sum + link.amountCents, 0);
+  if (txn !== null && totalLinked > Math.abs(txn.amountCents)) {
     return { message: 'Assigned. Note that this transaction is now linked to more than its own amount.' };
   }
-  return { message: 'Assigned.' };
+
+  // F2 fix-round: "Assigned." on its own told a person a click registered, not what it DID to
+  // the number on the loan they were looking at -- the whole reason to click this control.
+  // txn.amount_cents is immutable (tests/lib/loans/invariants.test.ts), so its sign is a safe
+  // read of direction even after the fact; result.appliedCents is the exact, already-clamped
+  // figure assignTransactionToLoan moved (or didn't).
+  const isPayment = txn !== null && txn.amountCents < 0;
+  if (result.appliedCents === 0) {
+    const item = getWarrantyItem(parsed.data.itemId);
+    return {
+      message:
+        item !== null && item.currentBalanceCents === null
+          ? 'Assigned. The balance was unknown, so it did not move.'
+          : 'Assigned. The balance was already $0.00, so nothing came off.',
+    };
+  }
+  if (isPayment) {
+    const item = getWarrantyItem(parsed.data.itemId);
+    if (item !== null && item.currentBalanceCents === 0) {
+      return { message: `Assigned. ${formatCents(result.appliedCents)} came off; the balance is now $0.00.` };
+    }
+    return { message: `Assigned. ${formatCents(result.appliedCents)} came off the balance.` };
+  }
+  return { message: `Assigned. The balance went up ${formatCents(result.appliedCents)} (money in).` };
 }
 
 export async function unassignFromLoanAction(formData: FormData): Promise<ActionState> {
@@ -250,11 +284,21 @@ export async function unassignFromLoanAction(formData: FormData): Promise<Action
   if (!parsed.success) return { error: 'Invalid request.' };
 
   // Read BEFORE unassigning: amount_cents is immutable (src/db/schema.ts), so this still
-  // reflects the link's direction after the loan_payments row is gone (NEW-3, below).
+  // reflects the link's direction after the loan_payments row is gone (NEW-3).
   const txn = getTransaction(parsed.data.transactionId);
 
   let unassigned: boolean;
+  let appliedCents = 0;
   try {
+    // The link's own appliedCents is read here too, inside the SAME try/catch as the
+    // reversal itself (NEW-1's guarantee) -- unassignTransactionFromLoan deletes the row and
+    // only returns a boolean, so this is the one chance to know how much (if anything)
+    // actually moved (F1 fix-round). A residual DB failure on EITHER read must still come
+    // back as a normal action error, never a thrown stack trace.
+    const linkBefore = (loanLinksForTransactions([parsed.data.transactionId]).get(parsed.data.transactionId) ?? []).find(
+      (link) => link.itemId === parsed.data.itemId,
+    );
+    appliedCents = linkBefore?.appliedCents ?? 0;
     unassigned = unassignTransactionFromLoan({ txnId: parsed.data.transactionId, itemId: parsed.data.itemId });
   } catch (error) {
     // NEW-1 fix-round: the reversal itself is now clamped at zero and should not throw in
@@ -268,13 +312,20 @@ export async function unassignFromLoanAction(formData: FormData): Promise<Action
   revalidatePath('/dashboard');
   revalidatePath('/reports');
 
+  // F1 fix-round: a link recorded against an UNKNOWN (or already-zero) balance moved nothing
+  // in the first place (link()'s NEW-2 guard) -- claiming the balance "went up/down by exactly
+  // what came off it" would be false in exactly the case MUST-11.14's own docblock calls out.
+  if (appliedCents === 0) {
+    return { message: "Unassigned. That link never moved the balance, so there's nothing to restore." };
+  }
+
   // NEW-3 fix-round: the old message ("gone back up") was FALSE for a disbursement, whose
   // unassign moves the balance back DOWN. Same sign-recovery the engine itself relies on
   // (unassignTransactionFromLoan / reverseLoanLinksForTransactions): negative = a payment, so
   // reversing it raises the balance; positive = a disbursement/adjustment, so reversing it
-  // lowers it.
+  // lowers it. F1 fix-round adds the actual amount, matching F2's assign-side voice.
   if (txn !== null && txn.amountCents > 0) {
-    return { message: 'Unassigned. The balance has gone back down by exactly what came off it.' };
+    return { message: `Unassigned. The balance has gone back down by ${formatCents(appliedCents)}.` };
   }
-  return { message: 'Unassigned. The balance has gone back up by exactly what came off it.' };
+  return { message: `Unassigned. The balance has gone back up by ${formatCents(appliedCents)}.` };
 }
