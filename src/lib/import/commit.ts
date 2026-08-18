@@ -2,6 +2,7 @@ import { and, desc, eq, inArray, isNotNull, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { accounts, imports, transactionImports, transactions, users } from '@/db/schema';
 import { nowIso } from '@/lib/clock';
+import { reverseLoanLinksForTransactions } from '@/lib/loans';
 import { findExistingByHashes, type HashedRow } from './dedup';
 import { getImportHooks } from './hooks';
 import type { RowError } from './parse';
@@ -277,6 +278,7 @@ export function previewUndoImport(importId: number): UndoPreview {
 export interface UndoResult {
   deleted: number;
   kept: number;
+  loanLinksReversed: number;
 }
 
 export function undoImport(importId: number): UndoResult {
@@ -285,6 +287,7 @@ export function undoImport(importId: number): UndoResult {
   const { sole, shared } = partitionByAssociation(importId);
 
   return db.transaction((tx) => {
+    let loanRowsReversed = 0;
     if (sole.length > 0) {
       // Reverse Bayes training for rows that had reached the confirmed state.
       const confirmed = tx
@@ -302,6 +305,11 @@ export function undoImport(importId: number): UndoResult {
         if (row.categoryId !== null) untrain(tokenize(row.normalizedMerchant), row.categoryId);
       }
 
+      // MUST-13.14: BEFORE the delete. The ON DELETE CASCADE on loan_payments.txn_id would
+      // remove the rows anyway -- but a cascade cannot restore a balance, so the explicit
+      // reversal must run first.
+      loanRowsReversed = reverseLoanLinksForTransactions(sole);
+
       // transaction_imports rows cascade away with the transaction.
       tx.delete(transactions).where(inArray(transactions.id, sole)).run();
     }
@@ -312,6 +320,6 @@ export function undoImport(importId: number): UndoResult {
     // import gets it set to NULL (onDelete: 'set null') — and ONLY when that row's
     // import_id actually was this import, not whichever import happened to share it.
     tx.delete(imports).where(eq(imports.id, importId)).run();
-    return { deleted: sole.length, kept: shared.length };
+    return { deleted: sole.length, kept: shared.length, loanLinksReversed: loanRowsReversed };
   });
 }

@@ -34,7 +34,7 @@ describe('undoImport with no overlap', () => {
     const result = commitImport({ accountId, profileId: null, filename: 'td.csv', importedBy: userId, rows: hashed, errors: [] });
 
     expect(previewUndoImport(result.importId)).toEqual({ importId: result.importId, willDelete: 9, willKeep: 0 });
-    expect(undoImport(result.importId)).toEqual({ deleted: 9, kept: 0 });
+    expect(undoImport(result.importId)).toEqual({ deleted: 9, kept: 0, loanLinksReversed: 0 });
 
     expect((sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c).toBe(0);
     expect((sqlite.prepare('select count(*) as c from imports').get() as { c: number }).c).toBe(0);
@@ -50,7 +50,7 @@ describe('undoImport with overlapping imports — the sole-association rule', ()
 
     // rows 3 and 4 are shared between the two imports
     expect(previewUndoImport(first.importId)).toEqual({ importId: first.importId, willDelete: 3, willKeep: 2 });
-    expect(undoImport(first.importId)).toEqual({ deleted: 3, kept: 2 });
+    expect(undoImport(first.importId)).toEqual({ deleted: 3, kept: 2, loanLinksReversed: 0 });
 
     const remaining = (sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c;
     expect(remaining).toBe(6);
@@ -72,7 +72,7 @@ describe('undoImport with overlapping imports — the sole-association rule', ()
     const first = commitImport({ accountId, profileId: null, filename: 'part1.csv', importedBy: userId, rows: hashed.slice(0, 5), errors: [] });
     const second = commitImport({ accountId, profileId: null, filename: 'part2.csv', importedBy: userId, rows: hashed.slice(3), errors: [] });
     undoImport(first.importId);
-    expect(undoImport(second.importId)).toEqual({ deleted: 6, kept: 0 });
+    expect(undoImport(second.importId)).toEqual({ deleted: 6, kept: 0, loanLinksReversed: 0 });
     expect((sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c).toBe(0);
   });
 
@@ -81,7 +81,7 @@ describe('undoImport with overlapping imports — the sole-association rule', ()
     const first = commitImport({ accountId, profileId: null, filename: 'td.csv', importedBy: userId, rows: hashed, errors: [] });
     commitImport({ accountId, profileId: null, filename: 'td-again.csv', importedBy: userId, rows: hashed, errors: [] });
     expect(previewUndoImport(first.importId)).toEqual({ importId: first.importId, willDelete: 0, willKeep: 9 });
-    expect(undoImport(first.importId)).toEqual({ deleted: 0, kept: 9 });
+    expect(undoImport(first.importId)).toEqual({ deleted: 0, kept: 9, loanLinksReversed: 0 });
     expect((sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c).toBe(9);
   });
 
@@ -96,7 +96,7 @@ describe('undoImport with overlapping imports — the sole-association rule', ()
     const transactionId = first.insertedTransactionIds[0];
 
     // Undoing B: T is shared (associated with both A and B), so it survives.
-    expect(undoImport(second.importId)).toEqual({ deleted: 0, kept: 1 });
+    expect(undoImport(second.importId)).toEqual({ deleted: 0, kept: 1, loanLinksReversed: 0 });
 
     const row = sqlite.prepare('select import_id from transactions where id = ?').get(transactionId) as { import_id: number | null };
     expect(row.import_id).toBe(first.importId);

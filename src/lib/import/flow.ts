@@ -1,5 +1,6 @@
 import { getAccount } from '@/lib/accounts';
 import { runEngine, type EngineResult } from '@/lib/categorize/engine';
+import { applyLoanMatchers } from '@/lib/loans';
 import { isSimplefinManaged } from '@/lib/simplefin/connection';
 import { commitImport } from './commit';
 import { computeRowHashes } from './dedup';
@@ -21,6 +22,7 @@ export interface CommitFlowResult {
   engine: EngineResult;
   /** true when runEngine threw after the rows were already committed (review-review finding 2). */
   engineFailed: boolean;
+  loanLinksCreated: number;
 }
 
 export function commitStagedImport(input: {
@@ -103,6 +105,11 @@ export function commitStagedImport(input: {
     needsReview = row?.c ?? 0;
   }
 
+  // MUST-13.7: a post-commit side effect outside the commit transaction, exactly as
+  // runEngine already is. applyLoanMatchers is internally guarded (MUST-13.5) and returns 0
+  // on failure rather than throwing an import away.
+  const loanLinksCreated = applyLoanMatchers(committed.insertedTransactionIds);
+
   return {
     importId: committed.importId,
     profileId,
@@ -112,5 +119,6 @@ export function commitStagedImport(input: {
     needsReview,
     engine,
     engineFailed,
+    loanLinksCreated,
   };
 }

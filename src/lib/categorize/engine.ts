@@ -2,6 +2,7 @@ import { and, asc, eq, inArray, isNull, ne, or, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { transactions } from '@/db/schema';
 import { nowIso } from '@/lib/clock';
+import { applyLoanMatchers } from '@/lib/loans';
 import { classify, train, untrain } from './bayes';
 import { tokenize } from './normalize';
 import {
@@ -233,6 +234,20 @@ export function confirmCategory(input: {
   if (row.source === 'manual' && row.categoryId !== null) {
     if (row.categoryId === input.categoryId) {
       // Already confirmed to the same category: nothing to retrain.
+      //
+      // MUST-13.8: the matcher call sits on THIS path too. A transaction confirmed before a
+      // loan rule existed could otherwise never be picked up by re-confirming it -- which is
+      // exactly what a person does when they notice a payment did not get assigned. It is
+      // cheap: applyLoanMatchers bails on its first query when no loan rules exist.
+      //
+      // The cost is worth stating rather than hiding: bulkCategorizeAction loops
+      // confirmCategory, so a 50-row bulk confirm makes 50 applyLoanMatchers calls and, on a
+      // household with no loans, 50 single-row indexed reads against an empty join. That is
+      // a bounded, sub-millisecond cost on a user-initiated action, and it buys the property
+      // that a person can always fix a missed assignment by re-confirming the row. Batching
+      // it into the action layer would put a fifth caller in a sixth place and is the change
+      // to make if that cost ever shows up in a profile.
+      applyLoanMatchers([input.transactionId], at);
       return;
     }
     untrain(tokens, row.categoryId);
@@ -260,6 +275,7 @@ export function confirmCategory(input: {
   }
 
   train(tokens, input.categoryId);
+  applyLoanMatchers([input.transactionId], at);
 }
 
 export function clearCategory(input: { transactionId: number; userId: number; at?: Date }): void {

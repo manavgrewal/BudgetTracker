@@ -4,6 +4,7 @@ import { nowIso } from '@/lib/clock';
 import { readEnv } from '@/lib/env';
 import { commitImport, type CommitRow } from '@/lib/import/commit';
 import { DEDUP_HASH_VERSION } from '@/lib/import/dedup';
+import { applyLoanMatchers } from '@/lib/loans';
 import { parseAmountToCents } from '@/lib/money';
 import type { RowError } from '@/lib/import/parse';
 import { SimplefinError, fetchAccounts, type Fetcher, type SimplefinAccount } from './client';
@@ -72,6 +73,7 @@ export interface SyncResult {
   engine: EngineResult;
   /** true when runEngine threw after the rows were already committed — same contract as import/flow.ts. */
   engineFailed: boolean;
+  loanLinksCreated: number;
 }
 
 function syncLabel(at: Date): string {
@@ -212,6 +214,8 @@ export async function runSync(input: { userId: number; fetcher?: Fetcher; now?: 
     engineFailed = true;
     engine = { processed: 0, categorized: 0, transfers: 0, skipped: 0 };
   }
+  // MUST-13.7: same post-commit slot as import/flow.ts, on the sync's own inserted ids.
+  const loanLinksCreated = applyLoanMatchers(insertedIds);
   markSynced(now);
 
   return {
@@ -222,5 +226,6 @@ export async function runSync(input: { userId: number; fetcher?: Fetcher; now?: 
     totalDuplicates: results.reduce((sum, row) => sum + row.duplicates, 0),
     engine,
     engineFailed,
+    loanLinksCreated,
   };
 }

@@ -171,7 +171,7 @@ describe('POST /api/import/commit and /api/import/undo', () => {
     expect(await dialog.json()).toMatchObject({ willDelete: 9, willKeep: 0 });
 
     const undone = await undoRoute(jsonRequest('http://nas.local:3000/api/import/undo', { importId: committed.importId, confirm: true }));
-    expect(await undone.json()).toEqual({ deleted: 9, kept: 0 });
+    expect(await undone.json()).toEqual({ deleted: 9, kept: 0, loanLinksReversed: 0 });
     expect((current!.sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c).toBe(0);
   });
 

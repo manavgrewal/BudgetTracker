@@ -100,11 +100,11 @@ describe('overlapping second import then undo of the first', () => {
     expect((sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c).toBe(10);
 
     expect(previewUndoImport(first.importId)).toMatchObject({ willDelete: 0, willKeep: 9 });
-    expect(undoImport(first.importId)).toEqual({ deleted: 0, kept: 9 });
+    expect(undoImport(first.importId)).toEqual({ deleted: 0, kept: 9, loanLinksReversed: 0 });
     expect((sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c).toBe(10);
 
     expect(listImportHistory()).toHaveLength(1);
-    expect(undoImport(second.importId)).toEqual({ deleted: 10, kept: 0 });
+    expect(undoImport(second.importId)).toEqual({ deleted: 10, kept: 0, loanLinksReversed: 0 });
     expect((sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c).toBe(0);
   });
 

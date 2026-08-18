@@ -119,10 +119,10 @@ describe('claim → link → sync', () => {
     // Both syncs saw both rows, so the first sync owns nothing exclusively.
     const firstImportId = first.accounts[0].importId!;
     expect(previewUndoImport(firstImportId)).toMatchObject({ willDelete: 0, willKeep: 2 });
-    expect(undoImport(firstImportId)).toEqual({ deleted: 0, kept: 2 });
+    expect(undoImport(firstImportId)).toEqual({ deleted: 0, kept: 2, loanLinksReversed: 0 });
     expect((current.sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c).toBe(2);
 
-    expect(undoImport(second.accounts[0].importId!)).toEqual({ deleted: 2, kept: 0 });
+    expect(undoImport(second.accounts[0].importId!)).toEqual({ deleted: 2, kept: 0, loanLinksReversed: 0 });
     expect((current.sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c).toBe(0);
   });
 });
