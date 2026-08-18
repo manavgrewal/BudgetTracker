@@ -3,10 +3,13 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, cleanup } from '@testing-library/react';
 import { BudgetsClient } from '@/app/(app)/budgets/budgets-client';
 import type { BudgetRow } from '@/lib/budgets';
+import type { BudgetPredictions, CategorySuggestion } from '@/lib/predict/suggest';
 
 vi.mock('@/app/(app)/budgets/actions', () => ({
   setLimitAction: vi.fn(async () => ({})),
   copyPreviousMonthAction: vi.fn(async () => ({})),
+  applySuggestionAction: vi.fn(async () => ({})),
+  applyAllSuggestionsAction: vi.fn(async () => ({})),
 }));
 
 afterEach(() => cleanup());
@@ -26,6 +29,41 @@ function makeRow(overrides: Partial<BudgetRow> = {}): BudgetRow {
     children: [],
     ...overrides,
   };
+}
+
+const SUGGESTION: CategorySuggestion = {
+  categoryId: 1,
+  suggestedCents: 78000,
+  medianCents: 76000,
+  meanCents: 77000,
+  trend: { direction: 'rising', deltaCents: 4000 },
+  monthsUsed: 6,
+  seasonalApplied: false,
+  confidence: 'medium',
+};
+
+function predictionsWith(over: Partial<BudgetPredictions> = {}): BudgetPredictions {
+  return {
+    monthsUsed: 6,
+    dayOfMonth: 12,
+    household: { suggestions: [], projections: [], noAttribution: false },
+    personal: [],
+    ...over,
+  };
+}
+
+/** The file's existing inline shape, plus whatever the test under way needs. */
+function renderBudgets(predictions: BudgetPredictions | null) {
+  return render(
+    <BudgetsClient
+      month="2026-03"
+      currentUserId={1}
+      household={[makeRow()]}
+      householdTotals={{ budgetedLimitCents: 20000, budgetedSpentCents: 5000, totalSpentCents: 5000 }}
+      personal={[]}
+      predictions={predictions}
+    />,
+  );
 }
 
 describe('BudgetsClient — review finding 2: archived rows are read-only', () => {
@@ -164,5 +202,74 @@ describe('BudgetsClient — review finding 1: three-number household headline', 
     );
     expect(getByText(/spent \$80\.00 of \$100\.00 budgeted/)).toBeTruthy();
     expect(getByText(/\$400\.00 total spent/)).toBeTruthy();
+  });
+});
+
+describe('MUST-14.3 to MUST-14.6: the predictive controls', () => {
+  it('renders a Use button carrying no amount field, and its reasoning in the title', () => {
+    const { container } = renderBudgets(
+      predictionsWith({ household: { suggestions: [SUGGESTION], projections: [], noAttribution: false } }),
+    );
+    const button = Array.from(container.querySelectorAll('button')).find((el) => el.textContent === 'Use $780.00');
+    expect(button).toBeTruthy();
+    expect(button!.getAttribute('title')).toContain('Confidence: medium.');
+    const data = new FormData(button!.closest('form') as HTMLFormElement);
+    expect(data.get('amount')).toBeNull();
+    expect(data.get('categoryId')).toBe('1');
+    expect(data.get('month')).toBe('2026-03');
+  });
+
+  it('MUST-15.4: a category with no suggestion shows nothing in the slot', () => {
+    const { container } = renderBudgets(predictionsWith());
+    expect(Array.from(container.querySelectorAll('button')).some((el) => el.textContent?.startsWith('Use '))).toBe(false);
+  });
+
+  it('MUST-14.4: the projection line appears with its assumption in the title', () => {
+    const { getByText } = renderBudgets(
+      predictionsWith({
+        household: { suggestions: [], projections: [{ categoryId: 1, projectedCents: 105900 }], noAttribution: false },
+      }),
+    );
+    const line = getByText('On pace for $1,059.00');
+    expect(line.getAttribute('title')).toBe('Assumes the rest of the month looks like the 12 days so far.');
+  });
+
+  it('MUST-15.3: before the seventh there is no projection line and no placeholder', () => {
+    // The page produces no projections at all before day 7, because projectMonthEnd returns
+    // null. dayOfMonth is set to match, so this test fails if the row ever renders a dash or
+    // an empty pace line rather than nothing.
+    const { container } = renderBudgets(
+      predictionsWith({ dayOfMonth: 3, household: { suggestions: [], projections: [], noAttribution: false } }),
+    );
+    expect(container.textContent).not.toContain('On pace for');
+  });
+
+  it('MUST-14.5: the section gains an apply-all button with its hint', () => {
+    const { container } = renderBudgets(
+      predictionsWith({ household: { suggestions: [SUGGESTION], projections: [], noAttribution: false } }),
+    );
+    const button = Array.from(container.querySelectorAll('button')).find(
+      (el) => el.textContent === 'Apply all suggestions',
+    );
+    expect(button).toBeTruthy();
+    expect(button!.getAttribute('title')).toBe('Only fills in categories with no limit set. Nothing you have typed is changed.');
+  });
+
+  it('MUST-15.1: under three months there is a sentence and no disabled button', () => {
+    const { container, getByText } = renderBudgets(predictionsWith({ monthsUsed: 2 }));
+    expect(getByText('Suggestions appear once there are three full calendar months of history.')).toBeTruthy();
+    expect(Array.from(container.querySelectorAll('button')).some((el) => el.textContent?.startsWith('Use '))).toBe(false);
+  });
+
+  it('MUST-14.1: a past month renders neither column and keeps the header quiet', () => {
+    const { container } = renderBudgets(null);
+    expect(Array.from(container.querySelectorAll('button')).some((el) => el.textContent?.startsWith('Use '))).toBe(false);
+    expect(container.textContent).not.toContain('On pace for');
+    expect(container.querySelector('th[title]')).toBeNull();
+  });
+
+  it('MUST-15.3: the pace column header carries its own explanation', () => {
+    const { container } = renderBudgets(predictionsWith());
+    expect(container.querySelector('th[title]')?.getAttribute('title')).toBe('Appears from the 7th of the month.');
   });
 });

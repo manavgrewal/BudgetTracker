@@ -244,6 +244,33 @@ export function BellIcon(props: IconProps) {
   );
 }
 
+export function TrendUpIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="M3 17 9.5 10.5l4 4L21 7" />
+      <path d="M15 7h6v6" />
+    </Glyph>
+  );
+}
+
+export function TrendDownIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="M3 7 9.5 13.5l4-4L21 17" />
+      <path d="M15 17h6v-6" />
+    </Glyph>
+  );
+}
+
+export function TrendFlatIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="M3 12h14" />
+      <path d="m17 8 4 4-4 4" />
+    </Glyph>
+  );
+}
+
 /**
  * The mark: three rising bars inside a rounded tile — a ledger turning into a
  * trend, which is the whole product in one glyph. Filled (not stroked) so it

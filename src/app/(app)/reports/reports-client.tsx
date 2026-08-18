@@ -2,16 +2,18 @@
 
 import { CategoryBarChart } from '@/components/charts/CategoryBarChart';
 import { DebtTrendChart } from '@/components/charts/DebtTrendChart';
-import { LoanIcon, ReportsIcon } from '@/components/icons';
+import { LoanIcon, ReportsIcon, TrendDownIcon, TrendFlatIcon, TrendUpIcon } from '@/components/icons';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { Money } from '@/components/ui/Money';
 import { PageHeader } from '@/components/ui/PageHeader';
-import { TableWrap } from '@/components/ui/Table';
+import { AmountCell, TableWrap } from '@/components/ui/Table';
 import { Field, selectClass } from '@/components/ui/form';
 import { DateRangePicker } from '@/components/ui/DateRangePicker';
 import { rangeParams, type ResolvedRange } from '@/lib/date-range';
 import type { DebtPoint } from '@/lib/loans';
+import { formatCents } from '@/lib/money';
+import type { BaselineRow } from '@/lib/predict/suggest';
 import type { CategoryBreakdownRow, CategoryMonthTrend, PersonSplitRow } from '@/lib/reports';
 
 export function ReportsClient({
@@ -24,6 +26,8 @@ export function ReportsClient({
   split,
   debt,
   hasLoans,
+  baselines,
+  baselineMonthsUsed,
 }: {
   range: ResolvedRange;
   today: string;
@@ -34,6 +38,8 @@ export function ReportsClient({
   split: PersonSplitRow[];
   debt: DebtPoint[];
   hasLoans: boolean;
+  baselines: BaselineRow[];
+  baselineMonthsUsed: number;
 }) {
   const exportHref = `/api/reports/export?${new URLSearchParams({
     ...rangeParams(range),
@@ -68,6 +74,58 @@ export function ReportsClient({
             </Field>
             <button type="submit" className="btn btn--primary">Apply</button>
           </form>
+        </CardBody>
+      </Card>
+
+      <Card>
+        <CardHeader
+          title="Category baselines"
+          description="Median and average over the last 6 full calendar months. This card does not follow the date filter above: a median needs equal-length months, and an arbitrary range does not have them."
+        />
+        <CardBody padded={false}>
+          {baselineMonthsUsed < 3 || baselines.length === 0 ? (
+            <EmptyState icon={ReportsIcon} title="Not enough history yet">
+              Baselines appear after three full calendar months.
+            </EmptyState>
+          ) : (
+            <TableWrap bare>
+              <thead>
+                <tr>
+                  <th>Category</th>
+                  <th className="text-right">Median</th>
+                  <th className="text-right">Average</th>
+                  <th>Trend</th>
+                  <th className="text-right">Suggested</th>
+                </tr>
+              </thead>
+              <tbody>
+                {baselines.map((row) => (
+                  <tr key={row.categoryId}>
+                    <td>{row.categoryName}</td>
+                    <AmountCell>
+                      <Money cents={row.suggestion.medianCents} plain />
+                    </AmountCell>
+                    <AmountCell>
+                      <Money cents={row.suggestion.meanCents} plain />
+                    </AmountCell>
+                    <td>
+                      <span className="flex items-center gap-1.5 text-xs text-muted">
+                        {row.suggestion.trend.direction === 'rising' ? <TrendUpIcon className="h-4 w-4" /> : null}
+                        {row.suggestion.trend.direction === 'falling' ? <TrendDownIcon className="h-4 w-4" /> : null}
+                        {row.suggestion.trend.direction === 'flat' ? <TrendFlatIcon className="h-4 w-4" /> : null}
+                        {row.suggestion.trend.direction === 'unknown'
+                          ? null
+                          : `${row.suggestion.trend.direction === 'rising' ? 'Rising' : row.suggestion.trend.direction === 'falling' ? 'Falling' : 'Flat'} ${formatCents(Math.abs(row.suggestion.trend.deltaCents), { currency: true })}`}
+                      </span>
+                    </td>
+                    <AmountCell>
+                      <Money cents={row.suggestion.suggestedCents} plain />
+                    </AmountCell>
+                  </tr>
+                ))}
+              </tbody>
+            </TableWrap>
+          )}
         </CardBody>
       </Card>
 

@@ -113,3 +113,27 @@ export function suggestBudget(input: {
     },
   };
 }
+
+/** One section's predictive props. The Budgets page builds these; the client renders them. */
+export interface SectionPredictions {
+  suggestions: CategorySuggestion[];
+  projections: { categoryId: number; projectedCents: number }[];
+  /** MUST-15.2: this personal series is entirely zero while the household one is not. */
+  noAttribution: boolean;
+}
+
+export interface BudgetPredictions {
+  /** MUST-15.1: the clipped window length, which drives the three-months sentence. */
+  monthsUsed: number;
+  /** MUST-15.3: the day of the month in the app's TZ. */
+  dayOfMonth: number;
+  household: SectionPredictions;
+  personal: { userId: number; predictions: SectionPredictions }[];
+}
+
+/** One row of the Reports baselines card (MUST-14.7). */
+export interface BaselineRow {
+  categoryId: number;
+  categoryName: string;
+  suggestion: Suggestion;
+}
