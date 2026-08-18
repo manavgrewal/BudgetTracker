@@ -36,6 +36,17 @@ const bare: LoanSummary = {
   payoffFraction: null,
 };
 
+/** A loan with a principal but no tracked balance -- unlike `bare`, this one still clears the
+ *  "has a balance or a principal" filter and is SHOWN, rendering its row as '—'. */
+const principalOnly: LoanSummary = {
+  ...civic,
+  itemId: 3,
+  name: 'Untracked loan',
+  currentBalanceCents: null,
+  balanceUpdatedAt: null,
+  payoffFraction: null,
+};
+
 describe('MUST-15.1 … MUST-15.3: the dashboard card', () => {
   it('renders nothing at all with no loans', () => {
     const { container } = render(<LoansCard loans={[]} totalOwedCents={0} />);
@@ -63,5 +74,14 @@ describe('MUST-15.1 … MUST-15.3: the dashboard card', () => {
   it('omits the rate row when unset', () => {
     render(<LoansCard loans={[{ ...civic, interestRateBps: null }]} totalOwedCents={1_955_000} />);
     expect(screen.queryByText(/^Rate /)).toBeNull();
+  });
+
+  it('review fix-round: the total carries an accessible "Total owed" name, and the hint appears only when a shown loan has no tracked balance', () => {
+    const { rerender } = render(<LoansCard loans={[civic, principalOnly]} totalOwedCents={1_955_000} />);
+    expect(screen.getByLabelText('Total owed $19,550.00')).toBeTruthy();
+    expect(screen.getByText('(excludes loans without a tracked balance)')).toBeTruthy();
+
+    rerender(<LoansCard loans={[civic]} totalOwedCents={1_955_000} />);
+    expect(screen.queryByText('(excludes loans without a tracked balance)')).toBeNull();
   });
 });

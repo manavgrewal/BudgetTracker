@@ -6,7 +6,7 @@ import { budgetProgress, budgetTotals } from '@/lib/budgets';
 import { reviewQueueCount } from '@/lib/categorize/engine';
 import { currentMonth, monthEnd, monthLabel, monthStart, todayIso } from '@/lib/dates';
 import { listGoals } from '@/lib/goals';
-import { listLoans, loansTotalOwedCents } from '@/lib/loans';
+import { listLoans } from '@/lib/loans';
 import { cashflowTrend, topMerchants } from '@/lib/reports';
 import { expiringSoonItems } from '@/lib/warranty/search';
 import { formatCents } from '@/lib/money';
@@ -50,6 +50,10 @@ export default async function DashboardPage({
   // shows every item, a selected person shows only items they own.
   const today = todayIso();
   const expiring = expiringSoonItems(EXPIRING_WIDGET_LIMIT, scopeUserId, today);
+  // Review fix-round: one read-model scan, not two -- loansTotalOwedCents() would otherwise
+  // call listLoans() again just to re-derive the sum LoansCard's own props already carry.
+  const loans = listLoans(today);
+  const totalOwedCents = loans.reduce((sum, loan) => sum + (loan.currentBalanceCents ?? 0), 0);
 
   // The trend already covers this month, so the headline income/net figures come
   // out of it rather than costing a second query.
@@ -142,7 +146,7 @@ export default async function DashboardPage({
       <ExpiringSoonCard items={expiring} today={today} />
 
       {/* MUST-15.1: self-hiding. Rendered unconditionally; absent when there is nothing to say. */}
-      <LoansCard loans={listLoans(today)} totalOwedCents={loansTotalOwedCents()} />
+      <LoansCard loans={loans} totalOwedCents={totalOwedCents} />
 
       <Card>
         <CardHeader

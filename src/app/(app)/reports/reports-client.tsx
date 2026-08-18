@@ -140,9 +140,14 @@ export function ReportsClient({
       {!hasLoans ? null : (
         <Card>
           <CardHeader title="Debt over time" description="Total owed across every loan with a balance." />
-          {debt.every((point) => point.owedCents === null) ? (
-            <EmptyState icon={LoanIcon} title="Not enough history to draw a line yet">
-              Record a balance on a loan and the line starts from that month.
+          {/* Review fix-round: gated on "fewer than two" rather than "every point null" -- a
+              single non-null point (the common first-run shape, one anchor amid 23 NULLs)
+              draws no visible line either, so it belongs here rather than in a chart with
+              nothing to show. This also retires what was otherwise a dead branch, since the
+              current month is always non-null once the card renders at all. */}
+          {debt.filter((point) => point.owedCents !== null).length < 2 ? (
+            <EmptyState icon={LoanIcon} title="Not enough history yet">
+              The chart appears after a month of tracked activity.
             </EmptyState>
           ) : (
             <CardBody className="flex flex-col gap-3">

@@ -15,9 +15,27 @@ export function LoansCard({ loans, totalOwedCents }: { loans: LoanSummary[]; tot
   const shown = loans.filter((loan) => loan.currentBalanceCents !== null || loan.principalCents !== null);
   if (shown.length === 0) return null;
 
+  // Review fix-round: a listed loan with a NULL balance renders '—' below rather than being
+  // silently folded into totalOwedCents at 0 -- the hint says so next to the figure, so the
+  // total doesn't read as "everything" when it is actually "everything we're tracking".
+  const hasUntrackedBalance = shown.some((loan) => loan.currentBalanceCents === null);
+
   return (
     <Card>
-      <CardHeader title="Loans" description="What the household still owes." action={<span className="money-lg">{formatCents(totalOwedCents)}</span>} />
+      <CardHeader
+        title="Loans"
+        description="What the household still owes."
+        action={
+          <span className="flex items-center gap-2">
+            {hasUntrackedBalance ? (
+              <span className="text-xs text-subtle">(excludes loans without a tracked balance)</span>
+            ) : null}
+            <span className="money-lg" aria-label={`Total owed ${formatCents(totalOwedCents)}`}>
+              {formatCents(totalOwedCents)}
+            </span>
+          </span>
+        }
+      />
       <ul className="border-t border-line text-sm">
         {shown.map((loan) => (
           <li key={loan.itemId} className="flex flex-col gap-1.5 border-b border-line px-5 py-3 last:border-b-0 sm:px-6">
