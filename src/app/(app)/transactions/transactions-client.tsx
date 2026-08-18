@@ -12,18 +12,22 @@ import { Notice } from '@/components/ui/Notice';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { AmountCell, TableWrap } from '@/components/ui/Table';
 import { Field, inputClass, labelClass, selectClass } from '@/components/ui/form';
+import type { LoanLink } from '@/lib/loans';
 import type { TransactionPage } from '@/lib/transactions';
 import {
+  assignToLoanAction,
   bulkCategorizeAction,
   bulkTransferAction,
   manualEntryAction,
   renameTransactionAction,
   setAttributionAction,
   setCategoryAction,
+  unassignFromLoanAction,
   type ActionState,
 } from './actions';
 
 interface Option { id: number; name: string; parentId?: number | null; isArchived?: boolean }
+interface LoanOption { id: number; name: string }
 
 const initial: ActionState = {};
 
@@ -36,12 +40,17 @@ export function TransactionsClient({
   categories,
   people,
   today,
+  loanOptions = [],
+  loanLinks = {},
 }: {
   page: TransactionPage;
   accounts: Option[];
   categories: Option[];
   people: Option[];
   today: string;
+  /** v1.3.1: loans with a balance still owed. Empty for a household with none (MUST-14.9). */
+  loanOptions?: LoanOption[];
+  loanLinks?: Record<number, LoanLink[]>;
 }) {
   const [selected, setSelected] = useState<number[]>([]);
   const [renaming, setRenaming] = useState<{ id: number; current: string; merchant: string } | null>(null);
@@ -51,6 +60,14 @@ export function TransactionsClient({
   const [bulkCatState, bulkCatAction] = useActionState(bulkCategorizeAction, initial);
   const [bulkTfrState, bulkTfrAction] = useActionState(bulkTransferAction, initial);
   const [renameState, renameAction] = useActionState(renameTransactionAction, initial);
+  const [assignState, assignLoan] = useActionState(
+    (_prev: ActionState, formData: FormData) => assignToLoanAction(formData),
+    initial,
+  );
+  const [unassignState, unassignLoan] = useActionState(
+    (_prev: ActionState, formData: FormData) => unassignFromLoanAction(formData),
+    initial,
+  );
 
   const label = (id: number | null) => {
     if (id === null) return 'Uncategorized';
@@ -69,8 +86,12 @@ export function TransactionsClient({
   const activeCategories = categories.filter((c) => !c.isArchived);
 
   const toggle = (id: number) => setSelected((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
-  const notice = manualState.message ?? rowState.message ?? attrState.message ?? bulkCatState.message ?? bulkTfrState.message ?? renameState.message;
-  const error = manualState.error ?? rowState.error ?? attrState.error ?? bulkCatState.error ?? bulkTfrState.error ?? renameState.error;
+  const notice =
+    manualState.message ?? rowState.message ?? attrState.message ?? bulkCatState.message ?? bulkTfrState.message ??
+    renameState.message ?? assignState.message ?? unassignState.message;
+  const error =
+    manualState.error ?? rowState.error ?? attrState.error ?? bulkCatState.error ?? bulkTfrState.error ??
+    renameState.error ?? assignState.error ?? unassignState.error;
 
   return (
     <div className="flex flex-col gap-6">
@@ -295,6 +316,35 @@ export function TransactionsClient({
                     <Link href={`/warranties/new?transactionId=${row.id}`} className="btn btn--ghost btn--sm text-xs text-accent-text">
                       Create warranty
                     </Link>
+                  )}
+                  {/* MUST-14.8: a transfer never carries a loan control, and neither does a
+                      page that was given no loans. The established precedent for a per-row
+                      action is the link above. */}
+                  {row.isTransfer || loanOptions.length === 0 ? null : (loanLinks[row.id] ?? []).length > 0 ? (
+                    <span className="flex items-center gap-1.5">
+                      <span className="text-xs text-muted">{loanLinks[row.id]![0]!.itemName}</span>
+                      <form action={unassignLoan}>
+                        <input type="hidden" name="transactionId" value={row.id} />
+                        <input type="hidden" name="itemId" value={loanLinks[row.id]![0]!.itemId} />
+                        <SubmitButton className="btn btn--ghost btn--sm">Unassign</SubmitButton>
+                      </form>
+                    </span>
+                  ) : (
+                    <form action={assignLoan} className="flex items-center gap-1.5">
+                      <input type="hidden" name="transactionId" value={row.id} />
+                      <select
+                        name="itemId"
+                        defaultValue=""
+                        aria-label={`Assign transaction ${row.id} to a loan`}
+                        className={rowControl}
+                      >
+                        <option value="">Assign to loan…</option>
+                        {loanOptions.map((loan) => (
+                          <option key={loan.id} value={loan.id}>{loan.name}</option>
+                        ))}
+                      </select>
+                      <button type="submit" className="btn btn--ghost btn--sm px-2 text-xs">Assign</button>
+                    </form>
                   )}
                 </td>
               </tr>

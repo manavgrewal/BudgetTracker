@@ -1,7 +1,9 @@
 import { notFound } from 'next/navigation';
+import { listAccounts } from '@/lib/accounts';
 import { requireUser } from '@/lib/auth/session';
 import { listUsers } from '@/lib/auth/users';
 import { todayIso } from '@/lib/dates';
+import { listLoanRules, listLoans } from '@/lib/loans';
 import { displayNameOf, getTransaction } from '@/lib/transactions';
 import { warrantyStatus } from '@/lib/warranty/expiry';
 import { getWarrantyItem, listWarrantyReceipts } from '@/lib/warranty/items';
@@ -19,6 +21,10 @@ export default async function WarrantyDetailPage({ params }: { params: Promise<{
 
   const txn = item.transactionId === null ? null : getTransaction(item.transactionId);
   const today = todayIso();
+  // v1.3.1: the loan summary (payoff fraction, last payment, payment count) this item's
+  // read-only money block renders -- undefined for a non-loan item, or a loan whose money
+  // fields haven't been filled in yet.
+  const loanSummary = listLoans(today).find((loan) => loan.itemId === item.id);
 
   return (
     <WarrantyDetailClient
@@ -34,6 +40,11 @@ export default async function WarrantyDetailPage({ params }: { params: Promise<{
          a database restored with foreign keys off would produce. See the plan's
          "Spec ambiguities resolved" note. */
       linkRemoved={item.transactionId !== null && txn === null}
+      rules={listLoanRules(item.id)}
+      accounts={listAccounts().map((a) => ({ id: a.id, name: a.name }))}
+      payoffFraction={loanSummary?.payoffFraction ?? null}
+      lastPaymentAt={loanSummary?.lastPaymentAt ?? null}
+      paymentCount={loanSummary?.paymentCount ?? 0}
     />
   );
 }

@@ -11,6 +11,8 @@ vi.mock('@/app/(app)/warranties/actions', () => ({
   attachReceiptsAction: vi.fn(async () => ({})),
   deleteReceiptAction: vi.fn(async () => ({})),
   reRunOcrAction: vi.fn(async () => ({})),
+  saveLoanRuleAction: vi.fn(async () => ({})),
+  deleteLoanRuleAction: vi.fn(async () => ({})),
 }));
 
 afterEach(() => cleanup());
@@ -57,6 +59,11 @@ function renderDetail(over: Partial<Parameters<typeof WarrantyDetailClient>[0]> 
       today={TODAY}
       linkedTransaction={null}
       linkRemoved={false}
+      rules={[]}
+      accounts={[]}
+      payoffFraction={null}
+      lastPaymentAt={null}
+      paymentCount={0}
       {...over}
     />,
   );
@@ -307,5 +314,115 @@ describe('WarrantyDetailClient', () => {
     fireEvent.change(typeSelect, { target: { value: '1' } }); // Appliance, kind warranty
     expect(container.querySelector('form select[name="billingCycle"]')).toBeNull();
     expect(container.querySelector('form input[name="billingAmount"]')).toBeNull();
+  });
+});
+
+// v1.3.1: the loan fieldset, the read-only money block and the Payment matching sub-card.
+describe('MUST-14.1 / MUST-14.3 / MUST-14.5 / MUST-14.6 / MUST-12.3: the loan surfaces', () => {
+  it('the edit form shows the Loan fieldset only for the SELECTED loan-kind type, and follows it live', () => {
+    const { container } = renderDetail({ item: item({ typeId: 1, typeName: 'Appliance', kind: 'warranty' }) });
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    expect(container.querySelector('form input[name="currentBalance"]')).toBeNull();
+
+    const select = container.querySelector('form select[name="typeId"]') as HTMLSelectElement;
+    fireEvent.change(select, { target: { value: '3' } }); // Car loan, kind loan
+    expect(container.querySelector('form input[name="principal"]')).toBeTruthy();
+    expect(container.querySelector('form input[name="interestRate"]')).toBeTruthy();
+    expect(container.querySelector('form input[name="currentBalance"]')).toBeTruthy();
+
+    fireEvent.change(select, { target: { value: '1' } }); // back to Appliance, kind warranty
+    expect(container.querySelector('form input[name="currentBalance"]')).toBeNull();
+  });
+
+  // Task 9 review finding (MED), carried into this task: the edit form used to omit the loan
+  // fields entirely, and an absent field posts as blank -> null, so editing only the item's
+  // name used to silently wipe principal/rate/balance/anchor on every loan. Now the fields
+  // are seeded from the item, so an unrelated edit resubmits (rather than blanks) them.
+  it("seeds the edit form's loan fields from the item's existing values", () => {
+    const { container } = renderDetail({
+      item: item({
+        typeId: 3,
+        typeName: 'Car loan',
+        kind: 'loan',
+        principalCents: 3_000_000,
+        interestRateBps: 549,
+        currentBalanceCents: 2_500_000,
+        balanceUpdatedAt: '2026-08-01T00:00:00.000Z',
+      }),
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    expect((container.querySelector('form input[name="principal"]') as HTMLInputElement).value).toBe('30000.00');
+    expect((container.querySelector('form input[name="interestRate"]') as HTMLInputElement).value).toBe('5.49');
+    expect((container.querySelector('form input[name="currentBalance"]') as HTMLInputElement).value).toBe('25000.00');
+  });
+
+  it('the billing labels read Payment / Payment amount for a loan and Billing / Amount otherwise', () => {
+    const { container } = renderDetail({ item: item({ typeId: 3, typeName: 'Car loan', kind: 'loan' }) });
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    expect(screen.getByText('Payment')).toBeTruthy();
+    expect(screen.getByText('Payment amount')).toBeTruthy();
+
+    const typeSelect = container.querySelector('form select[name="typeId"]') as HTMLSelectElement;
+    fireEvent.change(typeSelect, { target: { value: '2' } }); // Netflix plan, kind subscription
+    expect(screen.getByText('Billing')).toBeTruthy();
+    expect(screen.getByText('Amount')).toBeTruthy();
+  });
+
+  it('MUST-14.3: the read-only money block is omitted with no principal and no balance, and renders the payoff bar and Detail rows when present', () => {
+    renderDetail({ item: item({ kind: 'loan', principalCents: null, currentBalanceCents: null }) });
+    expect(screen.queryByText('Original')).toBeNull();
+
+    cleanup();
+    renderDetail({
+      item: item({
+        kind: 'loan',
+        principalCents: 3_000_000,
+        interestRateBps: 549,
+        currentBalanceCents: 1_500_000,
+        balanceUpdatedAt: '2026-08-01T00:00:00.000Z',
+      }),
+      payoffFraction: 0.5,
+      lastPaymentAt: '2026-08-10T00:00:00.000Z',
+      paymentCount: 4,
+    });
+    expect(screen.getByText('$15,000.00')).toBeTruthy();
+    expect(screen.getByText('You set this on 2026-08-01')).toBeTruthy();
+    expect(screen.getByText('Original')).toBeTruthy();
+    expect(screen.getByText('$30,000.00')).toBeTruthy();
+    expect(screen.getByText('Rate')).toBeTruthy();
+    expect(screen.getByText('5.49%')).toBeTruthy();
+    expect(screen.getByText('Last payment')).toBeTruthy();
+    expect(screen.getByText('2026-08-10')).toBeTruthy();
+    expect(screen.getByText('Payments linked')).toBeTruthy();
+    expect(screen.getByText('4')).toBeTruthy();
+    expect(screen.getByRole('progressbar')).toBeTruthy();
+  });
+
+  it('MUST-14.5 / MUST-14.6: the Payment matching card is loan-only and states the budget rule', () => {
+    renderDetail({ item: item({ typeId: 3, typeName: 'Car loan', kind: 'loan' }) });
+    expect(screen.getByText('Payment matching')).toBeTruthy();
+    expect(screen.getByText(/The payment still counts in your budget and in your reports\./)).toBeTruthy();
+    cleanup();
+
+    renderDetail({ item: item({ kind: 'subscription' }) });
+    expect(screen.queryByText('Payment matching')).toBeNull();
+  });
+
+  it('lists existing rules and offers the Add rule form, with the backfill checkbox unchecked by default', () => {
+    // receipts: [] here, otherwise the per-receipt "Remove" button collides with the
+    // rule row's own "Remove" button and makes the query ambiguous.
+    renderDetail({
+      item: item({ typeId: 3, typeName: 'Car loan', kind: 'loan' }),
+      receipts: [],
+      rules: [{ id: 1, itemId: 42, merchantContains: 'HONDA FIN', accountId: null, enabled: true }],
+      accounts: [{ id: 9, name: 'Joint Chequing' }],
+    });
+    expect(screen.getByText('HONDA FIN')).toBeTruthy();
+    // "Any account" appears twice -- the rule row's own cell, and the Add-rule form's
+    // account <select>'s default option -- so this is an AllBy, not a plain getByText.
+    expect(screen.getAllByText('Any account').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByRole('button', { name: /remove/i })).toBeTruthy();
+    const backfill = screen.getByRole('checkbox', { name: /also link matching payments/i }) as HTMLInputElement;
+    expect(backfill.checked).toBe(false);
   });
 });

@@ -21,6 +21,7 @@ vi.mock('next/headers', () => ({
 vi.mock('next/cache', () => ({
   revalidatePath: vi.fn(),
 }));
+import { revalidatePath } from 'next/cache';
 
 class RedirectSignal extends Error {
   constructor(readonly to: string) {
@@ -46,12 +47,15 @@ import * as warrantyActions from '@/app/(app)/warranties/actions';
 import {
   attachReceiptsAction,
   createWarrantyAction,
+  deleteLoanRuleAction,
   deleteReceiptAction,
   deleteWarrantyAction,
   reRunOcrAction,
+  saveLoanRuleAction,
   updateWarrantyAction,
 } from '@/app/(app)/warranties/actions';
-import { getWarrantyItem, listWarrantyReceipts } from '@/lib/warranty/items';
+import { MAX_RULES_PER_LOAN } from '@/lib/loans';
+import { createWarrantyItem, getWarrantyItem, listWarrantyReceipts } from '@/lib/warranty/items';
 import { MAX_FILES_PER_UPLOAD, receiptFileExists } from '@/lib/warranty/receipts';
 import { writeSidecar, writeStagedReceipt } from '@/lib/warranty/staging';
 import { resetOcrQueueForTests } from '@/lib/warranty/ocr/queue';
@@ -121,6 +125,44 @@ async function redirectPath(run: () => Promise<unknown>): Promise<string> {
   throw new Error('expected a redirect');
 }
 
+/** v1.3.1: baseFields() plus a fresh loan-kind type, so the loan fieldset's readers fire. */
+function loanForm(over: Record<string, string> = {}): Record<string, string> {
+  const loanType = createItemType(`Loan ${randomUUID()}`, 'loan');
+  return baseFields({ typeId: String(loanType.id), principal: '', interestRate: '', currentBalance: '', ...over });
+}
+
+/** Most recently created item -- for tests that don't need the redirect path itself. */
+function latestItem() {
+  const row = current!.db.get<{ id: number }>(sql`select id from warranty_items order by id desc limit 1`);
+  return getWarrantyItem(row.id)!;
+}
+
+/**
+ * A loan-kind item, seeded directly through the data layer (synchronous, no action/redirect
+ * dance) so tests exercising the rule actions can set up fixtures inline.
+ */
+function seedLoanItem(opts: { balanceCents?: number } = {}): number {
+  const loanType = createItemType(`Loan ${randomUUID()}`, 'loan');
+  return createWarrantyItem({
+    name: 'Car Loan',
+    vendor: null,
+    model: null,
+    serial: null,
+    purchaseDate: '2026-01-01',
+    warrantyMonths: null,
+    isLifetime: false,
+    priceCents: null,
+    ownerUserId: ownerId,
+    transactionId: null,
+    typeId: loanType.id,
+    notes: null,
+    principalCents: 3_000_000,
+    interestRateBps: 549,
+    currentBalanceCents: opts.balanceCents ?? 2_000_000,
+    balanceUpdatedAt: nowIso(),
+  });
+}
+
 describe('cross-origin rejection comes FIRST (MUST-13.1)', () => {
   const cases: [string, (fd: FormData) => Promise<{ error?: string }>][] = [
     ['createWarrantyAction', (fd) => createWarrantyAction({}, fd)],
@@ -129,6 +171,8 @@ describe('cross-origin rejection comes FIRST (MUST-13.1)', () => {
     ['attachReceiptsAction', (fd) => attachReceiptsAction({}, fd)],
     ['deleteReceiptAction', (fd) => deleteReceiptAction({}, fd)],
     ['reRunOcrAction', (fd) => reRunOcrAction({}, fd)],
+    ['saveLoanRuleAction', (fd) => saveLoanRuleAction({}, fd)],
+    ['deleteLoanRuleAction', (fd) => deleteLoanRuleAction(fd)],
   ];
 
   it.each(cases)('%s refuses a mismatched Origin without touching the database', async (_name, run) => {
@@ -569,5 +613,102 @@ describe('attachReceiptsAction / deleteReceiptAction / reRunOcrAction', () => {
     expect((await deleteReceiptAction({}, formData({ receiptId: '99999' }))).error).toBeTruthy();
     expect((await reRunOcrAction({}, formData({ receiptId: '99999' }))).error).toBeTruthy();
     expect((await deleteReceiptAction({}, formData({ receiptId: 'abc' }))).error).toBeTruthy();
+  });
+});
+
+describe('MUST-14.4 / MUST-14.7 / MUST-14.14: the loan readers and the rule actions', () => {
+  it('the three readers parse and round-trip, and the rate becomes basis points', async () => {
+    const to = await redirectPath(() =>
+      createWarrantyAction(
+        {},
+        formData(loanForm({ principal: '28,000.00', interestRate: '5.49', currentBalance: '$19,550.00' })),
+      ),
+    );
+    const item = getWarrantyItem(Number(to.split('/').pop()))!;
+    expect(item.principalCents).toBe(2_800_000);
+    expect(item.interestRateBps).toBe(549);
+    expect(item.currentBalanceCents).toBe(1_955_000);
+    // MUST-14.2 / MUST-11.8: the anchor is written here, and only here.
+    expect(item.balanceUpdatedAt).not.toBeNull();
+  });
+
+  it('an empty balance sets BOTH the balance and the anchor to null', async () => {
+    await redirectPath(() => createWarrantyAction({}, formData(loanForm({ currentBalance: '' }))));
+    const item = latestItem();
+    expect(item.currentBalanceCents).toBeNull();
+    expect(item.balanceUpdatedAt).toBeNull();
+  });
+
+  it('both rule actions reject a cross-origin request first', async () => {
+    originHeaders = { origin: 'http://evil.example', host: 'nas.local:3000' };
+    expect((await saveLoanRuleAction({}, formData({ itemId: '1', merchantContains: 'HONDA' }))).error).toBe(CROSS_ORIGIN_ERROR);
+    expect((await deleteLoanRuleAction(formData({ id: '1', itemId: '1' }))).error).toBe(CROSS_ORIGIN_ERROR);
+  });
+
+  it('refuses fewer than three characters, the sixth rule, and a duplicate — each with its fixed wording', async () => {
+    const itemId = seedLoanItem();
+    expect((await saveLoanRuleAction({}, formData({ itemId: String(itemId), merchantContains: 'HO' }))).error).toBe(
+      'Use at least three characters, or this will match almost everything.',
+    );
+    for (let i = 0; i < MAX_RULES_PER_LOAN; i += 1) {
+      await saveLoanRuleAction({}, formData({ itemId: String(itemId), merchantContains: `RULE${i}` }));
+    }
+    expect((await saveLoanRuleAction({}, formData({ itemId: String(itemId), merchantContains: 'ONEMORE' }))).error).toBe(
+      'Five rules per loan is the limit.',
+    );
+    const second = seedLoanItem();
+    await saveLoanRuleAction({}, formData({ itemId: String(second), merchantContains: 'HONDA FIN' }));
+    expect((await saveLoanRuleAction({}, formData({ itemId: String(second), merchantContains: 'HONDA FIN' }))).error).toBe(
+      'That rule already exists on this loan.',
+    );
+  });
+
+  it('MUST-14.14: revalidateAll covers /transactions and /reports', async () => {
+    const itemId = seedLoanItem();
+    vi.mocked(revalidatePath).mockClear();
+    await saveLoanRuleAction({}, formData({ itemId: String(itemId), merchantContains: 'HONDA FIN' }));
+    const calls = vi.mocked(revalidatePath).mock.calls.map((call) => call[0]);
+    expect(calls).toContain('/transactions');
+    expect(calls).toContain('/reports');
+  });
+
+  // Task 9 review finding (MED), carried into this task: the edit form used to omit the
+  // four loan money fields entirely, and readItemInput() normalises an absent field to null
+  // -- so editing only the item's NAME used to silently wipe principal/rate/balance/anchor on
+  // every loan. The Loan fieldset now round-trips the item's existing values (seeded into the
+  // edit form's controlled inputs), so an edit that resubmits them unchanged must leave them
+  // unchanged too. balanceUpdatedAt is asserted non-null rather than byte-identical: submitting
+  // a non-empty balance always re-stamps "now" by design (MUST-11.8's readable code above), so
+  // the regression this guards against is the field going to NULL, not the exact instant it
+  // reads.
+  it('regression (Task 9 review, MED): editing only the name of a loan with a live balance leaves principal/rate/balance intact', async () => {
+    const to = await redirectPath(() =>
+      createWarrantyAction({}, formData(loanForm({ principal: '30,000.00', interestRate: '5.49', currentBalance: '25,000.00' }))),
+    );
+    const id = Number(to.split('/').pop());
+    const before = getWarrantyItem(id)!;
+    expect(before.currentBalanceCents).not.toBeNull();
+
+    const result = await updateWarrantyAction(
+      {},
+      formData(
+        baseFields({
+          itemId: String(id),
+          typeId: String(before.typeId),
+          name: 'Renamed Loan',
+          principal: '30,000.00',
+          interestRate: '5.49',
+          currentBalance: '25,000.00',
+        }),
+      ),
+    );
+    expect(result.message).toBeTruthy();
+
+    const after = getWarrantyItem(id)!;
+    expect(after.name).toBe('Renamed Loan');
+    expect(after.principalCents).toBe(before.principalCents);
+    expect(after.interestRateBps).toBe(before.interestRateBps);
+    expect(after.currentBalanceCents).toBe(before.currentBalanceCents);
+    expect(after.balanceUpdatedAt).not.toBeNull();
   });
 });

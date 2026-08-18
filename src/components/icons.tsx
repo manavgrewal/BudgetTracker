@@ -102,6 +102,16 @@ export function WarrantiesIcon(props: IconProps) {
   );
 }
 
+export function LoanIcon(props: IconProps) {
+  return (
+    <Glyph {...props}>
+      <path d="M3 7.5h18v9H3z" />
+      <path d="M12 14.2a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4Z" />
+      <path d="M6.5 10.2v3.6M17.5 10.2v3.6" />
+    </Glyph>
+  );
+}
+
 export function ReportsIcon(props: IconProps) {
   return (
     <Glyph {...props}>

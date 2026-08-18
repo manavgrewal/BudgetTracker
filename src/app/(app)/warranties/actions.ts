@@ -7,8 +7,17 @@ import { z } from 'zod';
 import BetterSqlite3 from 'better-sqlite3';
 import { CROSS_ORIGIN_ERROR, isSameOrigin } from '@/lib/auth/csrf';
 import { requireUser } from '@/lib/auth/session';
+import { nowIso } from '@/lib/clock';
 import { todayIso } from '@/lib/dates';
-import { parseAmountToCents } from '@/lib/money';
+import {
+  MAX_RULES_PER_LOAN,
+  backfillLoanRule,
+  checkLoanBackfill,
+  deleteLoanRule,
+  listLoanRules,
+  saveLoanRule,
+} from '@/lib/loans';
+import { formatCents, parseAmountToCents } from '@/lib/money';
 import {
   attachStagedReceipts,
   countReceiptsWithSha,
@@ -112,6 +121,38 @@ function readBillingAmountCents(formData: FormData): number | null {
   return Math.abs(cents);
 }
 
+/** '' -> null; anything else must parse as money, as a non-negative magnitude, same as price. */
+function readPrincipalCents(formData: FormData): number | null {
+  const raw = str(formData, 'principal').trim();
+  if (raw.length === 0) return null;
+  const cents = parseAmountToCents(raw);
+  if (cents === null) throw new Error('The original amount is not a number.');
+  return Math.abs(cents);
+}
+
+/**
+ * MUST-14.4: parsed as a decimal PERCENT and stored as BASIS POINTS -- 5.49% is 549. The
+ * 0-10000% range is checked here, in zod, and again by the CHECK in 0007.
+ * MUST-13.1: this is the only arithmetic the rate is ever subject to, and it is a unit
+ * conversion at the form boundary, not a calculation.
+ */
+function readInterestRateBps(formData: FormData): number | null {
+  const raw = str(formData, 'interestRate').trim();
+  if (raw.length === 0) return null;
+  const percent = Number(raw);
+  if (!Number.isFinite(percent)) throw new Error('The interest rate is not a number.');
+  if (percent < 0 || percent > 10_000) throw new Error('That rate is out of range.');
+  return Math.round(percent * 100);
+}
+
+function readBalanceCents(formData: FormData): number | null {
+  const raw = str(formData, 'currentBalance').trim();
+  if (raw.length === 0) return null;
+  const cents = parseAmountToCents(raw);
+  if (cents === null) throw new Error('The balance is not a number.');
+  return Math.abs(cents);
+}
+
 function readMonths(formData: FormData): number | null {
   const raw = str(formData, 'warrantyMonths').trim();
   if (raw.length === 0) return null;
@@ -148,6 +189,9 @@ function readTypeId(formData: FormData): number | null {
 
 function readItemInput(formData: FormData, fallbackOwnerId: number) {
   const owner = readOptionalId(formData, 'ownerUserId') ?? fallbackOwnerId;
+  // Hoisted so the anchor written just below can be derived from the SAME parsed value,
+  // rather than re-reading (and re-parsing) the balance field a second time.
+  const balanceCents = readBalanceCents(formData);
   return warrantyInputSchema(todayIso()).safeParse({
     name: str(formData, 'name'),
     vendor: str(formData, 'vendor'),
@@ -164,6 +208,14 @@ function readItemInput(formData: FormData, fallbackOwnerId: number) {
     notes: str(formData, 'notes'),
     billingCycle: readBillingCycle(formData),
     billingAmountCents: readBillingAmountCents(formData),
+    principalCents: readPrincipalCents(formData),
+    interestRateBps: readInterestRateBps(formData),
+    currentBalanceCents: balanceCents,
+    // MUST-11.8: the HUMAN anchor. Written here and NOWHERE else -- never by a matched
+    // payment, never by an unassign, never by an import undo. It answers "when did a person
+    // last tell us the truth about this balance", which is exactly the question the debt
+    // reconstruction needs.
+    balanceUpdatedAt: balanceCents === null ? null : nowIso(),
   });
 }
 
@@ -208,9 +260,12 @@ function failure(error: unknown, fallback: string): WarrantyActionState {
   return { error: messageOf(error, fallback) };
 }
 
+// MUST-14.14: a rule save can move a balance both /transactions and /reports render.
 function revalidateAll(itemId?: number): void {
   revalidatePath('/warranties');
   revalidatePath('/dashboard');
+  revalidatePath('/transactions');
+  revalidatePath('/reports');
   if (itemId !== undefined) revalidatePath(`/warranties/${itemId}`);
 }
 
@@ -370,4 +425,77 @@ export async function reRunOcrAction(
   }
   revalidateAll(receipt.warrantyItemId);
   return { message: 'Reading that receipt again — the status will update shortly.' };
+}
+
+const RULE_TOO_SHORT = 'Use at least three characters, or this will match almost everything.';
+const RULE_LIMIT = 'Five rules per loan is the limit.';
+const RULE_DUPLICATE = 'That rule already exists on this loan.';
+
+const loanRuleSchema = z.object({
+  itemId: z.coerce.number().int().positive(),
+  merchantContains: z.string().trim().min(3, RULE_TOO_SHORT).max(120),
+  accountId: z.coerce.number().int().positive().nullable(),
+  backfill: z.boolean(),
+});
+
+export async function saveLoanRuleAction(_prev: WarrantyActionState, formData: FormData): Promise<WarrantyActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+  await requireUser();
+
+  const accountRaw = str(formData, 'accountId').trim();
+  const parsed = loanRuleSchema.safeParse({
+    itemId: str(formData, 'itemId'),
+    merchantContains: str(formData, 'merchantContains'),
+    accountId: accountRaw.length === 0 ? null : accountRaw,
+    backfill: formData.get('backfill') !== null,
+  });
+  if (!parsed.success) return { error: parsed.error.issues[0]?.message ?? 'Could not save that rule.' };
+
+  const item = getWarrantyItem(parsed.data.itemId);
+  if (!item) return { error: 'That item no longer exists.' };
+  if (item.kind !== 'loan') return { error: 'Payment matching only applies to loans.' };
+  if (listLoanRules(item.id).length >= MAX_RULES_PER_LOAN) return { error: RULE_LIMIT };
+
+  let ruleId: number;
+  try {
+    ruleId = saveLoanRule({
+      itemId: parsed.data.itemId,
+      merchantContains: parsed.data.merchantContains,
+      accountId: parsed.data.accountId,
+      enabled: true,
+    });
+  } catch (error) {
+    // MUST-14.7: the unique index's message, translated beside the existing FK translation.
+    if (error instanceof BetterSqlite3.SqliteError && error.code === 'SQLITE_CONSTRAINT_UNIQUE') {
+      return { error: RULE_DUPLICATE };
+    }
+    return failure(error, 'Could not save that rule.');
+  }
+
+  let message = 'Rule saved. It will apply to payments that arrive from now on.';
+  if (parsed.data.backfill) {
+    // MUST-14.12: the ONE loan action with a limit, and the rule is still saved when it is
+    // refused -- only the historical pass is skipped.
+    const verdict = checkLoanBackfill();
+    if (!verdict.allowed) {
+      message = 'Rule saved, but the backfill was skipped: too many in the last few minutes.';
+    } else {
+      const { linked, appliedCents } = backfillLoanRule(ruleId);
+      message = `Rule saved. ${linked} past payments linked, ${formatCents(appliedCents)} taken off the balance.`;
+    }
+  }
+  revalidateAll(parsed.data.itemId);
+  return { message };
+}
+
+export async function deleteLoanRuleAction(formData: FormData): Promise<WarrantyActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+  await requireUser();
+  const parsed = z
+    .object({ id: z.coerce.number().int().positive(), itemId: z.coerce.number().int().positive() })
+    .safeParse({ id: formData.get('id'), itemId: formData.get('itemId') });
+  if (!parsed.success) return { error: 'Invalid request.' };
+  if (!deleteLoanRule(parsed.data.id)) return { error: 'That rule no longer exists.' };
+  revalidateAll(parsed.data.itemId);
+  return { message: 'Rule removed. Payments already linked are untouched.' };
 }

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, cleanup } from '@testing-library/react';
+import { render, cleanup, screen } from '@testing-library/react';
 import { TransactionsClient } from '@/app/(app)/transactions/transactions-client';
 import type { TransactionPage, TransactionRow } from '@/lib/transactions';
 
@@ -11,6 +11,8 @@ vi.mock('@/app/(app)/transactions/actions', () => ({
   bulkCategorizeAction: vi.fn(async () => ({})),
   bulkTransferAction: vi.fn(async () => ({})),
   renameTransactionAction: vi.fn(async () => ({})),
+  assignToLoanAction: vi.fn(async () => ({})),
+  unassignFromLoanAction: vi.fn(async () => ({})),
 }));
 
 afterEach(() => cleanup());
@@ -145,5 +147,52 @@ describe('Create warranty row action (§11)', () => {
     expect(href).not.toContain('amount');
     expect(href).not.toContain('vendor');
     expect(href).not.toContain('date');
+  });
+});
+
+describe('MUST-14.8 / MUST-14.9: the row control', () => {
+  const linkedRowId = 1; // matches pageWithRow()'s default row id
+  const baseProps = {
+    page: pageWithRow(),
+    accounts: [{ id: 1, name: 'Joint Chequing' }],
+    categories: [],
+    people: [],
+    today: '2026-03-02',
+  };
+  const transferOnlyProps = { ...baseProps, page: pageWithRow({ isTransfer: true }) };
+
+  it('with no loans, the assign control is absent entirely', () => {
+    render(<TransactionsClient {...baseProps} loanOptions={[]} loanLinks={{}} />);
+    expect(screen.queryByText('Assign to loan…')).toBeNull();
+    expect(screen.queryByText('Assign')).toBeNull();
+  });
+
+  it('an unlinked row renders the select; a linked row renders the name and Unassign', () => {
+    render(
+      <TransactionsClient
+        {...baseProps}
+        loanOptions={[{ id: 7, name: 'Civic' }]}
+        loanLinks={{
+          [linkedRowId]: [
+            { id: 1, txnId: linkedRowId, itemId: 7, itemName: 'Civic', amountCents: 45000, appliedCents: 45000, source: 'manual' },
+          ],
+        }}
+      />,
+    );
+    expect(screen.getByText('Civic')).toBeTruthy();
+    expect(screen.getByText('Unassign')).toBeTruthy();
+    expect(screen.queryByText('Assign to loan…')).toBeNull();
+  });
+
+  it('an unlinked row renders the select when there ARE loans', () => {
+    render(<TransactionsClient {...baseProps} loanOptions={[{ id: 7, name: 'Civic' }]} loanLinks={{}} />);
+    expect(screen.getByText('Assign to loan…')).toBeTruthy();
+    expect(screen.getByText('Civic')).toBeTruthy();
+  });
+
+  it('a transfer row renders neither control', () => {
+    render(<TransactionsClient {...transferOnlyProps} loanOptions={[{ id: 7, name: 'Civic' }]} loanLinks={{}} />);
+    expect(screen.queryByText('Assign to loan…')).toBeNull();
+    expect(screen.queryByText('Unassign')).toBeNull();
   });
 });

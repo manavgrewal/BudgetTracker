@@ -4,22 +4,29 @@ import { useActionState, useCallback, useEffect, useRef, useState } from 'react'
 import { useFormStatus } from 'react-dom';
 import Link from 'next/link';
 import { FormError } from '@/components/FormError';
+import { LoanProgressBar } from '@/components/LoanProgressBar';
 import { SubmitButton } from '@/components/SubmitButton';
 import { StatusBadge } from '@/components/warranty/StatusBadge';
 import { ReceiptUploader, type StagedFile } from '@/components/warranty/ReceiptUploader';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { Money } from '@/components/ui/Money';
 import { Notice } from '@/components/ui/Notice';
+import { TableWrap } from '@/components/ui/Table';
 import { Field, inputClass, labelClass, selectClass, textareaClass } from '@/components/ui/form';
+import { formatCents } from '@/lib/money';
+import type { LoanRule } from '@/lib/loans';
 import {
   BILLING_CYCLE_LABELS,
   BILLING_CYCLES,
   billingAllowedForKind,
+  billingAmountLabelForKind,
   billingCycleSuffixForKind,
+  billingSectionLabelForKind,
   formEndLabel,
   formOpenEndedLabel,
   formStartLabel,
   formTermLabel,
+  loanFieldsAllowedForKind,
   openEndedDisplayLabel,
   type ItemKind,
 } from '@/lib/warranty/constants';
@@ -27,9 +34,11 @@ import type { WarrantyStatus } from '@/lib/warranty/expiry';
 import type { WarrantyItemRow, WarrantyReceiptRow } from '@/lib/warranty/items';
 import {
   attachReceiptsAction,
+  deleteLoanRuleAction,
   deleteReceiptAction,
   deleteWarrantyAction,
   reRunOcrAction,
+  saveLoanRuleAction,
   updateWarrantyAction,
   type WarrantyActionState,
 } from '../actions';
@@ -78,6 +87,11 @@ export function WarrantyDetailClient({
   today,
   linkedTransaction,
   linkRemoved,
+  rules,
+  accounts,
+  payoffFraction,
+  lastPaymentAt,
+  paymentCount,
 }: {
   item: WarrantyItemRow;
   receipts: WarrantyReceiptRow[];
@@ -88,6 +102,13 @@ export function WarrantyDetailClient({
   today: string;
   linkedTransaction: { id: number; date: string; description: string } | null;
   linkRemoved: boolean;
+  /** v1.3.1: the Payment matching sub-card's rules and account picker, loan-kind only. */
+  rules: LoanRule[];
+  accounts: { id: number; name: string }[];
+  /** v1.3.1: from listLoans().find(...) on the server -- MUST-15.4's payoff math. */
+  payoffFraction: number | null;
+  lastPaymentAt: string | null;
+  paymentCount: number;
 }) {
   const [editing, setEditing] = useState(false);
   const [confirming, setConfirming] = useState(false);
@@ -130,6 +151,16 @@ export function WarrantyDetailClient({
     setActiveSlot('ocr');
     return reRunOcrAction(prev, formData);
   }, initial);
+
+  // v1.3.1: the Payment matching sub-card's own add-rule state, reported inline within the
+  // card rather than through the top FormError/Notice above -- it is not one of the five
+  // actions the activeSlot mechanism disambiguates between. Remove is a plain server action
+  // reference (deleteLoanRuleAction already takes just `formData`, matching a <form action>
+  // directly): its own revalidatePath call refreshes `rules` from the server automatically.
+  const [ruleState, addRule] = useActionState(saveLoanRuleAction, initial);
+  const removeRule = async (formData: FormData) => {
+    await deleteLoanRuleAction(formData);
+  };
 
   const slotState =
     activeSlot === 'edit'
@@ -288,10 +319,116 @@ export function WarrantyDetailClient({
                   )}
                 </Detail>
               </dl>
+
+              {/* MUST-14.3: every row omitted when its value is null; the whole block omitted
+                  when there is no principal AND no balance -- a loan item that has not had its
+                  money fields filled in yet renders exactly like it did before this feature. */}
+              {item.currentBalanceCents === null && item.principalCents === null ? null : (
+                <div className="mt-4 flex flex-col gap-3 border-t border-line pt-4">
+                  {item.currentBalanceCents === null ? null : (
+                    <>
+                      <p className="money-lg">{formatCents(item.currentBalanceCents)}</p>
+                      {/* MUST-11.8: "You set this on" and "Last payment" are labelled
+                          DIFFERENTLY, because they answer different questions.
+                          balance_updated_at is the human anchor. */}
+                      {item.balanceUpdatedAt === null ? null : (
+                        <p className="text-sm text-subtle">You set this on {item.balanceUpdatedAt.slice(0, 10)}</p>
+                      )}
+                    </>
+                  )}
+                  {payoffFraction === null ? null : <LoanProgressBar fraction={payoffFraction} label={item.name} />}
+                  {item.principalCents === null ? null : <Detail label="Original">{formatCents(item.principalCents)}</Detail>}
+                  {item.interestRateBps === null ? null : (
+                    <Detail label="Rate">{(item.interestRateBps / 100).toFixed(2)}%</Detail>
+                  )}
+                  {item.billingCycle === null || item.billingAmountCents === null ? null : (
+                    <Detail label="Payment">
+                      {formatCents(item.billingAmountCents)} {billingCycleSuffixForKind(item.kind, item.billingCycle)}
+                    </Detail>
+                  )}
+                  {lastPaymentAt === null ? null : <Detail label="Last payment">{lastPaymentAt.slice(0, 10)}</Detail>}
+                  {paymentCount === 0 ? null : <Detail label="Payments linked">{paymentCount}</Detail>}
+                </div>
+              )}
             </CardBody>
           </Card>
         )}
       </div>
+
+      {/* MUST-14.5 / MUST-14.6 / MUST-13.9: loan-kind only. Always states the budget rule
+          above the table, so the person reads it exactly where they are making the decision. */}
+      {item.kind !== 'loan' ? null : (
+        <Card>
+          <CardHeader title="Payment matching" />
+          <CardBody className="flex flex-col gap-4">
+            <p className="text-sm text-muted">
+              When a transaction&apos;s merchant contains this text, the app treats it as a payment on this loan and
+              takes it off the balance. The payment still counts in your budget and in your reports.
+            </p>
+            {rules.length === 0 ? null : (
+              <TableWrap bare>
+                <thead>
+                  <tr>
+                    <th scope="col">Merchant contains</th>
+                    <th scope="col">Account</th>
+                    <th scope="col"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rules.map((rule) => (
+                    <tr key={rule.id}>
+                      <td className="font-medium text-ink">{rule.merchantContains}</td>
+                      <td className="text-muted">
+                        {rule.accountId === null ? 'Any account' : (accounts.find((a) => a.id === rule.accountId)?.name ?? 'Any account')}
+                      </td>
+                      <td className="text-right">
+                        <form action={removeRule}>
+                          <input type="hidden" name="id" value={rule.id} />
+                          <input type="hidden" name="itemId" value={item.id} />
+                          <SubmitButton className="btn btn--ghost btn--sm">Remove</SubmitButton>
+                        </form>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </TableWrap>
+            )}
+            <form action={addRule} className="flex flex-col gap-3">
+              <input type="hidden" name="itemId" value={item.id} />
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="Merchant contains">
+                  <input name="merchantContains" className={inputClass} placeholder="e.g. HONDA FIN" />
+                </Field>
+                <Field label="Account">
+                  <select name="accountId" className={selectClass} defaultValue="">
+                    <option value="">Any account</option>
+                    {accounts.map((account) => (
+                      <option key={account.id} value={account.id}>{account.name}</option>
+                    ))}
+                  </select>
+                </Field>
+              </div>
+              {/* MUST-13.9: UNCHECKED by default, and the hint says which case is which. A
+                  person types today's balance and then saves a rule; back-filling a year of
+                  payments would subtract them all from a figure that already accounts for
+                  them. */}
+              <label className="flex items-start gap-2 text-sm text-muted">
+                <input type="checkbox" name="backfill" className="mt-1" />
+                <span>
+                  Also link matching payments from the last 12 months
+                  <span className="field-hint block">
+                    Only tick this if the balance you typed is the balance from before those payments. Ticking it
+                    will subtract every payment it finds.
+                  </span>
+                </span>
+              </label>
+              <FormError message={ruleState.error} />
+              {ruleState.message === undefined ? null : <Notice tone="success">{ruleState.message}</Notice>}
+              <SubmitButton className="btn btn--primary self-start">Add rule</SubmitButton>
+            </form>
+          </CardBody>
+        </Card>
+      )}
 
       <Card>
         <CardHeader
@@ -405,6 +542,26 @@ function EditForm({
     }
   }, [billingApplicable]);
 
+  // v1.3.1: the loan money fields, seeded from the item -- this is what closes the review
+  // finding where an unrelated edit used to null them out (the fields simply were not
+  // rendered, and readItemInput() normalises an absent field to null). Same live-follows-the
+  // -SELECTED-kind treatment as the billing pair above.
+  const [principal, setPrincipal] = useState(item.principalCents === null ? '' : (item.principalCents / 100).toFixed(2));
+  const [interestRate, setInterestRate] = useState(
+    item.interestRateBps === null ? '' : (item.interestRateBps / 100).toFixed(2),
+  );
+  const [currentBalance, setCurrentBalance] = useState(
+    item.currentBalanceCents === null ? '' : (item.currentBalanceCents / 100).toFixed(2),
+  );
+  const loanApplicable = loanFieldsAllowedForKind(selectedKind);
+  useEffect(() => {
+    if (!loanApplicable) {
+      setPrincipal('');
+      setInterestRate('');
+      setCurrentBalance('');
+    }
+  }, [loanApplicable]);
+
   return (
     <Card className="max-w-2xl">
       <CardHeader title="Edit this item" />
@@ -454,7 +611,7 @@ function EditForm({
 
             {billingApplicable ? (
               <>
-                <Field label="Billing">
+                <Field label={billingSectionLabelForKind(selectedKind)}>
                   <select
                     name="billingCycle"
                     value={billingCycle}
@@ -467,13 +624,54 @@ function EditForm({
                     ))}
                   </select>
                 </Field>
-                <Field label="Amount">
+                <Field label={billingAmountLabelForKind(selectedKind)}>
                   <input
                     name="billingAmount"
                     inputMode="decimal"
                     placeholder="e.g. 15.99"
                     value={billingAmount}
                     onChange={(e) => setBillingAmount(e.target.value)}
+                    className={inputClass}
+                  />
+                </Field>
+              </>
+            ) : null}
+
+            {/* MUST-14.1: rendered exactly when the SELECTED type's kind is 'loan'. Hidden
+                entirely otherwise, so an absent field posts as blank -> null, the same
+                mechanism every other optional field on this form uses. */}
+            {loanApplicable ? (
+              <>
+                <Field label="Original amount" hint="What you borrowed. Used for the payoff bar.">
+                  <input
+                    name="principal"
+                    inputMode="decimal"
+                    placeholder="e.g. 28000.00"
+                    value={principal}
+                    onChange={(e) => setPrincipal(e.target.value)}
+                    className={inputClass}
+                  />
+                </Field>
+                <Field label="Interest rate" hint="Shown for reference only — this app does no interest math.">
+                  <span className="flex items-center gap-2">
+                    <input
+                      name="interestRate"
+                      inputMode="decimal"
+                      placeholder="e.g. 5.49"
+                      value={interestRate}
+                      onChange={(e) => setInterestRate(e.target.value)}
+                      className={`${inputClass} w-28`}
+                    />
+                    <span className="text-sm text-muted">%</span>
+                  </span>
+                </Field>
+                <Field label="Balance still owed" hint="Today's balance. Payments you link will take it down from here.">
+                  <input
+                    name="currentBalance"
+                    inputMode="decimal"
+                    placeholder="e.g. 19550.00"
+                    value={currentBalance}
+                    onChange={(e) => setCurrentBalance(e.target.value)}
                     className={inputClass}
                   />
                 </Field>

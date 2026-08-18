@@ -2,6 +2,7 @@ import { requireUser } from '@/lib/auth/session';
 import { listAccounts } from '@/lib/accounts';
 import { listCategories } from '@/lib/categories';
 import { listUsers } from '@/lib/auth/users';
+import { loanLinksForTransactions, listLoans } from '@/lib/loans';
 import { listTransactions, type TransactionFilter } from '@/lib/transactions';
 import { todayIso } from '@/lib/dates';
 import { TransactionsClient } from './transactions-client';
@@ -41,9 +42,10 @@ export default async function TransactionsPage({
   await requireUser();
   const params = await searchParams;
   const filter = readFilter(params);
+  const page = listTransactions(filter);
   return (
     <TransactionsClient
-      page={listTransactions(filter)}
+      page={page}
       accounts={listAccounts().map((a) => ({ id: a.id, name: a.name }))}
       // Archived categories are included here (not just listCategories()) so a row whose
       // category was later archived can still render its real name on the per-row select
@@ -52,6 +54,12 @@ export default async function TransactionsPage({
       categories={listCategories({ includeArchived: true }).map((c) => ({ id: c.id, name: c.name, parentId: c.parentId, isArchived: c.isArchived }))}
       people={listUsers().map((u) => ({ id: u.id, name: u.name }))}
       today={todayIso()}
+      // MUST-14.9: empty for a household with no loans (or none with a balance still owed),
+      // which is exactly what makes the row control disappear entirely on that page.
+      loanOptions={listLoans()
+        .filter((loan) => loan.currentBalanceCents !== null)
+        .map((loan) => ({ id: loan.itemId, name: loan.name }))}
+      loanLinks={Object.fromEntries(loanLinksForTransactions(page.rows.map((row) => row.id)))}
     />
   );
 }

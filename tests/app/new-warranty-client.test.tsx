@@ -136,7 +136,10 @@ describe('NewWarrantyClient', () => {
     fireEvent.change(container.querySelector('input[name="billingAmount"]')!, { target: { value: '15.99' } });
     expect((container.querySelector('select[name="billingCycle"]') as HTMLSelectElement).value).toBe('monthly');
 
-    fireEvent.change(container.querySelector('select[name="typeId"]')!, { target: { value: '3' } }); // loan
+    // v1.3.1: billingAllowedForKind widened to include 'loan' (a loan's billing pair is its
+    // regular payment) -- '1' (Appliance, kind warranty) is the only kind left that does NOT
+    // carry billing, so it's the one that proves the fields actually clear.
+    fireEvent.change(container.querySelector('select[name="typeId"]')!, { target: { value: '1' } }); // warranty
     expect(container.querySelector('select[name="billingCycle"]')).toBeNull();
     expect(container.querySelector('input[name="billingAmount"]')).toBeNull();
 
@@ -168,5 +171,48 @@ describe('NewWarrantyClient', () => {
     expect(screen.queryByText('Purchase date')).toBeNull();
     expect(container.querySelector('legend')!.textContent).toBe('Term (months)');
     expect(screen.getByText('Ongoing (no end date)')).toBeTruthy();
+  });
+});
+
+// v1.3.1: the Loan fieldset and the billing-label kind matrix (MUST-14.1 / MUST-12.3).
+describe('MUST-14.1 / MUST-12.3: the loan surfaces', () => {
+  it('the loan fieldset appears only for a loan-kind type and disappears live', () => {
+    const { container } = renderForm();
+    expect(screen.queryByText('Balance still owed')).toBeNull();
+
+    fireEvent.change(container.querySelector('select[name="typeId"]')!, { target: { value: '3' } }); // Car loan
+    expect(screen.getByText('Balance still owed')).toBeTruthy();
+    expect(screen.getByText('Shown for reference only — this app does no interest math.')).toBeTruthy();
+    expect(container.querySelector('input[name="principal"]')).toBeTruthy();
+    expect(container.querySelector('input[name="interestRate"]')).toBeTruthy();
+    expect(container.querySelector('input[name="currentBalance"]')).toBeTruthy();
+
+    fireEvent.change(container.querySelector('select[name="typeId"]')!, { target: { value: '1' } }); // Appliance
+    expect(screen.queryByText('Balance still owed')).toBeNull();
+    expect(container.querySelector('input[name="currentBalance"]')).toBeNull();
+  });
+
+  it('clears the loan fields when the kind switches away', () => {
+    const { container } = renderForm();
+    fireEvent.change(container.querySelector('select[name="typeId"]')!, { target: { value: '3' } });
+    fireEvent.change(container.querySelector('input[name="currentBalance"]')!, { target: { value: '19550.00' } });
+    expect((container.querySelector('input[name="currentBalance"]') as HTMLInputElement).value).toBe('19550.00');
+
+    fireEvent.change(container.querySelector('select[name="typeId"]')!, { target: { value: '1' } });
+    expect(container.querySelector('input[name="currentBalance"]')).toBeNull();
+
+    fireEvent.change(container.querySelector('select[name="typeId"]')!, { target: { value: '3' } });
+    expect((container.querySelector('input[name="currentBalance"]') as HTMLInputElement).value).toBe('');
+  });
+
+  it('the billing labels read Payment / Payment amount / per month for a loan', () => {
+    const { container } = renderForm();
+    fireEvent.change(container.querySelector('select[name="typeId"]')!, { target: { value: '3' } }); // loan
+    expect(screen.getByText('Payment')).toBeTruthy();
+    expect(screen.getByText('Payment amount')).toBeTruthy();
+
+    fireEvent.change(container.querySelector('select[name="typeId"]')!, { target: { value: '2' } }); // subscription
+    expect(screen.getByText('Billing')).toBeTruthy();
+    expect(screen.getByText('Amount')).toBeTruthy();
   });
 });

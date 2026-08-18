@@ -249,7 +249,7 @@ export function warrantyInputSchema(today: string) {
       const balanceSet = value.currentBalanceCents !== null && value.currentBalanceCents !== undefined;
       const anchorSet = value.balanceUpdatedAt !== null && value.balanceUpdatedAt !== undefined;
       if (balanceSet !== anchorSet) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['currentBalance'], message: BALANCE_ANCHOR_ERROR });
+        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['currentBalanceCents'], message: BALANCE_ANCHOR_ERROR });
       }
     });
 }

@@ -13,10 +13,13 @@ import {
   BILLING_CYCLE_LABELS,
   BILLING_CYCLES,
   billingAllowedForKind,
+  billingAmountLabelForKind,
+  billingSectionLabelForKind,
   coveredThroughLabelForKind,
   formOpenEndedLabel,
   formStartLabel,
   formTermLabel,
+  loanFieldsAllowedForKind,
   type ItemKind,
 } from '@/lib/warranty/constants';
 import { computeExpiryDate } from '@/lib/warranty/expiry';
@@ -125,6 +128,19 @@ export function NewWarrantyClient({
       setBillingAmount('');
     }
   }, [billingApplicable]);
+
+  // v1.3.1: the loan money fields follow the SELECTED kind live, same pattern as billing above.
+  const [principal, setPrincipal] = useState('');
+  const [interestRate, setInterestRate] = useState('');
+  const [currentBalance, setCurrentBalance] = useState('');
+  const loanApplicable = loanFieldsAllowedForKind(selectedKind);
+  useEffect(() => {
+    if (!loanApplicable) {
+      setPrincipal('');
+      setInterestRate('');
+      setCurrentBalance('');
+    }
+  }, [loanApplicable]);
 
   /**
    * The prefill marker. OCR filling a blank field is helpful right up until nobody can
@@ -268,7 +284,7 @@ export function NewWarrantyClient({
                   (readBillingCycle/readBillingAmountCents in actions.ts). */}
               {billingApplicable ? (
                 <>
-                  <Field label="Billing">
+                  <Field label={billingSectionLabelForKind(selectedKind)}>
                     <select
                       name="billingCycle"
                       value={billingCycle}
@@ -281,13 +297,54 @@ export function NewWarrantyClient({
                       ))}
                     </select>
                   </Field>
-                  <Field label="Amount">
+                  <Field label={billingAmountLabelForKind(selectedKind)}>
                     <input
                       name="billingAmount"
                       inputMode="decimal"
                       placeholder="e.g. 15.99"
                       value={billingAmount}
                       onChange={(e) => setBillingAmount(e.target.value)}
+                      className={inputClass}
+                    />
+                  </Field>
+                </>
+              ) : null}
+
+              {/* MUST-14.1: rendered exactly when the SELECTED type's kind is 'loan'. Hidden
+                  entirely otherwise, so an absent field posts as blank -> null, the same
+                  mechanism every other optional field on this form uses. */}
+              {loanApplicable ? (
+                <>
+                  <Field label="Original amount" hint="What you borrowed. Used for the payoff bar.">
+                    <input
+                      name="principal"
+                      inputMode="decimal"
+                      placeholder="e.g. 28000.00"
+                      value={principal}
+                      onChange={(e) => setPrincipal(e.target.value)}
+                      className={inputClass}
+                    />
+                  </Field>
+                  <Field label="Interest rate" hint="Shown for reference only — this app does no interest math.">
+                    <span className="flex items-center gap-2">
+                      <input
+                        name="interestRate"
+                        inputMode="decimal"
+                        placeholder="e.g. 5.49"
+                        value={interestRate}
+                        onChange={(e) => setInterestRate(e.target.value)}
+                        className={`${inputClass} w-28`}
+                      />
+                      <span className="text-sm text-muted">%</span>
+                    </span>
+                  </Field>
+                  <Field label="Balance still owed" hint="Today's balance. Payments you link will take it down from here.">
+                    <input
+                      name="currentBalance"
+                      inputMode="decimal"
+                      placeholder="e.g. 19550.00"
+                      value={currentBalance}
+                      onChange={(e) => setCurrentBalance(e.target.value)}
                       className={inputClass}
                     />
                   </Field>

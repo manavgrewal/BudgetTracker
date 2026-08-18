@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { isSameOrigin } from '@/lib/auth/csrf';
 import { requireUser } from '@/lib/auth/session';
 import { getOrCreateCashAccount } from '@/lib/accounts';
+import { assignTransactionToLoan, loanLinksForTransactions, unassignTransactionFromLoan } from '@/lib/loans';
 import { parseAmountToCents } from '@/lib/money';
 import { isIsoDate } from '@/lib/dates';
 import {
@@ -192,4 +193,66 @@ export async function renameTransactionAction(_prev: ActionState, formData: Form
   return {
     message: `Renamed ${result.rowsUpdated} matching transaction${result.rowsUpdated === 1 ? '' : 's'} and created a rule for future imports.`,
   };
+}
+
+const loanLinkSchema = z.object({
+  transactionId: z.coerce.number().int().positive(),
+  itemId: z.coerce.number().int().positive(),
+});
+
+/**
+ * MUST-13.13: nothing is derived from the client but txnId and itemId, both zod-validated as
+ * positive integers and both existence-checked server-side. Warranty items are
+ * household-shared with owner_user_id as attribution only, so any signed-in user may assign
+ * a transaction to any loan -- the same posture the existing warranty actions take, and a
+ * deliberate consistency rather than an oversight.
+ *
+ * MUST-14.12: no rate limit, consistent with every existing warranty and transaction action.
+ */
+export async function assignToLoanAction(formData: FormData): Promise<ActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+  await requireUser();
+  const parsed = loanLinkSchema.safeParse({
+    transactionId: formData.get('transactionId'),
+    itemId: formData.get('itemId'),
+  });
+  if (!parsed.success) return { error: 'Invalid request.' };
+
+  let result: { linked: boolean; appliedCents: number };
+  try {
+    result = assignTransactionToLoan({ txnId: parsed.data.transactionId, itemId: parsed.data.itemId });
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : 'Could not assign that transaction.' };
+  }
+  revalidatePath('/transactions');
+  revalidatePath('/dashboard');
+  revalidatePath('/reports');
+  if (!result.linked) return { message: 'That transaction is already linked to this loan.' };
+
+  // MUST-14.10: over-linking SUCCEEDS and warns. A refusal here would block a legitimate
+  // combined payment; silence would hide a typo.
+  const txn = getTransaction(parsed.data.transactionId);
+  const links = loanLinksForTransactions([parsed.data.transactionId]).get(parsed.data.transactionId) ?? [];
+  const linked = links.reduce((sum, link) => sum + link.amountCents, 0);
+  if (txn !== null && linked > Math.abs(txn.amountCents)) {
+    return { message: 'Assigned. Note that this transaction is now linked to more than its own amount.' };
+  }
+  return { message: 'Assigned.' };
+}
+
+export async function unassignFromLoanAction(formData: FormData): Promise<ActionState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+  await requireUser();
+  const parsed = loanLinkSchema.safeParse({
+    transactionId: formData.get('transactionId'),
+    itemId: formData.get('itemId'),
+  });
+  if (!parsed.success) return { error: 'Invalid request.' };
+  if (!unassignTransactionFromLoan({ txnId: parsed.data.transactionId, itemId: parsed.data.itemId })) {
+    return { error: 'That transaction is not linked to this loan.' };
+  }
+  revalidatePath('/transactions');
+  revalidatePath('/dashboard');
+  revalidatePath('/reports');
+  return { message: 'Unassigned. The balance has gone back up by exactly what came off it.' };
 }
