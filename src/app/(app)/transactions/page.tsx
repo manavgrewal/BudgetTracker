@@ -5,11 +5,16 @@ import { listUsers } from '@/lib/auth/users';
 import { loanLinksForTransactions, listLoans } from '@/lib/loans';
 import { listTransactions, type TransactionFilter } from '@/lib/transactions';
 import { todayIso } from '@/lib/dates';
+import { resolveRange, type ResolvedRange } from '@/lib/date-range';
+import { readEnv } from '@/lib/env';
 import { TransactionsClient } from './transactions-client';
 
 export const dynamic = 'force-dynamic';
 
-function readFilter(params: Record<string, string | string[] | undefined>): TransactionFilter {
+function readFilter(
+  params: Record<string, string | string[] | undefined>,
+  range: ResolvedRange | null,
+): TransactionFilter {
   const one = (key: string) => {
     const value = params[key];
     return Array.isArray(value) ? value[0] : value;
@@ -24,8 +29,8 @@ function readFilter(params: Record<string, string | string[] | undefined>): Tran
     accountId: num('account') ?? null,
     categoryId: category === 'uncategorized' ? 'uncategorized' : category && /^\d+$/.test(category) ? Number(category) : null,
     attributedUserId: person === 'unattributed' ? 'unattributed' : person && /^\d+$/.test(person) ? Number(person) : null,
-    from: one('from') ?? null,
-    to: one('to') ?? null,
+    from: range?.from ?? null,
+    to: range?.to ?? null,
     search: one('q') ?? null,
     uncategorizedOnly: one('uncat') === '1',
     includeTransfers: one('transfers') !== '0',
@@ -41,7 +46,15 @@ export default async function TransactionsPage({
 }) {
   await requireUser();
   const params = await searchParams;
-  const filter = readFilter(params);
+  const today = todayIso(new Date(), readEnv().tz);
+  const one = (key: string) => {
+    const value = params[key];
+    return Array.isArray(value) ? value[0] : value;
+  };
+  // MUST-13.5: fallback null, because Transactions is the page people open to find a charge
+  // from March and giving it a default range would hide exactly those rows.
+  const range = resolveRange({ preset: one('range'), from: one('from'), to: one('to'), today, fallback: null });
+  const filter = readFilter(params, range);
   const page = listTransactions(filter);
   return (
     <TransactionsClient
@@ -53,7 +66,8 @@ export default async function TransactionsPage({
       // "Uncategorized". See TransactionsClient's activeCategories split.
       categories={listCategories({ includeArchived: true }).map((c) => ({ id: c.id, name: c.name, parentId: c.parentId, isArchived: c.isArchived }))}
       people={listUsers().map((u) => ({ id: u.id, name: u.name }))}
-      today={todayIso()}
+      today={today}
+      range={range}
       // MUST-14.9: empty for a household with no loans (or none with a balance still owed),
       // which is exactly what makes the row control disappear entirely on that page.
       loanOptions={listLoans()

@@ -4,6 +4,7 @@ import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser
 import { GET } from '@/app/api/reports/export/route';
 import { createSession, SESSION_COOKIE_NAME } from '@/lib/auth/session';
 import { nowIso } from '@/lib/clock';
+import { addMonths, currentMonth, monthEnd, monthStart } from '@/lib/dates';
 
 let current: TestDb | null = null;
 afterEach(() => {
@@ -97,5 +98,37 @@ describe('GET /api/reports/export', () => {
       }),
     );
     expect(response.status).toBe(403);
+  });
+
+  it('MUST-13.9: a preset token exports the same rows as the equivalent explicit pair', async () => {
+    const { token } = setup();
+    const month = currentMonth();
+    const preset = await GET(exportRequest('http://nas.local:3000/api/reports/export?range=last_3_months', token));
+    const explicit = await GET(
+      exportRequest(
+        `http://nas.local:3000/api/reports/export?from=${monthStart(addMonths(month, -2))}&to=${monthEnd(month)}`,
+        token,
+      ),
+    );
+    expect(preset.status).toBe(200);
+    expect(await preset.text()).toBe(await explicit.text());
+  });
+
+  it('MUST-11.6 case 1: a recognised preset makes a stale from/to pair in the link irrelevant', async () => {
+    const { token } = setup();
+    const withStale = await GET(
+      exportRequest('http://nas.local:3000/api/reports/export?range=last_3_months&from=2020-01-01&to=2020-12-31', token),
+    );
+    const without = await GET(exportRequest('http://nas.local:3000/api/reports/export?range=last_3_months', token));
+    expect(await withStale.text()).toBe(await without.text());
+  });
+
+  it('MUST-13.10: with no range parameters at all the route still exports every row', async () => {
+    const { token } = setup();
+    const response = await GET(exportRequest('http://nas.local:3000/api/reports/export', token));
+    expect(response.status).toBe(200);
+    // The seeded row is dated 2026-03-05, outside any preset window resolved from today, so
+    // its presence here is what proves fallback: null applies no date clause.
+    expect(await response.text()).toContain('LOBLAWS');
   });
 });

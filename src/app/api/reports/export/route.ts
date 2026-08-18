@@ -2,6 +2,8 @@ import { isSameOriginOrHeaderless } from '@/lib/auth/csrf';
 import { userFromRequest } from '@/lib/auth/session';
 import { transactionsCsv } from '@/lib/reports';
 import { todayIso } from '@/lib/dates';
+import { resolveRange } from '@/lib/date-range';
+import { readEnv } from '@/lib/env';
 import type { TransactionFilter } from '@/lib/transactions';
 
 /**
@@ -27,12 +29,24 @@ export async function GET(request: Request): Promise<Response> {
   const person = params.get('person');
   const category = params.get('category');
 
+  // MUST-13.9: the SAME helper and the SAME fallback the Transactions page uses, so a link
+  // carrying range=last_3_months exports the same three months the page is showing.
+  // MUST-13.10: fallback null rather than Reports' last_6_months, because this route serves
+  // both pages' links and rangeParams() guarantees the caller's parameters are explicit.
+  const range = resolveRange({
+    preset: params.get('range'),
+    from: params.get('from'),
+    to: params.get('to'),
+    today: todayIso(new Date(), readEnv().tz),
+    fallback: null,
+  });
+
   const filter: TransactionFilter = {
     accountId: num('account'),
     categoryId: category === 'uncategorized' ? 'uncategorized' : category && /^\d+$/.test(category) ? Number(category) : null,
     attributedUserId: person === 'unattributed' ? 'unattributed' : person && /^\d+$/.test(person) ? Number(person) : null,
-    from: params.get('from'),
-    to: params.get('to'),
+    from: range?.from ?? null,
+    to: range?.to ?? null,
     search: params.get('q'),
     uncategorizedOnly: params.get('uncat') === '1',
     includeTransfers: params.get('transfers') !== '0',

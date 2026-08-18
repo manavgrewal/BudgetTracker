@@ -12,6 +12,8 @@ import { Notice } from '@/components/ui/Notice';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { AmountCell, TableWrap } from '@/components/ui/Table';
 import { Field, inputClass, labelClass, selectClass } from '@/components/ui/form';
+import { DateRangePicker } from '@/components/ui/DateRangePicker';
+import { type ResolvedRange } from '@/lib/date-range';
 import type { LoanLink } from '@/lib/loans';
 import type { TransactionPage } from '@/lib/transactions';
 import {
@@ -40,6 +42,7 @@ export function TransactionsClient({
   categories,
   people,
   today,
+  range = null,
   loanOptions = [],
   loanLinks = {},
 }: {
@@ -48,6 +51,7 @@ export function TransactionsClient({
   categories: Option[];
   people: Option[];
   today: string;
+  range?: ResolvedRange | null;
   /** v1.3.1: loans with a balance still owed. Empty for a household with none (MUST-14.9). */
   loanOptions?: LoanOption[];
   loanLinks?: Record<number, LoanLink[]>;
@@ -163,12 +167,13 @@ export function TransactionsClient({
                 ))}
               </select>
             </Field>
-            <Field label="From">
-              <input type="date" name="from" className={inputClass} />
-            </Field>
-            <Field label="To">
-              <input type="date" name="to" className={inputClass} />
-            </Field>
+            <DateRangePicker
+              allowAny
+              value={range?.preset ?? ''}
+              from={range?.from ?? ''}
+              to={range?.to ?? ''}
+              today={today}
+            />
             <Field label="Search" className="min-w-[12rem] flex-1">
               <input name="q" placeholder="Merchant text" className={inputClass} />
             </Field>

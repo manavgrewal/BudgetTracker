@@ -8,13 +8,15 @@ import { EmptyState } from '@/components/ui/EmptyState';
 import { Money } from '@/components/ui/Money';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { TableWrap } from '@/components/ui/Table';
-import { Field, inputClass, selectClass } from '@/components/ui/form';
+import { Field, selectClass } from '@/components/ui/form';
+import { DateRangePicker } from '@/components/ui/DateRangePicker';
+import { rangeParams, type ResolvedRange } from '@/lib/date-range';
 import type { DebtPoint } from '@/lib/loans';
 import type { CategoryBreakdownRow, CategoryMonthTrend, PersonSplitRow } from '@/lib/reports';
 
 export function ReportsClient({
-  from,
-  to,
+  range,
+  today,
   person,
   people,
   breakdown,
@@ -23,8 +25,8 @@ export function ReportsClient({
   debt,
   hasLoans,
 }: {
-  from: string;
-  to: string;
+  range: ResolvedRange;
+  today: string;
   person: string;
   people: { id: number; name: string }[];
   breakdown: CategoryBreakdownRow[];
@@ -33,12 +35,15 @@ export function ReportsClient({
   debt: DebtPoint[];
   hasLoans: boolean;
 }) {
-  const exportHref = `/api/reports/export?from=${from}&to=${to}${person ? `&person=${person}` : ''}`;
+  const exportHref = `/api/reports/export?${new URLSearchParams({
+    ...rangeParams(range),
+    ...(person ? { person } : {}),
+  }).toString()}`;
 
   return (
     <div className="flex flex-col gap-6">
       <PageHeader
-        eyebrow={`${from} → ${to}`}
+        eyebrow={range.label}
         title="Reports"
         description="Where the money went over a stretch of time, by category and by person."
         actions={
@@ -51,12 +56,7 @@ export function ReportsClient({
       <Card>
         <CardBody className="pt-5">
           <form method="get" className="flex flex-wrap items-end gap-3">
-            <Field label="From">
-              <input type="date" name="from" defaultValue={from} className={inputClass} />
-            </Field>
-            <Field label="To">
-              <input type="date" name="to" defaultValue={to} className={inputClass} />
-            </Field>
+            <DateRangePicker value={range.preset} from={range.from} to={range.to} today={today} />
             <Field label="Person">
               <select name="person" defaultValue={person} className={selectClass}>
                 <option value="">Everyone</option>
