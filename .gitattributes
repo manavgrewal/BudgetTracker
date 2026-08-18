@@ -1,0 +1,8 @@
+# vendor/ocr-models/en_dict.txt's bytes are SHA256-pinned in models.ts and re-verified at
+# process start (MUST-3.11, MUST-3.12). core.autocrlf=true with no override here would
+# rewrite it to CRLF on a Windows checkout, changing its hash and failing verification.
+# NOTICE carries the same risk in principle, pinned here too for consistency. The three
+# .onnx files are already binary-detected by git; declared explicitly so that never changes.
+vendor/ocr-models/en_dict.txt -text
+vendor/ocr-models/NOTICE -text
+vendor/ocr-models/*.onnx -text

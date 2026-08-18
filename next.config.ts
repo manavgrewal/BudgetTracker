@@ -11,6 +11,8 @@ const nextConfig: NextConfig = {
   // worker is loaded BY FILE PATH from node_modules, so if Next bundles the library that
   // path stops existing and it silently falls back to its CDN defaults — the exact failure
   // the offline-install invariant forbids.
+  // onnxruntime-node and sharp load native .node binaries by path at run time; bundling
+  // either one breaks that resolution.
   serverExternalPackages: [
     'better-sqlite3',
     'argon2',
@@ -18,6 +20,8 @@ const nextConfig: NextConfig = {
     'tesseract.js',
     'tesseract.js-core',
     'pdfjs-dist',
+    'onnxruntime-node',
+    'sharp',
   ],
 };
 
