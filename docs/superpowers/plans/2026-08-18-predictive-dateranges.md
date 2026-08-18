@@ -64,7 +64,7 @@ Each is a real conflict or gap inside the spec, resolved here once so no task ha
 
 1. **Income children and the rollup (MUST-4.9).** MUST-4.9's sentence says income categories are "dropped after the rollup, never before", but its own justification clause says this is so an income child "cannot silently change a parent's total in a way that disagrees with `budgetProgress()`", and §17.2 names the test "an income child not altering a spend parent's total". `budgetProgress()` filters income out of `all` **before** it collects `allChildren` (`src/lib/budgets.ts:189`), so an income child's cents are **not** in a parent's total today. MUST-3.2 makes agreement with the progress bar binding. **`categorySeries()` therefore filters income out before the rollup, exactly as `budgetProgress()` does.** Task 2 owns this.
 2. **Seasonality's history floor (MUST-5.6).** Condition 1 requires 15 months of history; condition 3 requires the full 12 months ending at `A = target - 12` to be at or after the first data month, which is 23 months. All four conditions are conjunctive, so condition 3 subsumes condition 1 and the effective floor is 23 months. `seasonalApplies()` implements all three month-arithmetic conditions literally; because it is at least as tight as condition 1, gating the `seasonalReference()` query on it also satisfies MUST-4.11.
-3. **A signed delta in a `padded()` table (MUST-9.30 against MUST-9.39).** §9.6's example line prints `+$93.40`, but MUST-9.39 says every amount is formatted by the existing `money()` wrapper, which is `formatCents(cents, { currency: true })` and never prints a `+`. **MUST-9.39 wins**: a positive delta renders `$93.40` and a negative one `-$93.40`. The example line is illustrative prose; the requirement is not.
+3. **A signed delta in a `padded()` table (MUST-9.30 against MUST-9.39).** §9.6's example line prints `+$93.40`, but MUST-9.39 says every amount is formatted by the existing `money()` wrapper, which is `formatCents(cents, { currency: true })` and never prints a `+`. **MUST-9.39 wins**: a positive delta renders `$93.40` and a negative one `-$93.40`. The example line is illustrative prose; the requirement is not. The composition also matters: `padded()` applies `truncateText(name, NAME_MAX)` to whatever it is handed, so the **only** thing passed to it as a `name` is the category name. Every figure is appended **after** `padded()` has run, which is what makes it impossible for a long category name to cut a dollar amount off the end of a line.
 4. **MUST-11.5's fill rule when the fallback is null.** The spec fills a missing endpoint "from the same preset resolution the fallback would give", which does not exist for Transactions and the export route, both of which pass `fallback: null`. Two named values make the degenerate case behaviour-preserving instead of arbitrary: a missing `to` becomes `monthEnd(monthOf(today))`, keeping MUST-11.3 point 2's "every `to` is a month end", and a missing `from` becomes the exported `RANGE_FLOOR_DATE`, so a one-sided `?to=` bookmark still means "everything up to that date" exactly as it does in v1.3.1. Task 10 owns this.
 5. **MUST-9.26's firing guard, made concrete.** The spec says `predicted_vs_actual` "does not fire when the previous month has no category with either a resolved limit or a computable suggestion". A category with a limit and no suggestion has no expected figure to compare against, so it contributes no line. The guard therefore reduces to: fire only when at least one line exists. Task 9 owns this.
 
@@ -240,7 +240,9 @@ describe('MUST-3.7: every lookback that appears in a dedup key is far inside out
     expect(C.UNUSUAL_LOOKBACK_DAYS).toBeLessThan(OUTBOX_RETENTION_DAYS);
     expect(C.CREEP_LOOKBACK_DAYS).toBeLessThan(OUTBOX_RETENTION_DAYS);
     expect(C.DUPLICATE_LOOKBACK_DAYS).toBeLessThan(OUTBOX_RETENTION_DAYS);
-    // The widest of the three, with room to spare. Widening any of them past 400 fails here.
+    // Pins the widest of the three at its current value, so widening one is a reviewed
+    // edit here as well as in constants.ts. The three assertions above are what actually
+    // guard the 400-day retention boundary.
     expect(Math.max(C.UNUSUAL_LOOKBACK_DAYS, C.CREEP_LOOKBACK_DAYS, C.DUPLICATE_LOOKBACK_DAYS)).toBe(35);
   });
 });
@@ -564,7 +566,20 @@ git commit -m "feat(predict): thresholds and the pure statistics primitives"
 
 **Context:** Spec §4 in full. The window is the last 6 full calendar months **clipped to the household's first data month**, which is the single most consequential line in the statistical half: without it every median on a new install is zero. `history.ts` is the **only** module under `src/lib/predict/` that touches the database. Implements **MUST-4.1 … MUST-4.11**, **MUST-5.6** conditions 1 to 3, **MUST-2.1**, **MUST-2.2**, **MUST-3.1**, **MUST-16.3**.
 
-**Resolution carried from the header:** income categories are filtered out **before** the rollup, matching `budgetProgress()` at `src/lib/budgets.ts:189`, so an income child never alters a spend parent's total (§17.2's named test, and MUST-3.2's tiebreaker over MUST-4.9's wording).
+**Resolution carried from the header (the controller's binding ruling).** `categorySeries()` **mirrors `budgetProgress()` row for row**. It returns exactly the set `flatten(budgetProgress(month, scope, userId))` returns, in the same order, with the same rollup:
+
+- income categories are filtered out **before** anything else, matching `src/lib/budgets.ts:189`, so an income child never alters a spend parent's total;
+- a **top-level** category's value for a month is its own cell plus every **direct** child's cell for that month, archived children included;
+- a **non-archived child** is its own row carrying only its own cell;
+- an **archived child** is never its own row, it only rolls up;
+- an **archived top-level** category appears only when its **own** cell is non-zero, which is the rule `budgetProgress` applies per month (`src/lib/budgets.ts:199`); over a window it becomes "non-zero in at least one month of the window";
+- nothing rolls up more than one level, because `budgetProgress` does not either.
+
+`src/lib/budgets.ts` is **not changed by this release** (spec §2.2), so its rollup cannot be exported and reused. It is mirrored here and **pinned by a test** that compares the two on the seeded tree for a single month, which is the check that makes MUST-3.2 enforceable rather than asserted.
+
+**This narrows MUST-4.10.** Its literal wording is "a row for every non-income category in `listCategories({ includeArchived: true })`". That set includes archived children and archived empty top-level categories, which the Budgets page never draws a row for, so a suggestion for one could never be applied or seen. MUST-3.2 is the binding rule and it wins: the row set is the row set the page draws. The "absent versus zero" guarantee MUST-4.10 exists to give is unaffected, because every row still carries a fully zero-filled `monthlyCents`.
+
+**The seeded tree is two levels.** `src/db/seed.ts` defines `Food -> [Groceries, Restaurants, Coffee]`, `Transport -> [Gas, ...]`, `Kids -> []`, and six more top-level parents. `Groceries` and `Gas` are **children**; `Food`, `Transport` and `Kids` are top-level. `budgetProgress(...)` returns top-level rows only, with children nested under `.children`, so any test comparing against it must either look at a top-level id or flatten first. There is no seeded category called `Dining out`; the sibling is `Restaurants`.
 
 **Files:**
 - Create: `src/lib/predict/window.ts`
@@ -589,6 +604,12 @@ git commit -m "feat(predict): thresholds and the pure statistics primitives"
     /** One entry per month in historyMonths(), same order, zero-filled per MUST-4.4. */
     monthlyCents: number[];
   }
+  /**
+   * Returns exactly the rows flatten(budgetProgress(month, scope, userId)) returns, in the
+   * same order: each top-level row with its direct children rolled in, then that row's
+   * non-archived children carrying their own cells. An empty `months` returns [] and runs
+   * no query.
+   */
   export function categorySeries(input: {
     months: string[];
     scope: 'household' | 'personal';
@@ -745,7 +766,7 @@ Create `tests/lib/predict/history.test.ts`:
 import { describe, it, expect, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../../helpers/db';
-import { budgetProgress } from '@/lib/budgets';
+import { budgetProgress, type BudgetRow } from '@/lib/budgets';
 import { nowIso } from '@/lib/clock';
 import { categorySeries, firstDataMonth, seasonalReference } from '@/lib/predict/history';
 
@@ -754,6 +775,15 @@ afterEach(() => {
   current?.cleanup();
   current = null;
 });
+
+/** budgetProgress() nests children; the series is flat, so the comparison needs this. */
+function flatten(rows: BudgetRow[], acc: BudgetRow[] = []): BudgetRow[] {
+  for (const row of rows) {
+    acc.push(row);
+    if (row.children.length > 0) flatten(row.children, acc);
+  }
+  return acc;
+}
 
 function setup() {
   current = createSeededTestDb();
@@ -773,6 +803,7 @@ function setup() {
       returning id`);
     return row.id;
   };
+  /** A new child of an EXISTING top-level parent. The seeded tree is two levels deep. */
   const child = (name: string, parentId: number, opts: { isIncome?: boolean; isArchived?: boolean } = {}) => {
     const row = current!.db.get<{ id: number }>(sql`
       insert into categories (name, parent_id, is_income, is_archived, sort_order)
@@ -780,62 +811,86 @@ function setup() {
       returning id`);
     return row.id;
   };
-  return { db: current.db, sqlite: current.sqlite, alice, bob, joint, spend, child };
+  return { db: current.db, alice, bob, joint, spend, child };
 }
 
 const WINDOW = ['2026-02', '2026-03', '2026-04', '2026-05', '2026-06', '2026-07'];
+const pick = (rows: { categoryId: number }[], categoryId: number) => rows.find((row) => row.categoryId === categoryId);
 
 describe('MUST-4.4: a month with no spend contributes a zero, not a gap', () => {
-  it('zero-fills every month in the window', () => {
+  it('zero-fills every month in the window, for a child row and for its parent', () => {
     const { db, spend } = setup();
     const groceries = categoryIdByName(db, 'Groceries');
+    const food = categoryIdByName(db, 'Food');
     spend({ categoryId: groceries, amountCents: -10000, date: '2026-02-10' });
     spend({ categoryId: groceries, amountCents: -20000, date: '2026-05-10' });
 
-    const row = categorySeries({ months: WINDOW, scope: 'household', userId: null }).find(
-      (entry) => entry.categoryId === groceries,
-    );
-    expect(row?.monthlyCents).toEqual([10000, 0, 0, 20000, 0, 0]);
+    const series = categorySeries({ months: WINDOW, scope: 'household', userId: null });
+    expect(pick(series, groceries)?.monthlyCents).toEqual([10000, 0, 0, 20000, 0, 0]);
+    expect(pick(series, food)?.monthlyCents).toEqual([10000, 0, 0, 20000, 0, 0]);
   });
 });
 
-describe('MUST-4.9: the rollup matches budgetProgress on the same fixture', () => {
-  it('rolls an archived child into its parent', () => {
+describe('MUST-3.2: the series is budgetProgress, row for row', () => {
+  it('matches flatten(budgetProgress()) exactly on the seeded tree, ids, order and cents', () => {
     const { db, spend, child } = setup();
+    const food = categoryIdByName(db, 'Food');
     const groceries = categoryIdByName(db, 'Groceries');
-    const gone = child('Corner Store', groceries, { isArchived: true });
+    const gas = categoryIdByName(db, 'Gas');
+    const kids = categoryIdByName(db, 'Kids');
+    const gone = child('Corner Store', food, { isArchived: true });
+    const rebate = child('Grocery rebate', food, { isIncome: true });
+
+    spend({ categoryId: food, amountCents: -4000, date: '2026-07-01' }); // spend on the parent itself
+    spend({ categoryId: groceries, amountCents: -30000, date: '2026-07-05' });
+    spend({ categoryId: gone, amountCents: -5000, date: '2026-07-06' }); // archived child
+    spend({ categoryId: rebate, amountCents: 9000, date: '2026-07-07' }); // income child
+    spend({ categoryId: gas, amountCents: -6000, date: '2026-07-08' });
+    spend({ categoryId: kids, amountCents: -1500, date: '2026-07-09' }); // top-level leaf
+
+    const series = categorySeries({ months: ['2026-07'], scope: 'household', userId: null });
+    const progress = flatten(budgetProgress('2026-07', 'household', null));
+
+    expect(series.map((row) => [row.categoryId, row.monthlyCents[0]])).toEqual(
+      progress.map((row) => [row.categoryId, row.spentCents]),
+    );
+  });
+
+  it('rolls an archived child into its top-level parent and gives it no row of its own', () => {
+    const { db, spend, child } = setup();
+    const food = categoryIdByName(db, 'Food');
+    const groceries = categoryIdByName(db, 'Groceries');
+    const gone = child('Corner Store', food, { isArchived: true });
     spend({ categoryId: groceries, amountCents: -30000, date: '2026-07-05' });
     spend({ categoryId: gone, amountCents: -5000, date: '2026-07-06' });
 
     const series = categorySeries({ months: ['2026-07'], scope: 'household', userId: null });
-    const parent = series.find((entry) => entry.categoryId === groceries);
-    const progress = budgetProgress('2026-07', 'household', null).find((entry) => entry.categoryId === groceries);
-    expect(parent?.monthlyCents).toEqual([35000]);
-    expect(parent?.monthlyCents[0]).toBe(progress?.spentCents);
+    expect(pick(series, food)?.monthlyCents).toEqual([35000]);
+    expect(pick(series, groceries)?.monthlyCents).toEqual([30000]);
+    expect(pick(series, gone)).toBeUndefined();
   });
 
   it('drops income categories and never lets an income child change a spend parent', () => {
     const { db, spend, child } = setup();
+    const food = categoryIdByName(db, 'Food');
     const groceries = categoryIdByName(db, 'Groceries');
-    const rebate = child('Grocery rebate', groceries, { isIncome: true });
+    const rebate = child('Grocery rebate', food, { isIncome: true });
     spend({ categoryId: groceries, amountCents: -30000, date: '2026-07-05' });
     spend({ categoryId: rebate, amountCents: 9000, date: '2026-07-06' });
 
     const series = categorySeries({ months: ['2026-07'], scope: 'household', userId: null });
-    const parent = series.find((entry) => entry.categoryId === groceries);
-    const progress = budgetProgress('2026-07', 'household', null).find((entry) => entry.categoryId === groceries);
-    expect(parent?.monthlyCents).toEqual([30000]);
-    expect(parent?.monthlyCents[0]).toBe(progress?.spentCents);
-    expect(series.some((entry) => entry.categoryId === rebate)).toBe(false);
+    expect(pick(series, food)?.monthlyCents).toEqual([30000]);
+    expect(series.some((row) => row.categoryId === rebate)).toBe(false);
   });
 
-  it('MUST-4.10: returns a row for every non-income category, all-zero series included', () => {
+  it('gives every row budgetProgress draws an all-zero series when nothing was spent', () => {
     const { db } = setup();
     const series = categorySeries({ months: WINDOW, scope: 'household', userId: null });
-    const groceries = categoryIdByName(db, 'Groceries');
-    const row = series.find((entry) => entry.categoryId === groceries);
-    expect(row?.monthlyCents).toEqual([0, 0, 0, 0, 0, 0]);
-    expect(series.length).toBeGreaterThan(1);
+    expect(pick(series, categoryIdByName(db, 'Food'))?.monthlyCents).toEqual([0, 0, 0, 0, 0, 0]);
+    expect(pick(series, categoryIdByName(db, 'Groceries'))?.monthlyCents).toEqual([0, 0, 0, 0, 0, 0]);
+    expect(pick(series, categoryIdByName(db, 'Kids'))?.monthlyCents).toEqual([0, 0, 0, 0, 0, 0]);
+    // Income is gone entirely, at both levels.
+    expect(series.some((row) => row.categoryName === 'Income' || row.categoryName === 'Salary')).toBe(false);
   });
 });
 
@@ -843,24 +898,26 @@ describe('MUST-3.1: scope', () => {
   it('household counts every row and personal counts only the attributed ones', () => {
     const { db, alice, bob, spend } = setup();
     const groceries = categoryIdByName(db, 'Groceries');
+    const food = categoryIdByName(db, 'Food');
     spend({ categoryId: groceries, amountCents: -10000, date: '2026-07-01', attributedUserId: alice });
     spend({ categoryId: groceries, amountCents: -20000, date: '2026-07-02', attributedUserId: bob });
     spend({ categoryId: groceries, amountCents: -5000, date: '2026-07-03' });
 
-    const pick = (scope: 'household' | 'personal', userId: number | null) =>
-      categorySeries({ months: ['2026-07'], scope, userId }).find((entry) => entry.categoryId === groceries)?.monthlyCents;
+    const cents = (scope: 'household' | 'personal', userId: number | null, categoryId: number) =>
+      pick(categorySeries({ months: ['2026-07'], scope, userId }), categoryId)?.monthlyCents;
 
-    expect(pick('household', null)).toEqual([35000]);
-    expect(pick('personal', alice)).toEqual([10000]);
-    expect(pick('personal', bob)).toEqual([20000]);
+    expect(cents('household', null, groceries)).toEqual([35000]);
+    expect(cents('household', null, food)).toEqual([35000]);
+    expect(cents('personal', alice, groceries)).toEqual([10000]);
+    expect(cents('personal', bob, groceries)).toEqual([20000]);
   });
 
   it('MUST-7.2: personal is all zeros when nothing is attributed', () => {
     const { db, alice, spend } = setup();
-    const groceries = categoryIdByName(db, 'Groceries');
-    spend({ categoryId: groceries, amountCents: -10000, date: '2026-07-01' });
+    spend({ categoryId: categoryIdByName(db, 'Groceries'), amountCents: -10000, date: '2026-07-01' });
     const personal = categorySeries({ months: ['2026-07'], scope: 'personal', userId: alice });
-    expect(personal.every((entry) => entry.monthlyCents.every((cents) => cents === 0))).toBe(true);
+    expect(personal.length).toBeGreaterThan(0);
+    expect(personal.every((row) => row.monthlyCents.every((cents) => cents === 0))).toBe(true);
   });
 });
 
@@ -868,48 +925,46 @@ describe('MUST-4.3: firstDataMonth', () => {
   it('is the month of the oldest non-transfer row, and null on an empty database', () => {
     const { db, spend } = setup();
     expect(firstDataMonth()).toBeNull();
-    const groceries = categoryIdByName(db, 'Groceries');
     spend({ categoryId: null, amountCents: -100, date: '2020-01-05', isTransfer: true });
-    spend({ categoryId: groceries, amountCents: -10000, date: '2026-03-09' });
+    spend({ categoryId: categoryIdByName(db, 'Groceries'), amountCents: -10000, date: '2026-03-09' });
     expect(firstDataMonth()).toBe('2026-03');
   });
 });
 
 describe('MUST-4.8: one grouped query per call', () => {
-  it('reads transactions exactly once', () => {
-    const { spend, db } = setup();
-    spend({ categoryId: categoryIdByName(db, 'Groceries'), amountCents: -10000, date: '2026-07-01' });
-
-    const prepared: string[] = [];
+  /** Wraps better-sqlite3's prepare so the caller can count the statements drizzle issues. */
+  function countingPrepare(): { statements: string[]; restore: () => void } {
+    const statements: string[] = [];
     const sqlite = current!.sqlite as unknown as { prepare: (source: string) => unknown };
     const original = sqlite.prepare.bind(sqlite);
     sqlite.prepare = (source: string) => {
-      prepared.push(source);
+      statements.push(source);
       return original(source);
     };
+    return { statements, restore: () => { sqlite.prepare = original; } };
+  }
+
+  it('reads transactions exactly once', () => {
+    const { db, spend } = setup();
+    spend({ categoryId: categoryIdByName(db, 'Groceries'), amountCents: -10000, date: '2026-07-01' });
+    const { statements, restore } = countingPrepare();
     try {
       categorySeries({ months: WINDOW, scope: 'household', userId: null });
     } finally {
-      sqlite.prepare = original;
+      restore();
     }
-    expect(prepared.filter((statement) => /\btransactions\b/.test(statement))).toHaveLength(1);
+    expect(statements.filter((statement) => /\btransactions\b/.test(statement))).toHaveLength(1);
   });
 
-  it('runs no query at all for an empty window', () => {
+  it('returns an empty list and runs no query at all for an empty window', () => {
     setup();
-    const prepared: string[] = [];
-    const sqlite = current!.sqlite as unknown as { prepare: (source: string) => unknown };
-    const original = sqlite.prepare.bind(sqlite);
-    sqlite.prepare = (source: string) => {
-      prepared.push(source);
-      return original(source);
-    };
+    const { statements, restore } = countingPrepare();
     try {
       expect(categorySeries({ months: [], scope: 'household', userId: null })).toEqual([]);
     } finally {
-      sqlite.prepare = original;
+      restore();
     }
-    expect(prepared.filter((statement) => /\btransactions\b/.test(statement))).toHaveLength(0);
+    expect(statements.filter((statement) => /\btransactions\b/.test(statement))).toHaveLength(0);
   });
 });
 
@@ -956,6 +1011,10 @@ import { netSpentCents } from '@/lib/money';
  * where the disagreement is.
  */
 
+/**
+ * One row of the series, for one category budgetProgress() draws a row for. A top-level row
+ * carries its rolled total; a child row carries its own.
+ */
 export interface CategorySeries {
   categoryId: number;
   categoryName: string;
@@ -1015,38 +1074,56 @@ function cells(
 }
 
 /**
- * MUST-4.9: the rollup rule, applied in TypeScript because the grouped query cannot express
- * it. A parent's value for a month is its own cell plus every child's cell for that month,
- * archived children included.
+ * MUST-3.2 and MUST-4.9: this MIRRORS budgetProgress() row for row.
  *
- * Income categories are filtered out BEFORE the rollup, exactly as budgetProgress() does
- * (src/lib/budgets.ts), so an income child under a spend parent cannot change that parent's
- * total. MUST-3.2 makes agreement with the progress bar the binding rule here.
+ * src/lib/budgets.ts is not changed by this release (spec section 2.2), so its rollup cannot
+ * be exported and reused; it is reproduced here and pinned by a test that compares the two on
+ * the seeded tree for a single month. Every rule below is budgetProgress()'s rule:
+ *
+ *   - income is filtered out FIRST, so an income child never changes a spend parent's total;
+ *   - a top-level category's value is its own cell plus every DIRECT child's cell, archived
+ *     children included;
+ *   - a non-archived child is its own row carrying only its own cell;
+ *   - an archived child is never its own row, it only rolls up;
+ *   - an archived top-level category surfaces only when its OWN cell is non-zero, which over
+ *     a window means non-zero in at least one month of it;
+ *   - nothing rolls up more than one level, because budgetProgress does not either.
+ *
+ * The result is flat and in budgetProgress()'s order (each top-level row, then its rendered
+ * children), which is exactly the set flatten(budgetProgress(...)) produces and therefore
+ * exactly the set the Budgets page draws a row for. A suggestion for anything else could
+ * never be seen or applied.
  */
 function rollup(months: string[], byCategory: Map<number, Map<string, number>>): CategorySeries[] {
   const all = listCategories({ includeArchived: true }).filter((category) => !category.isIncome);
-  const childrenOf = new Map<number, CategoryRecord[]>();
-  for (const category of all) {
-    if (category.parentId === null) continue;
-    const siblings = childrenOf.get(category.parentId) ?? [];
-    siblings.push(category);
-    childrenOf.set(category.parentId, siblings);
-  }
   const cell = (categoryId: number, month: string) => byCategory.get(categoryId)?.get(month) ?? 0;
 
-  // MUST-4.10: a row for EVERY non-income category, all-zero series included, so the pure
-  // functions downstream never have to distinguish "absent" from "zero".
-  return all.map((category) => ({
-    categoryId: category.id,
-    categoryName: category.name,
-    parentId: category.parentId,
-    isArchived: category.isArchived,
-    monthlyCents: months.map(
-      (month) =>
-        cell(category.id, month) +
-        (childrenOf.get(category.id) ?? []).reduce((sum, child) => sum + cell(child.id, month), 0),
-    ),
-  }));
+  const out: CategorySeries[] = [];
+  for (const parent of all.filter((category) => category.parentId === null)) {
+    const children: CategoryRecord[] = all.filter((category) => category.parentId === parent.id);
+    const own = months.map((month) => cell(parent.id, month));
+    if (parent.isArchived && own.every((cents) => cents === 0)) continue;
+
+    out.push({
+      categoryId: parent.id,
+      categoryName: parent.name,
+      parentId: null,
+      isArchived: parent.isArchived,
+      monthlyCents: months.map(
+        (month, index) => own[index] + children.reduce((sum, child) => sum + cell(child.id, month), 0),
+      ),
+    });
+    for (const child of children.filter((category) => !category.isArchived)) {
+      out.push({
+        categoryId: child.id,
+        categoryName: child.name,
+        parentId: parent.id,
+        isArchived: false,
+        monthlyCents: months.map((month) => cell(child.id, month)),
+      });
+    }
+  }
+  return out;
 }
 
 export function categorySeries(input: {
@@ -1054,6 +1131,9 @@ export function categorySeries(input: {
   scope: 'household' | 'personal';
   userId: number | null;
 }): CategorySeries[] {
+  // MUST-4.5: the window can be empty, on a household with no transactions or for a target
+  // month it has not reached. No window means no series, and no query either.
+  if (input.months.length === 0) return [];
   return rollup(input.months, cells(input.months, input.scope, input.userId));
 }
 
@@ -2026,6 +2106,8 @@ git commit -m "feat(predict): unusual charge, subscription creep and duplicate d
 
 **Context:** Spec §7 in full, plus §16.3's query budget. The composition that turns a scope and a month into a map of suggestions is written **once**, in `history.ts`, because MUST-7.4 requires the apply action to recompute from the same inputs the page used and MUST-3.2 forbids a second definition. A suggested budget and a typed budget are the same row: there is no flag to store, no column to add and no second code path for clearing one. Implements **MUST-7.1 … MUST-7.10**, **MUST-4.6**, **MUST-4.11**'s query gate, and §17.4's test list.
 
+**Read Task 2's rollup contract before writing the fixtures.** `Groceries` and `Restaurants` are **children of `Food`** in `src/db/seed.ts`; there is no seeded category called `Dining out`, and `categoryIdByName` throws on a name the seed does not have. Spending on a child therefore produces a suggestion for **two** rows, the child and its rolled-up parent, and every count and message string below follows from that.
+
 **`'use server'` warning for this task specifically:** `src/app/(app)/budgets/actions.ts` carries the `'use server'` directive. **Every export must be an `async function`.** The error string added below stays a module-local `const`, beside the existing `CROSS_ORIGIN_ERROR`. A `const` export here breaks `next build` and neither `vitest` nor `tsc --noEmit` catches it.
 
 **Files:**
@@ -2146,16 +2228,18 @@ describe('MUST-7.5: a suggestion that is no longer available writes nothing', ()
   it('returns the reload error for a category with no computable suggestion', async () => {
     const { db, flatSix } = setup();
     const groceries = categoryIdByName(db, 'Groceries');
-    const dining = categoryIdByName(db, 'Dining out');
+    // Kids is top-level, has no children and has no spend, so its series is all zeros and
+    // suggestBudget returns 'no-spend'.
+    const kids = categoryIdByName(db, 'Kids');
     flatSix(groceries, 60000);
 
     const state = await applySuggestionAction(
       {},
-      formData({ scope: 'household', userId: '', month: TARGET, categoryId: String(dining) }),
+      formData({ scope: 'household', userId: '', month: TARGET, categoryId: String(kids) }),
     );
 
     expect(state.error).toBe('That suggestion is no longer available. Reload the page.');
-    expect(resolveBudget('household', null, dining, TARGET)).toBeNull();
+    expect(resolveBudget('household', null, kids, TARGET)).toBeNull();
   });
 });
 
@@ -2201,16 +2285,33 @@ describe('MUST-7.8: apply-all never overwrites a typed limit', () => {
   it('skips every category with a resolved limit and names both counts', async () => {
     const { db, flatSix } = setup();
     const groceries = categoryIdByName(db, 'Groceries');
-    const dining = categoryIdByName(db, 'Dining out');
+    const restaurants = categoryIdByName(db, 'Restaurants');
+    const food = categoryIdByName(db, 'Food');
     flatSix(groceries, 60000);
-    flatSix(dining, 30000);
-    upsertBudget({ scope: 'household', userId: null, categoryId: dining, month: '2026-06', amountCents: 11100 });
+    flatSix(restaurants, 30000);
+    // Three rows end up with a suggestion: the two children and their rolled-up parent Food
+    // at $900.00 a month. Only Restaurants already has a limit, so two are set and one is
+    // skipped.
+    upsertBudget({ scope: 'household', userId: null, categoryId: restaurants, month: '2026-06', amountCents: 11100 });
 
     const state = await applyAllSuggestionsAction({}, formData({ scope: 'household', userId: '', month: TARGET }));
 
-    expect(state.message).toBe('Set 1 budgets from suggestions. Skipped 1 categories that already had a limit.');
+    expect(state.message).toBe('Set 2 budgets from suggestions. Skipped 1 categories that already had a limit.');
     expect(resolveBudget('household', null, groceries, TARGET)).toBe(60000);
-    expect(resolveBudget('household', null, dining, TARGET)).toBe(11100);
+    expect(resolveBudget('household', null, food, TARGET)).toBe(90000);
+    expect(resolveBudget('household', null, restaurants, TARGET)).toBe(11100);
+  });
+
+  it('applies to the parent and the child independently, because both are rows on the page', async () => {
+    const { db, flatSix } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    const food = categoryIdByName(db, 'Food');
+    flatSix(groceries, 60000);
+
+    await applySuggestionAction({}, formData({ scope: 'household', userId: '', month: TARGET, categoryId: String(food) }));
+
+    expect(resolveBudget('household', null, food, TARGET)).toBe(60000);
+    expect(resolveBudget('household', null, groceries, TARGET)).toBeNull();
   });
 });
 
@@ -2791,12 +2892,24 @@ describe('spec section 9: the six predictive messages', () => {
       totalDeltaCents: 21000,
     });
     expect(subject).toBe('July 2026: what we expected against what happened');
-    expect(body).toContain('expected $620.00');
-    expect(body).toContain('actual $713.40');
-    expect(body).toContain('$93.40');
-    expect(body).toContain('-$20.00');
+    expect(body).toContain('$620.00 expected, $713.40 actual, $93.40 difference');
+    expect(body).toContain('$200.00 expected, $180.00 actual, -$20.00 difference');
     expect(body).toContain('July 2026 came in $210.00 over what the last six months pointed at.');
     expect(body).toContain('recomputed');
+  });
+
+  it('MUST-9.30 composition: a long category name cannot cut a figure off the line', () => {
+    const { body } = renderEvent({
+      event: 'predicted_vs_actual',
+      month: '2026-07',
+      household: [{ name: 'C'.repeat(200), expectedCents: 62000, actualCents: 71340 }],
+      personal: [],
+      totalDeltaCents: 9340,
+    });
+    // padded() only ever truncates the category name, which is what NAME_MAX is for. Every
+    // figure is appended after it has run, so all three survive intact.
+    expect(body).toContain('$620.00 expected, $713.40 actual, $93.40 difference');
+    expect(body).not.toContain('C'.repeat(81));
   });
 
   it('MUST-14.10: suggested_budget_refresh says nothing has been changed', () => {
@@ -2811,9 +2924,8 @@ describe('spec section 9: the six predictive messages', () => {
       changedCount: 5,
     });
     expect(subject).toBe('New month: 5 suggested budgets changed');
-    expect(body).toContain('now $780.00');
-    expect(body).toContain('was $600.00');
-    expect(body).toContain('was no limit');
+    expect(body).toContain('$780.00 suggested, $600.00 set');
+    expect(body).toContain('$120.00 suggested, no limit set');
     expect(body).toContain('Open Budgets to apply any of these. Nothing has been changed.');
   });
 
@@ -2829,30 +2941,33 @@ describe('spec section 9: the six predictive messages', () => {
     expect(subject).not.toContain(long);
     expect(body).not.toContain(long);
   });
-
-  it('notify MUST-10.4: no predictive body carries a URL', () => {
-    const bodies = [
-      renderEvent({
-        event: 'budget_pace',
-        scope: 'household',
-        categoryName: 'Groceries',
-        month: '2026-08',
-        limitCents: 60000,
-        spentCents: 41000,
-        dayOfMonth: 12,
-        projectedCents: 105900,
-      }).body,
-      renderEvent({
-        event: 'suggested_budget_refresh',
-        month: '2026-08',
-        household: [{ name: 'Groceries', nowCents: 78000, wasCents: 60000 }],
-        personal: [],
-        changedCount: 1,
-      }).body,
-    ];
-    for (const body of bodies) expect(body).not.toMatch(/:\/\//);
-  });
 });
+```
+
+Then add six keys to the existing `SAMPLES_BY_EVENT` map in the same file, after `update_available`. **This is not optional and it is not covered by the block above.** The map is registry-driven: `tests/lib/notify/render.test.ts` asserts `Object.keys(SAMPLES_BY_EVENT).sort()` equals every `NOTIFICATION_EVENTS` id, and then renders every sample looking for a URL. Six registry entries with no samples fails both assertions, and that registry-driven test is what discharges notify MUST-10.4 for the new events, so no separate no-URL test is needed or wanted.
+
+```ts
+  budget_pace: [
+    { event: 'budget_pace', scope: 'household', categoryName: 'C', month: '2026-08', limitCents: 60000, spentCents: 41000, dayOfMonth: 12, projectedCents: 105900 },
+  ],
+  unusual_transaction: [
+    { event: 'unusual_transaction', merchant: 'M', accountName: 'A', dateIso: '2026-08-14', amountCents: -41288, baselineCents: 12100, baselineKind: 'merchant', categoryName: 'C' },
+    { event: 'unusual_transaction', merchant: 'M', accountName: 'A', dateIso: '2026-08-14', amountCents: -41288, baselineCents: 12100, baselineKind: 'category', categoryName: null },
+  ],
+  subscription_creep: [
+    { event: 'subscription_creep', merchant: 'M', dateIso: '2026-08-14', newAmountCents: 2099, baselineCents: 1649, priorCount: 3 },
+  ],
+  duplicate_charge: [
+    { event: 'duplicate_charge', merchant: 'M', amountCents: -8950, earlierDateIso: '2026-08-12', laterDateIso: '2026-08-13' },
+  ],
+  predicted_vs_actual: [
+    { event: 'predicted_vs_actual', month: '2026-07', household: [{ name: 'C', expectedCents: 1, actualCents: 2 }], personal: [], totalDeltaCents: 1 },
+    { event: 'predicted_vs_actual', month: '2026-07', household: [], personal: [{ name: 'C', expectedCents: 2, actualCents: 1 }], totalDeltaCents: -1 },
+  ],
+  suggested_budget_refresh: [
+    { event: 'suggested_budget_refresh', month: '2026-08', household: [{ name: 'C', nowCents: 2, wasCents: 1 }], personal: [], changedCount: 1 },
+    { event: 'suggested_budget_refresh', month: '2026-08', household: [{ name: 'C', nowCents: 2, wasCents: null }], personal: [], changedCount: 1 },
+  ],
 ```
 
 - [ ] **Step 6: Run it to verify it fails**
@@ -2860,9 +2975,15 @@ describe('spec section 9: the six predictive messages', () => {
 ```powershell
 npx vitest run tests/lib/notify/render.test.ts
 ```
-Expected: FAIL. TypeScript will not narrow `event: 'budget_pace'`, so the run reports the object literal is not assignable to `RenderInput`.
+Expected: FAIL, on two counts. TypeScript will not narrow `event: 'budget_pace'`, so the run reports the object literals are not assignable to `RenderInput`; and once the union lands, `Object.keys(SAMPLES_BY_EVENT).sort()` would not equal the registry's ids without the six new keys.
 
 - [ ] **Step 7: Extend `src/lib/notify/render.ts`**
+
+Add one import at the top of the file. `@/lib/predict/stats` is pure and client-safe (MUST-2.1), so `render.ts` stays pure:
+
+```ts
+import { divRound } from '@/lib/predict/stats';
+```
 
 Add the two exported line interfaces beside the existing `DigestLine`:
 
@@ -2943,31 +3064,30 @@ Add the two private line helpers immediately after `padded()`:
 
 ```ts
 /**
- * MUST-9.30: the two-column padded() helper, with the category name and the two figures
- * aligned into its left column so the delta column still lines up.
+ * MUST-9.30: the existing two-column padded() helper aligns the category name against the
+ * expected figure; the other two figures are appended after it has run.
  *
- * The delta goes through money(), which never prints a leading plus (MUST-9.39). A category
- * that came in under its expectation therefore reads -$20.00, and one that came in over
- * reads $93.40. Section 9.6's example line shows a plus; MUST-9.39 is the binding rule.
+ * Nothing composite is ever handed to padded(). It applies truncateText(name, NAME_MAX), so a
+ * composite left column would let an 80-character category name cut the last dollar amount
+ * off the line. Only the category name goes in, which is what NAME_MAX is for.
+ *
+ * Every figure goes through money(), which never prints a leading plus (MUST-9.39), so a
+ * category that came in under its expectation reads -$20.00 and one that came in over reads
+ * $93.40. Section 9.6's example line shows a plus; MUST-9.39 is the binding rule.
  */
 function predictedLines(rows: readonly PredictedLine[]): string[] {
-  const width = rows.reduce((max, row) => Math.max(max, truncateText(row.name, NAME_MAX).length), 0);
-  return padded(
-    rows.map((row) => ({
-      name: `${truncateText(row.name, NAME_MAX).padEnd(width + 2)}expected ${money(row.expectedCents)}   actual ${money(row.actualCents)}`,
-      cents: row.actualCents - row.expectedCents,
-    })),
-  );
+  return padded(rows.map((row) => ({ name: row.name, cents: row.expectedCents }))).map((line, index) => {
+    const row = rows[index];
+    return `${line} expected, ${money(row.actualCents)} actual, ${money(row.actualCents - row.expectedCents)} difference`;
+  });
 }
 
-/** Two aligned columns, with "no limit" where the category has never had one set. */
+/** Same composition, with "no limit set" where the category has never had one. */
 function refreshLines(rows: readonly RefreshLine[]): string[] {
-  const width = rows.reduce((max, row) => Math.max(max, truncateText(row.name, NAME_MAX).length), 0);
-  return rows.map(
-    (row) =>
-      `  ${truncateText(row.name, NAME_MAX).padEnd(width + 2)}now ${money(row.nowCents).padEnd(11)}` +
-      `was ${row.wasCents === null ? 'no limit' : money(row.wasCents)}`,
-  );
+  return padded(rows.map((row) => ({ name: row.name, cents: row.nowCents }))).map((line, index) => {
+    const was = rows[index].wasCents;
+    return `${line} suggested, ${was === null ? 'no limit set' : `${money(was)} set`}`;
+  });
 }
 ```
 
@@ -2990,8 +3110,12 @@ Append these six cases to `renderEvent`'s switch, before its closing brace and *
       const merchant = truncateText(input.merchant, NAME_MAX);
       const account = truncateText(input.accountName, NAME_MAX);
       const spend = Math.abs(input.amountCents);
-      // A multiple is not an amount, so it is not money()'s business (MUST-9.39).
-      const multiple = (spend / input.baselineCents).toFixed(1);
+      // A multiple is not an amount, so it is not money()'s business (MUST-9.39). It is still
+      // integer arithmetic: tenths through divRound, then split, rather than a float divide
+      // and toFixed. MUST-3.5's rule is scoped to src/lib/predict/, but there is no reason to
+      // introduce the one float in the codebase that does not need to exist.
+      const tenths = divRound(spend * 10, input.baselineCents);
+      const multiple = `${Math.trunc(tenths / 10)}.${tenths % 10}`;
       const usual =
         input.baselineKind === 'merchant'
           ? `the ${money(input.baselineCents)} you usually spend at ${merchant}`
@@ -3006,7 +3130,7 @@ Append these six cases to `renderEvent`'s switch, before its closing brace and *
     case 'subscription_creep': {
       const merchant = truncateText(input.merchant, NAME_MAX);
       const rise = input.newAmountCents - input.baselineCents;
-      const pct = Math.round((rise * 100) / input.baselineCents);
+      const pct = divRound(rise * 100, input.baselineCents);
       return {
         subject: `Price went up: ${merchant}`,
         body:
@@ -3058,7 +3182,9 @@ Add to the `describe('MUST-11.3: the matrix is generated from the registry', ...
 
 ```ts
   it('MUST-17.2: the six v1.4.0 events render for a member with no component edit', () => {
-    render(<NotificationsClient data={props({ role: 'member' })} />);
+    // The file's convention, at every one of its existing render sites: props() returns the
+    // whole NotificationsPageData and is spread. There is no `data` prop.
+    render(<NotificationsClient {...props({ role: 'member' })} />);
     for (const id of [
       'budget_pace',
       'unusual_transaction',
@@ -3087,7 +3213,7 @@ Add to the `describe('MUST-11.3: the matrix is generated from the registry', ...
   });
 ```
 
-`eventsFor` is already imported by that file's `props()` builder. If it is not, add `import { eventsFor } from '@/lib/notify/events';`.
+`props()` and `eventsFor` are both already in that file (`props()` at line 35 defaults `events` to `eventsFor(role)`), so this describe block needs no new import.
 
 - [ ] **Step 9: Run the three test files to verify they pass**
 
@@ -3567,7 +3693,7 @@ function seedMerchantBaseline(merchant: string, categoryId: number, count = 5): 
 
 describe('MUST-9.10: unusual_transaction end to end', () => {
   it('fires once for a charge three times the merchant baseline', () => {
-    const userId = emailUser();
+    emailUser();
     seedHistory();
     const groceries = categoryIdByName(t.db, 'Groceries');
     seedMerchantBaseline('CANADIAN TIRE', groceries);
@@ -3578,7 +3704,8 @@ describe('MUST-9.10: unusual_transaction end to end', () => {
   });
 
   it('R2: nothing fires at all on a household with under 60 days of history', () => {
-    const userId = emailUser();
+    // evaluateAnomalies takes no user, so the user is set up for its side effect only.
+    emailUser();
     const groceries = categoryIdByName(t.db, 'Groceries');
     for (const date of ['2026-08-01', '2026-08-02', '2026-08-03', '2026-08-04', '2026-08-05']) {
       charge({ merchant: 'CANADIAN TIRE', cents: 12000, date, categoryId: groceries });
@@ -3589,7 +3716,7 @@ describe('MUST-9.10: unusual_transaction end to end', () => {
   });
 
   it('MUST-9.13: the cap holds at five with twelve candidates, oldest first', () => {
-    const userId = emailUser();
+    emailUser();
     seedHistory();
     const groceries = categoryIdByName(t.db, 'Groceries');
     // Twenty baseline rows against twelve outliers keeps the merchant median at $120.
@@ -3624,7 +3751,7 @@ describe('MUST-9.10: unusual_transaction end to end', () => {
 
 describe('MUST-10.4 to MUST-10.6: the tick fingerprint', () => {
   it('short-circuits a second evaluation with no data change', () => {
-    const userId = emailUser();
+    emailUser();
     seedHistory();
     const groceries = categoryIdByName(t.db, 'Groceries');
     seedMerchantBaseline('CANADIAN TIRE', groceries);
@@ -3636,7 +3763,7 @@ describe('MUST-10.4 to MUST-10.6: the tick fingerprint', () => {
   });
 
   it('MUST-10.5: re-categorising an existing row changes the fingerprint', () => {
-    const userId = emailUser();
+    emailUser();
     seedHistory();
     const groceries = categoryIdByName(t.db, 'Groceries');
     seedMerchantBaseline('CANADIAN TIRE', groceries);
@@ -3667,7 +3794,7 @@ describe('MUST-10.4 to MUST-10.6: the tick fingerprint', () => {
 
 describe('MUST-9.20 to MUST-9.24: duplicate_charge end to end', () => {
   it('fires once per pair and says the wording MUST-14.10 requires', () => {
-    const userId = emailUser();
+    emailUser();
     seedHistory();
     const first = charge({ merchant: 'BELL CANADA', cents: 8950, date: '2026-08-12' });
     const second = charge({ merchant: 'BELL CANADA', cents: 8950, date: '2026-08-13' });
@@ -4091,23 +4218,20 @@ And beside the existing `evaluateBudgets` call at the end of `runScheduledEvalua
   }
 ```
 
-- [ ] **Step 5: Reset the new fingerprint wherever the budget one is already reset (MUST-10.7)**
+- [ ] **Step 5: Reset the new fingerprint in the two suites that drive `runScheduledEvaluation` (MUST-10.7)**
 
-Two existing suites drive `runScheduledEvaluation`, which now reaches `evaluateAnomalies`, and both already call `resetBudgetFingerprintForTests()` in `beforeEach` and `afterEach`. Add the new reset beside each existing call:
+Both now reach `evaluateAnomalies`, and its module-level `lastAnomalyKey` survives between tests in the same fork, which is the classic source of a suite that passes alone and fails in a full run. The two files are **not** in the same starting state:
 
-- `tests/lib/notify/dedup.test.ts`
-- `tests/lib/notify/evaluate/index.test.ts`
+- **`tests/lib/notify/dedup.test.ts`** already imports and calls `resetBudgetFingerprintForTests()` in both `beforeEach` and `afterEach`. Add the new import and put the new call on the line after each existing one.
+- **`tests/lib/notify/evaluate/index.test.ts`** calls only `resetSlotSkipLogForTests()` and does **not** import the budget reset at all. Add the new import and put the new call beside `resetSlotSkipLogForTests()` in both hooks.
 
 ```ts
 import { resetAnomalyFingerprintForTests } from '@/lib/notify/evaluate/anomalies';
 ```
 
 ```ts
-  resetBudgetFingerprintForTests();
   resetAnomalyFingerprintForTests();
 ```
-
-A module-level fingerprint that survives between test files in the same fork is the classic source of a suite that passes alone and fails in a full run.
 
 - [ ] **Step 6: Run the tests to verify they pass**
 
@@ -4218,14 +4342,18 @@ function spend(categoryId: number, cents: number, date: string): void {
  * Six flat months of $600 groceries ending 2026-06, then a $713.40 July. Evaluated on the
  * first days of August: the reported month M is 2026-07, whose reference window is
  * 2026-01 .. 2026-06.
+ *
+ * Groceries is a CHILD of Food in the seed, so two rows carry this series: Groceries itself
+ * and Food, which rolls it up. Both get a suggestion, and every count below says two.
  */
-function seedHistory(): number {
+function seedHistory(): { groceries: number; food: number } {
   const groceries = categoryIdByName(t.db, 'Groceries');
+  const food = categoryIdByName(t.db, 'Food');
   for (const month of ['2026-01', '2026-02', '2026-03', '2026-04', '2026-05', '2026-06']) {
     spend(groceries, 60000, `${month}-10`);
   }
   spend(groceries, 71340, '2026-07-10');
-  return groceries;
+  return { groceries, food };
 }
 
 function keys(): string[] {
@@ -4268,22 +4396,26 @@ describe('MUST-9.27: predicted is recomputed, not recalled', () => {
 
     expect(evaluateMonthBoundary({ userId, now: new Date('2026-08-01T09:00:00Z'), tz: TZ })).toBe(1);
     const body = (t.sqlite.prepare('select body from notification_outbox limit 1').get() as { body: string }).body;
-    expect(body).toContain('expected $600.00');
-    expect(body).toContain('actual $713.40');
+    expect(body).toContain('$600.00 expected');
+    expect(body).toContain('$713.40 actual');
     expect(body).toContain('recomputed');
+    // Groceries and Food both carry the series, so both are lines and the total is doubled.
+    expect(body).toContain('$226.80 over');
   });
 });
 
 describe('MUST-9.31: suggested_budget_refresh needs both thresholds cleared', () => {
   it('does not fire when every suggestion sits close to its resolved limit', () => {
     const userId = optedInUser();
-    const groceries = seedHistory();
+    const { groceries, food } = seedHistory();
     setPref(userId, 'predicted_vs_actual', 'email', false);
     // The August window is 2026-02 .. 2026-07: five months at $600 and one at $713.40. Its
     // median is $600.00 and its trend is flat (the $113.40 move is under the 10 percent
-    // threshold), so the August suggestion is $600.00. Setting the limit to exactly that
-    // leaves a delta of zero, which clears neither threshold.
-    upsertBudget({ scope: 'household', userId: null, categoryId: groceries, month: '2026-01', amountCents: 60000 });
+    // threshold), so the August suggestion is $600.00 for Groceries AND for Food, which rolls
+    // the same series up. BOTH need a limit, or the one without fires on its own.
+    for (const categoryId of [groceries, food]) {
+      upsertBudget({ scope: 'household', userId: null, categoryId, month: '2026-01', amountCents: 60000 });
+    }
     expect(evaluateMonthBoundary({ userId, now: new Date('2026-08-01T09:00:00Z'), tz: TZ })).toBe(0);
     expect(keys()).toEqual([]);
   });
@@ -4294,6 +4426,9 @@ describe('MUST-9.31: suggested_budget_refresh needs both thresholds cleared', ()
     setPref(userId, 'predicted_vs_actual', 'email', false);
     expect(evaluateMonthBoundary({ userId, now: new Date('2026-08-01T09:00:00Z'), tz: TZ })).toBe(1);
     expect(keys()).toEqual(['suggest:2026-08']);
+    const subject = (t.sqlite.prepare('select subject from notification_outbox limit 1').get() as { subject: string }).subject;
+    // Groceries and its parent Food, both with no limit set.
+    expect(subject).toBe('New month: 2 suggested budgets changed');
   });
 
   it('MUST-9.33: the body says nothing has been changed, and nothing has', () => {
@@ -4367,6 +4502,8 @@ function comparePredicted(
   userId: number | null,
 ): { lines: ScopedPredicted[]; totalDeltaCents: number } {
   const suggestions = suggestionsFor({ targetMonth: month, scope, userId }).byCategory;
+  // The two sets coincide by construction: categorySeries mirrors budgetProgress row for row
+  // (Task 2). The undefined guard below is belt and braces, not a real branch.
   const actual = new Map(flattenBudgetRows(budgetProgress(month, scope, userId)).map((row) => [row.categoryId, row]));
 
   const lines: ScopedPredicted[] = [];
@@ -4695,12 +4832,14 @@ describe('MUST-11.2: both endpoints of every preset', () => {
     expect(at('2028-02-29', 'last_month')).toMatchObject({ from: '2028-01-01', to: '2028-01-31' });
   });
 
-  it('MUST-11.3: every "to" is a month end, so the range does not shift during the day', () => {
+  it('MUST-11.3: every "to" is a month end, so the range does not shift during the month', () => {
+    // Two different days inside the same month must resolve identically. Comparing the same
+    // `today` against itself would prove nothing about a pure function.
     for (const preset of ['this_month', 'last_3_months', 'last_6_months', 'ytd'] as const) {
-      const morning = at('2026-08-18', preset);
-      const evening = at('2026-08-18', preset);
-      expect(morning).toEqual(evening);
-      expect(morning?.to).toBe('2026-08-31');
+      const first = at('2026-08-01', preset);
+      const last = at('2026-08-31', preset);
+      expect(first).toEqual(last);
+      expect(first?.to).toBe('2026-08-31');
     }
   });
 });
@@ -5236,11 +5375,12 @@ git commit -m "feat(dates): the shared range resolver and its picker"
 - Modify: `src/app/(app)/transactions/transactions-client.tsx`
 - Modify: `src/app/api/reports/export/route.ts`
 - Test: `tests/app/date-range-adoption.test.ts` (**new**)
-- Test: `tests/api/export.route.test.ts` (amended: a preset token produces the same rows as the page)
+- Test: `tests/api/export.route.test.ts` (amended: three cases, the task's red-to-green step)
+- **Not** amended: `tests/app/transactions-client.test.tsx`, because the new prop is optional
 
 **Interfaces:**
 - Consumes: `RANGE_PRESETS` is not needed here; `rangeParams`, `resolveRange`, `type ResolvedRange` from `@/lib/date-range` (Task 10); `DateRangePicker` from `@/components/ui/DateRangePicker` (Task 10); `todayIso` from `@/lib/dates`; `readEnv` from `@/lib/env`.
-- Produces: `ReportsClient` gains `range: ResolvedRange` and `today: string` and **loses** its `from: string` and `to: string` props. `TransactionsClient` gains `range: ResolvedRange | null` and keeps its existing `today: string`.
+- Produces: `ReportsClient` gains `range: ResolvedRange` and `today: string` and **loses** its `from: string` and `to: string` props (both required: there is no `reports-client` test file to break). `TransactionsClient` gains `range?: ResolvedRange | null`, **optional, defaulting to `null`**, and keeps its existing `today: string`.
 
 ### Steps
 
@@ -5312,7 +5452,19 @@ Expected: PASS. This file pins the **contract** the pages must adopt; the page e
 
 - [ ] **Step 3: Rewrite the range resolution in `src/app/(app)/reports/page.tsx`**
 
-Add the imports:
+Fix the imports. The file's `@/lib/dates` line is currently
+
+```ts
+import { currentMonth, isIsoDate, monthEnd, monthStart, addMonths } from '@/lib/dates';
+```
+
+and it does **not** import `todayIso`, which the replacement block below calls. After this task the only `@/lib/dates` name the file still uses is `todayIso`, so the line becomes exactly:
+
+```ts
+import { todayIso } from '@/lib/dates';
+```
+
+(Task 12 adds `currentMonth` back for the baselines card. Nothing else returns.) Then add:
 
 ```ts
 import { resolveRange } from '@/lib/date-range';
@@ -5343,14 +5495,20 @@ with
   const to = range.to;
 ```
 
+Delete the now-dead line above them:
+
+```ts
+  const month = currentMonth();
+```
+
+Nothing else reads `month`: `categoryMonthOverMonth` derives its two month keys from `from.slice(0, 7)` and `to.slice(0, 7)`. `noUnusedLocals` is off in this repo's tsconfig and there is no ESLint config, so neither the dead local nor a stale import fails a check. Delete them anyway.
+
 Leave every existing call that reads `from` and `to` untouched, and pass the two new props to the client, dropping the old `from` and `to`:
 
 ```tsx
       range={range}
       today={today}
 ```
-
-Remove `isIsoDate` from the `@/lib/dates` import if nothing else in the file uses it; keep `addMonths`, `monthEnd`, `monthStart` only if they are still used elsewhere in the file. `tsc --noEmit` reports any that are now unused only if `noUnusedLocals` is on, so check by eye.
 
 - [ ] **Step 4: Swap the two date inputs in `src/app/(app)/reports/reports-client.tsx`**
 
@@ -5367,6 +5525,14 @@ and add the imports:
 import { DateRangePicker } from '@/components/ui/DateRangePicker';
 import { rangeParams, type ResolvedRange } from '@/lib/date-range';
 ```
+
+The two date inputs at lines 54 to 59 are `inputClass`'s only two uses in this file, so once they go the form import narrows to:
+
+```ts
+import { Field, selectClass } from '@/components/ui/form';
+```
+
+`Field` and `selectClass` both stay: the Person filter beside the picker still uses them.
 
 Replace the two `<Field label="From">` / `<Field label="To">` blocks in the filter form with:
 
@@ -5434,13 +5600,28 @@ Change the client's existing `today={todayIso()}` prop to `today={today}`, so th
 
 - [ ] **Step 6: Swap the two date inputs in `src/app/(app)/transactions/transactions-client.tsx`**
 
-Add to the props interface:
+Add to the props interface. **It must be optional with a default**, exactly as `loanOptions` and `loanLinks` already are in this component:
 
 ```ts
-  range: ResolvedRange | null;
+  range?: ResolvedRange | null;
 ```
 
-and the imports:
+```ts
+export function TransactionsClient({
+  page,
+  accounts,
+  categories,
+  people,
+  today,
+  range = null,
+  loanOptions = [],
+  loanLinks = {},
+}: {
+```
+
+`tests/app/transactions-client.test.tsx` has **no** shared `props()` builder. It has `pageWithRow()`, one local `baseProps` object inside a single describe, and **11 inline `<TransactionsClient ... />` render sites**, five of which spell every prop out. A required `range` breaks all 11 under `tsc --noEmit`; an optional one defaulting to `null` leaves the file untouched and still exercises exactly the state those tests care about, which is "no date filter". This is the same treatment v1.3.1 gave `loanOptions`.
+
+Add the imports:
 
 ```ts
 import { DateRangePicker } from '@/components/ui/DateRangePicker';
@@ -5463,11 +5644,10 @@ MUST-13.8: the two inputs render today with no `defaultValue` at all, so a filte
 
 - [ ] **Step 7: Resolve the range in `src/app/api/reports/export/route.ts`**
 
-Add the imports:
+Add two imports, and **only** two. This file **already** imports `todayIso` from `@/lib/dates` (it builds the download filename with it); importing it again is a duplicate binding and a TS2300:
 
 ```ts
 import { resolveRange } from '@/lib/date-range';
-import { todayIso } from '@/lib/dates';
 import { readEnv } from '@/lib/env';
 ```
 
@@ -5494,25 +5674,49 @@ Replace `from: params.get('from'), to: params.get('to'),` in the `filter` litera
 
 - [ ] **Step 8: Amend `tests/api/export.route.test.ts` for MUST-13.9**
 
-Add a case asserting that `?range=last_3_months` and the explicit `?from=...&to=...` pair for the same window produce identical CSV bodies, following the file's existing request-building and body-reading style:
+This is the task's red-to-green test, so match the file's real conventions exactly. Its helper is `exportRequest(url, token, origin)`, **not** `request(url)`; the URL must be **absolute** (`new Request('/api/...')` throws in undici); every 200-expecting case needs the session token from `setup()`; and the file has **no** `@/lib/dates` import, so add one.
+
+Add at the top:
+
+```ts
+import { addMonths, currentMonth, monthEnd, monthStart } from '@/lib/dates';
+```
+
+Add inside the existing `describe('GET /api/reports/export', ...)`:
 
 ```ts
   it('MUST-13.9: a preset token exports the same rows as the equivalent explicit pair', async () => {
-    const preset = await GET(request('/api/reports/export?range=last_3_months'));
+    const { token } = setup();
     const month = currentMonth();
+    const preset = await GET(exportRequest('http://nas.local:3000/api/reports/export?range=last_3_months', token));
     const explicit = await GET(
-      request(`/api/reports/export?from=${monthStart(addMonths(month, -2))}&to=${monthEnd(month)}`),
+      exportRequest(
+        `http://nas.local:3000/api/reports/export?from=${monthStart(addMonths(month, -2))}&to=${monthEnd(month)}`,
+        token,
+      ),
     );
+    expect(preset.status).toBe(200);
     expect(await preset.text()).toBe(await explicit.text());
   });
 
-  it('MUST-13.10: with no range parameters at all the route still exports everything', async () => {
-    const all = await GET(request('/api/reports/export'));
-    expect(all.status).toBe(200);
+  it('MUST-11.6 case 1: a recognised preset makes a stale from/to pair in the link irrelevant', async () => {
+    const { token } = setup();
+    const withStale = await GET(
+      exportRequest('http://nas.local:3000/api/reports/export?range=last_3_months&from=2020-01-01&to=2020-12-31', token),
+    );
+    const without = await GET(exportRequest('http://nas.local:3000/api/reports/export?range=last_3_months', token));
+    expect(await withStale.text()).toBe(await without.text());
+  });
+
+  it('MUST-13.10: with no range parameters at all the route still exports every row', async () => {
+    const { token } = setup();
+    const response = await GET(exportRequest('http://nas.local:3000/api/reports/export', token));
+    expect(response.status).toBe(200);
+    // The seeded row is dated 2026-03-05, outside any preset window resolved from today, so
+    // its presence here is what proves fallback: null applies no date clause.
+    expect(await response.text()).toContain('LOBLAWS');
   });
 ```
-
-Add `addMonths`, `currentMonth`, `monthEnd`, `monthStart` to that file's `@/lib/dates` import, and reuse its existing `request()` helper rather than adding a second one.
 
 - [ ] **Step 9: Run the tests to verify they pass**
 
@@ -5520,12 +5724,12 @@ Add `addMonths`, `currentMonth`, `monthEnd`, `monthStart` to that file's `@/lib/
 npx vitest run tests/app/date-range-adoption.test.ts tests/api/export.route.test.ts tests/app/transactions-client.test.tsx tests/lib/transactions.test.ts tests/lib/reports.test.ts
 npx tsc --noEmit
 ```
-Expected: PASS on all five, clean typecheck. `tests/app/transactions-client.test.tsx` will need its `props()` builder to pass the new `range` prop; add `range: null` there, which is the no-filter state it already exercises.
+Expected: PASS on all five, clean typecheck. `tests/app/transactions-client.test.tsx` is **unamended** and must stay green as it is: the new prop is optional (Step 6), so none of its 11 render sites changes.
 
 - [ ] **Step 10: Commit**
 
 ```bash
-git add "src/app/(app)/reports/page.tsx" "src/app/(app)/reports/reports-client.tsx" "src/app/(app)/transactions/page.tsx" "src/app/(app)/transactions/transactions-client.tsx" src/app/api/reports/export/route.ts tests/app/date-range-adoption.test.ts tests/api/export.route.test.ts tests/app/transactions-client.test.tsx
+git add "src/app/(app)/reports/page.tsx" "src/app/(app)/reports/reports-client.tsx" "src/app/(app)/transactions/page.tsx" "src/app/(app)/transactions/transactions-client.tsx" src/app/api/reports/export/route.ts tests/app/date-range-adoption.test.ts tests/api/export.route.test.ts
 git commit -m "feat(dates): Reports, Transactions and the CSV export adopt the shared picker"
 ```
 
@@ -5545,11 +5749,11 @@ git commit -m "feat(dates): Reports, Transactions and the CSV export adopt the s
 - Modify: `src/app/(app)/budgets/budgets-client.tsx`
 - Modify: `src/app/(app)/reports/page.tsx`
 - Modify: `src/app/(app)/reports/reports-client.tsx`
-- Test: `tests/app/budgets-client.test.tsx` (amended: the two new controls, the projection line, the three empty states)
+- Test: `tests/app/budgets-client.test.tsx` (amended: the `vi.mock` gains the two new actions, plus eight new assertions. Its six existing render sites are **untouched**, because `predictions` is optional)
 - Test: `tests/components/trend-icons.test.tsx` (**new**)
 
 **Interfaces:**
-- Consumes: `suggestionsFor` from `@/lib/predict/history` (Task 5); `projectMonthEnd` from `@/lib/predict/pace` (Task 3); `type CategorySuggestion`, `type Suggestion` from `@/lib/predict/suggest` (Task 3); `applyAllSuggestionsAction`, `applySuggestionAction` from `./actions` (Task 5); `currentMonth`, `monthEnd`, `todayIso` from `@/lib/dates`; `readEnv` from `@/lib/env`; `MIN_HISTORY_MONTHS` from `@/lib/predict/constants` (Task 1); the existing `Card`/`CardHeader`/`CardBody`, `TableWrap`/`AmountCell`, `Money`, `EmptyState`, `BudgetProgressBar`, `formatCents`.
+- Consumes: `suggestionsFor`, `type ScopeSuggestions` from `@/lib/predict/history` (Task 5); `projectMonthEnd` from `@/lib/predict/pace` (Task 3); `type CategorySuggestion`, `type Suggestion` from `@/lib/predict/suggest` (Task 3); `flattenBudgetRows` from `@/lib/notify/evaluate/pace` (**Task 7's export, not a new copy**); `applyAllSuggestionsAction`, `applySuggestionAction` from `./actions` (Task 5); `currentMonth`, `monthEnd`, `monthOf`, `todayIso` from `@/lib/dates`; `readEnv` from `@/lib/env`; `MIN_HISTORY_MONTHS` from `@/lib/predict/constants` (Task 1); the existing `Card`/`CardHeader`/`CardBody`, `TableWrap`/`AmountCell`, `Money`, `EmptyState`, `BudgetProgressBar`, `formatCents`.
 - Produces:
   ```ts
   // src/components/icons.tsx
@@ -5572,7 +5776,16 @@ git commit -m "feat(dates): Reports, Transactions and the CSV export adopt the s
     household: SectionPredictions;
     personal: { userId: number; predictions: SectionPredictions }[];
   }
-  // BudgetsClient gains: predictions: BudgetPredictions | null   (null for a past or future month)
+  // budgets-client.tsx, internal to the file, threaded through Row's recursion:
+  //   interface RowPredictions {
+  //     suggestionOf: Map<number, CategorySuggestion>;
+  //     projectionOf: Map<number, number>;
+  //     dayOfMonth: number;
+  //   }
+  // BudgetsClient gains:  predictions?: BudgetPredictions | null   (OPTIONAL, default null)
+  // Row gains:            applyAction: (formData: FormData) => void
+  //                       predict: RowPredictions | null
+  // BudgetTable gains:    paceTitle?: string
 
   // src/app/(app)/reports/page.tsx -> reports-client.tsx, one new prop
   export interface BaselineRow {
@@ -5692,22 +5905,17 @@ Add the imports. The file already imports `budgetProgress`, `budgetTotals`, `cur
 import { budgetProgress, budgetTotals, type BudgetRow } from '@/lib/budgets';
 import { currentMonth, isMonthKey, monthEnd, todayIso } from '@/lib/dates';
 import { readEnv } from '@/lib/env';
+import { flattenBudgetRows } from '@/lib/notify/evaluate/pace';
 import { suggestionsFor, type ScopeSuggestions } from '@/lib/predict/history';
 import { projectMonthEnd } from '@/lib/predict/pace';
 import type { BudgetPredictions, CategorySuggestion, SectionPredictions } from '@/lib/predict/suggest';
 ```
 
-Add these two module-level helpers above the page component. `flattenRows` is the same shape `pace.ts` exports, declared locally because a page must not import a notification evaluator:
+**No third copy of `flatten`.** `src/lib/notify/evaluate/budget.ts` has a private one and Task 7 exports `flattenBudgetRows` from `src/lib/notify/evaluate/pace.ts` precisely so nothing writes another. This page imports that export; it is a server component, so reaching a server module is allowed, and one shared walk is worth more than a tidy import graph with three copies of the same seven lines in it.
+
+Add this module-level helper above the page component:
 
 ```ts
-function flattenRows(rows: BudgetRow[], acc: BudgetRow[] = []): BudgetRow[] {
-  for (const row of rows) {
-    acc.push(row);
-    if (row.children.length > 0) flattenRows(row.children, acc);
-  }
-  return acc;
-}
-
 /**
  * MUST-8.7 and MUST-16.4: the projection reuses budgetProgress()'s own spentCents, so it adds
  * no query and can never disagree with the progress bar beside it.
@@ -5724,7 +5932,7 @@ function sectionFrom(
     suggestions.push({ categoryId, ...result.suggestion });
   }
   const projections: { categoryId: number; projectedCents: number }[] = [];
-  for (const row of flattenRows(rows)) {
+  for (const row of flattenBudgetRows(rows)) {
     if (row.limitCents === null) continue;
     const projectedCents = projectMonthEnd({ spentCents: row.spentCents, dayOfMonth, daysInMonth });
     if (projectedCents === null) continue;
@@ -5748,7 +5956,7 @@ Then, after the existing `household` and `personal` are built:
   if (month === currentMonth(new Date(), tz)) {
     // MUST-16.3 budgets this page at 2 + 2P grouped aggregates, so each scope is read ONCE.
     const householdScope = suggestionsFor({ targetMonth: month, scope: 'household', userId: null });
-    const householdHasSpend = flattenRows(household).some((row) => row.spentCents !== 0);
+    const householdHasSpend = flattenBudgetRows(household).some((row) => row.spentCents !== 0);
     predictions = {
       monthsUsed: householdScope.months.length,
       dayOfMonth,
@@ -5764,7 +5972,7 @@ Then, after the existing `household` and `personal` are built:
           ),
           // MUST-15.2 and MUST-7.2: attributed_user_id is NULL on most imported rows until
           // somebody sets it, so this is by far the most likely empty state on a real install.
-          noAttribution: householdHasSpend && flattenRows(person.rows).every((row) => row.spentCents === 0),
+          noAttribution: householdHasSpend && flattenBudgetRows(person.rows).every((row) => row.spentCents === 0),
         },
       })),
     };
@@ -5779,20 +5987,102 @@ and pass it to the client:
 
 - [ ] **Step 6: Render the three new surfaces in `src/app/(app)/budgets/budgets-client.tsx`**
 
-Add to the props interface:
+**The prop is optional with a default**, exactly as `currentUserIsAdmin` already is in this component:
 
 ```ts
-  predictions: BudgetPredictions | null;
+export function BudgetsClient({
+  month,
+  currentUserId,
+  currentUserIsAdmin = false,
+  household,
+  householdTotals,
+  personal,
+  predictions = null,
+}: {
+  // ... the existing six ...
+  /** MUST-14.1: null for a past or future month, and on any caller that has none. */
+  predictions?: BudgetPredictions | null;
+}) {
 ```
 
-Every snippet below sits inside a section render that has already narrowed `predictions` to non-null and picked its own `SectionPredictions` (the `household` field, or the matching entry in `personal`). Build the two lookups once per section, which is the only work the client does with them:
+`tests/app/budgets-client.test.tsx` has **no** shared `props()` builder, only `makeRow()`, and **six inline `<BudgetsClient ... />` render sites**. A required prop breaks all six under `tsc --noEmit`; an optional one defaulting to `null` leaves them untouched and still exercises the "past month, no columns" state they already assume.
+
+**Threading it to the rows (there is no other path).** `budgets-client.tsx` renders `BudgetsClient -> BudgetTable -> Row -> Row (recursive)`, and `Row` currently takes `{ row, depth, scope, userId, month, action, editable }` and passes that same set to its children. One new prop carries everything the row snippets below need, so the recursion gains exactly one line.
+
+Add the type beside `Row`:
 
 ```ts
-const suggestionOf = new Map(section.suggestions.map((entry) => [entry.categoryId, entry]));
-const projectionOf = new Map(section.projections.map((entry) => [entry.categoryId, entry.projectedCents]));
+/** Everything a row needs from the predictions, resolved once per section. */
+interface RowPredictions {
+  suggestionOf: Map<number, CategorySuggestion>;
+  projectionOf: Map<number, number>;
+  /** MUST-14.4: the number the projection's title sentence names. */
+  dayOfMonth: number;
+}
 ```
 
-and inside each row: `const suggestion = suggestionOf.get(row.categoryId) ?? null;` and `const projection = projectionOf.get(row.categoryId) ?? null;`. MUST-14.2: that is the whole of the client's involvement. It computes no median, no trend, no projection and no percentage.
+Widen `Row`'s parameter list and its destructuring with **two** new props, and pass both straight down in the recursive call. `Row` already takes `action` for the limit form; the suggestion form needs its own dispatcher, because the banner has to know which of the two fired:
+
+```ts
+  applyAction: (formData: FormData) => void;
+  predict: RowPredictions | null;
+```
+
+```tsx
+      {row.children.map((child) => (
+        <Row
+          key={child.categoryId}
+          row={child}
+          depth={depth + 1}
+          scope={scope}
+          userId={userId}
+          month={month}
+          action={action}
+          applyAction={applyAction}
+          editable={editable}
+          predict={predict}
+        />
+      ))}
+```
+
+Inside `Row`, before the returned JSX:
+
+```ts
+  const suggestion = predict?.suggestionOf.get(row.categoryId) ?? null;
+  const projection = predict?.projectionOf.get(row.categoryId) ?? null;
+```
+
+MUST-14.2: two `Map.get` calls are the whole of the client's involvement. It computes no median, no trend, no projection and no percentage.
+
+In `BudgetsClient`, build one `RowPredictions` per section and hand it to that section's top-level `<Row>`s:
+
+```ts
+  const rowPredict = (section: SectionPredictions | undefined): RowPredictions | null =>
+    predictions == null || section === undefined
+      ? null
+      : {
+          suggestionOf: new Map(section.suggestions.map((entry) => [entry.categoryId, entry])),
+          projectionOf: new Map(section.projections.map((entry) => [entry.categoryId, entry.projectedCents])),
+          dayOfMonth: predictions.dayOfMonth,
+        };
+
+  const householdPredict = rowPredict(predictions?.household);
+  const personalPredict = new Map((predictions?.personal ?? []).map((entry) => [entry.userId, rowPredict(entry.predictions)]));
+```
+
+then, at the two top-level `<Row>` call sites, add `applyAction={applyAction}` plus `predict={householdPredict}` on the household one and `predict={personalPredict.get(person.userId) ?? null}` on each personal one.
+
+**MUST-15.3's column header.** `BudgetTable` renders a bare fifth `<th scope="col" />` over the progress cell. Give it a label and the required title, and a prop so a month with no projections says nothing:
+
+```tsx
+function BudgetTable({ children, paceTitle }: { children: React.ReactNode; paceTitle?: string }) {
+```
+
+```tsx
+          <th scope="col" title={paceTitle}>{paceTitle ? 'Progress and pace' : null}</th>
+```
+
+with `paceTitle={predictions ? 'Appears from the 7th of the month.' : undefined}` at both `<BudgetTable>` call sites.
 
 and add the two new action wirings beside the existing two, following the file's `useActionState` plus `latest` pattern:
 
@@ -5843,10 +6133,10 @@ There is **no amount field**: the server recomputes (MUST-7.4). MUST-15.4: a row
 **MUST-14.4, the projection cell.** In the progress-bar cell, under the existing `<BudgetProgressBar ... />`:
 
 ```tsx
-{projection !== null ? (
+{projection !== null && predict !== null ? (
   <p
     className={`mt-1 text-xs ${row.limitCents !== null && projection > row.limitCents ? 'text-negative' : 'text-muted'}`}
-    title={`Assumes the rest of the month looks like the ${predictions.dayOfMonth} days so far.`}
+    title={`Assumes the rest of the month looks like the ${predict.dayOfMonth} days so far.`}
   >
     On pace for {formatCents(projection, { currency: true })}
   </p>
@@ -5872,13 +6162,16 @@ The over-limit colour is `text-negative`, the same token `BudgetProgressBar` use
 </form>
 ```
 
-**MUST-15.1 and MUST-15.2, the two sentences.** Under each section heading:
+**MUST-15.1 and MUST-15.2, the two sentences.** These sit in `BudgetsClient`, in each section's `<CardBody>`, above that section's `<BudgetTable>`. The first goes in both sections; the second only in a personal one, where `person` is the loop variable already in scope:
 
 ```tsx
 {predictions !== null && predictions.monthsUsed < MIN_HISTORY_MONTHS ? (
   <p className="text-sm text-muted">Suggestions appear once there are three full calendar months of history.</p>
 ) : null}
-{section.noAttribution ? (
+```
+
+```tsx
+{predictions?.personal.find((entry) => entry.userId === person.userId)?.predictions.noAttribution ? (
   <p className="text-sm text-muted">
     No transactions are attributed to you yet, so there is nothing to base a personal suggestion on.
   </p>
@@ -5889,103 +6182,166 @@ MUST-15.1 is explicit that this is a **sentence, not a disabled button**: a disa
 
 - [ ] **Step 7: Amend `tests/app/budgets-client.test.tsx`**
 
-Add a `predictions` field to the file's existing props builder (default `null`), then add:
+First widen the file's existing `vi.mock`, or the six new tests fail on import: the component now imports four actions from that module, and a partial mock leaves two of them undefined.
+
+```ts
+vi.mock('@/app/(app)/budgets/actions', () => ({
+  setLimitAction: vi.fn(async () => ({})),
+  copyPreviousMonthAction: vi.fn(async () => ({})),
+  applySuggestionAction: vi.fn(async () => ({})),
+  applyAllSuggestionsAction: vi.fn(async () => ({})),
+}));
+```
+
+Then add the imports and one local builder beside the file's existing `makeRow()`:
+
+```tsx
+import type { BudgetPredictions, CategorySuggestion } from '@/lib/predict/suggest';
+
+const SUGGESTION: CategorySuggestion = {
+  categoryId: 1,
+  suggestedCents: 78000,
+  medianCents: 76000,
+  meanCents: 77000,
+  trend: { direction: 'rising', deltaCents: 4000 },
+  monthsUsed: 6,
+  seasonalApplied: false,
+  confidence: 'medium',
+};
+
+function predictionsWith(over: Partial<BudgetPredictions> = {}): BudgetPredictions {
+  return {
+    monthsUsed: 6,
+    dayOfMonth: 12,
+    household: { suggestions: [], projections: [], noAttribution: false },
+    personal: [],
+    ...over,
+  };
+}
+
+/** The file's existing inline shape, plus whatever the test under way needs. */
+function renderBudgets(predictions: BudgetPredictions | null) {
+  return render(
+    <BudgetsClient
+      month="2026-03"
+      currentUserId={1}
+      household={[makeRow()]}
+      householdTotals={{ budgetedLimitCents: 20000, budgetedSpentCents: 5000, totalSpentCents: 5000 }}
+      personal={[]}
+      predictions={predictions}
+    />,
+  );
+}
+```
+
+`makeRow()` defaults to `categoryId: 1`, which is why `SUGGESTION` and the projections below key on 1.
 
 ```tsx
 describe('MUST-14.3 to MUST-14.6: the predictive controls', () => {
-  const suggestion = {
-    categoryId: 1,
-    suggestedCents: 78000,
-    medianCents: 76000,
-    meanCents: 77000,
-    trend: { direction: 'rising' as const, deltaCents: 4000 },
-    monthsUsed: 6,
-    seasonalApplied: false,
-    confidence: 'medium' as const,
-  };
-
   it('renders a Use button carrying no amount field, and its reasoning in the title', () => {
-    render(<BudgetsClient {...props({ predictions: predictionsWith([suggestion], []) })} />);
-    const button = screen.getByRole('button', { name: 'Use $780.00' });
-    expect(button.getAttribute('title')).toContain('Confidence: medium.');
-    const form = button.closest('form') as HTMLFormElement;
-    expect(new FormData(form).get('amount')).toBeNull();
-    expect(new FormData(form).get('categoryId')).toBe('1');
+    const { container } = renderBudgets(
+      predictionsWith({ household: { suggestions: [SUGGESTION], projections: [], noAttribution: false } }),
+    );
+    const button = Array.from(container.querySelectorAll('button')).find((el) => el.textContent === 'Use $780.00');
+    expect(button).toBeTruthy();
+    expect(button!.getAttribute('title')).toContain('Confidence: medium.');
+    const data = new FormData(button!.closest('form') as HTMLFormElement);
+    expect(data.get('amount')).toBeNull();
+    expect(data.get('categoryId')).toBe('1');
+    expect(data.get('month')).toBe('2026-03');
   });
 
   it('MUST-15.4: a category with no suggestion shows nothing in the slot', () => {
-    render(<BudgetsClient {...props({ predictions: predictionsWith([], []) })} />);
-    expect(screen.queryByRole('button', { name: /^Use / })).toBeNull();
+    const { container } = renderBudgets(predictionsWith());
+    expect(Array.from(container.querySelectorAll('button')).some((el) => el.textContent?.startsWith('Use '))).toBe(false);
   });
 
   it('MUST-14.4: the projection line appears with its assumption in the title', () => {
-    render(<BudgetsClient {...props({ predictions: predictionsWith([], [{ categoryId: 1, projectedCents: 105900 }]) })} />);
-    const line = screen.getByText('On pace for $1,059.00');
+    const { getByText } = renderBudgets(
+      predictionsWith({
+        household: { suggestions: [], projections: [{ categoryId: 1, projectedCents: 105900 }], noAttribution: false },
+      }),
+    );
+    const line = getByText('On pace for $1,059.00');
     expect(line.getAttribute('title')).toBe('Assumes the rest of the month looks like the 12 days so far.');
   });
 
   it('MUST-15.3: before the seventh there is no projection line and no placeholder', () => {
-    render(<BudgetsClient {...props({ predictions: predictionsWith([], []) })} />);
-    expect(screen.queryByText(/On pace for/)).toBeNull();
+    // The page produces no projections at all before day 7, because projectMonthEnd returns
+    // null. dayOfMonth is set to match, so this test fails if the row ever renders a dash or
+    // an empty pace line rather than nothing.
+    const { container } = renderBudgets(
+      predictionsWith({ dayOfMonth: 3, household: { suggestions: [], projections: [], noAttribution: false } }),
+    );
+    expect(container.textContent).not.toContain('On pace for');
   });
 
   it('MUST-14.5: the section gains an apply-all button with its hint', () => {
-    render(<BudgetsClient {...props({ predictions: predictionsWith([suggestion], []) })} />);
-    const button = screen.getByRole('button', { name: 'Apply all suggestions' });
-    expect(button.getAttribute('title')).toBe('Only fills in categories with no limit set. Nothing you have typed is changed.');
+    const { container } = renderBudgets(
+      predictionsWith({ household: { suggestions: [SUGGESTION], projections: [], noAttribution: false } }),
+    );
+    const button = Array.from(container.querySelectorAll('button')).find(
+      (el) => el.textContent === 'Apply all suggestions',
+    );
+    expect(button).toBeTruthy();
+    expect(button!.getAttribute('title')).toBe('Only fills in categories with no limit set. Nothing you have typed is changed.');
   });
 
   it('MUST-15.1: under three months there is a sentence and no disabled button', () => {
-    render(<BudgetsClient {...props({ predictions: { ...predictionsWith([], []), monthsUsed: 2 } })} />);
-    expect(screen.getByText('Suggestions appear once there are three full calendar months of history.')).toBeTruthy();
-    expect(screen.queryByRole('button', { name: /^Use / })).toBeNull();
+    const { container, getByText } = renderBudgets(predictionsWith({ monthsUsed: 2 }));
+    expect(getByText('Suggestions appear once there are three full calendar months of history.')).toBeTruthy();
+    expect(Array.from(container.querySelectorAll('button')).some((el) => el.textContent?.startsWith('Use '))).toBe(false);
   });
 
-  it('MUST-14.1: a past month renders neither column', () => {
-    render(<BudgetsClient {...props({ predictions: null })} />);
-    expect(screen.queryByRole('button', { name: /^Use / })).toBeNull();
-    expect(screen.queryByText(/On pace for/)).toBeNull();
+  it('MUST-14.1: a past month renders neither column and keeps the header quiet', () => {
+    const { container } = renderBudgets(null);
+    expect(Array.from(container.querySelectorAll('button')).some((el) => el.textContent?.startsWith('Use '))).toBe(false);
+    expect(container.textContent).not.toContain('On pace for');
+    expect(container.querySelector('th[title]')).toBeNull();
+  });
+
+  it('MUST-15.3: the pace column header carries its own explanation', () => {
+    const { container } = renderBudgets(predictionsWith());
+    expect(container.querySelector('th[title]')?.getAttribute('title')).toBe('Appears from the 7th of the month.');
   });
 });
 ```
-
-with a local builder beside the file's existing `props()`:
-
-```tsx
-function predictionsWith(
-  suggestions: CategorySuggestion[],
-  projections: { categoryId: number; projectedCents: number }[],
-): BudgetPredictions {
-  return {
-    monthsUsed: 6,
-    dayOfMonth: 12,
-    household: { suggestions, projections, noAttribution: false },
-    personal: [],
-  };
-}
-```
-
-Set `categoryId: 1` in the fixture to whatever category id the file's existing `household` fixture row uses.
 
 - [ ] **Step 8: Add the Reports baselines card**
 
 In `src/app/(app)/reports/page.tsx`, add:
 
 ```ts
+import { listCategories } from '@/lib/categories';
+import { monthOf } from '@/lib/dates';
 import { suggestionsFor } from '@/lib/predict/history';
 import type { BaselineRow } from '@/lib/predict/suggest';
-import { listCategories } from '@/lib/categories';
 ```
+
+`monthOf` joins the `@/lib/dates` import Task 11 narrowed to `todayIso`, giving `import { monthOf, todayIso } from '@/lib/dates';`.
 
 ```ts
   // MUST-14.8: this card's window is the last 6 FULL calendar months, always, whatever the
   // picker says. MUST-16.5: one query, not one per category.
-  const baseline = suggestionsFor({ targetMonth: currentMonth(), scope: 'household', userId: null });
-  const categoryNames = new Map(listCategories({ includeArchived: true }).map((category) => [category.id, category.name]));
+  //
+  // MUST-11.4: the month comes from the `today` Task 11 already resolved in the app's TZ, NOT
+  // from a bare currentMonth(). Near a month boundary a container-local month would make this
+  // card and the picker directly above it disagree about what month it is.
+  const baseline = suggestionsFor({ targetMonth: monthOf(today), scope: 'household', userId: null });
+  // MUST-14.7 and F19: TOP-LEVEL categories only. categorySeries mirrors budgetProgress, so it
+  // also produces a row for each child; listing Food beside Groceries, whose medians overlap by
+  // construction, would read as double counting on a card that has no indentation to explain it.
+  const topLevelNames = new Map(
+    listCategories({ includeArchived: true })
+      .filter((category) => category.parentId === null)
+      .map((category) => [category.id, category.name] as const),
+  );
   const baselines: BaselineRow[] = [];
   for (const [categoryId, result] of baseline.byCategory) {
     if (!('suggestion' in result)) continue;
-    baselines.push({ categoryId, categoryName: categoryNames.get(categoryId) ?? String(categoryId), suggestion: result.suggestion });
+    const categoryName = topLevelNames.get(categoryId);
+    if (categoryName === undefined) continue;
+    baselines.push({ categoryId, categoryName, suggestion: result.suggestion });
   }
   baselines.sort((a, b) => b.suggestion.medianCents - a.suggestion.medianCents);
 ```
@@ -6310,10 +6666,12 @@ Expected: `npm test` green across every file (**AC1**), `tsc --noEmit` clean und
 
 - [ ] **Step 8: Confirm the no-migration claim by hand**
 
+The repo tags every release, and `v1.3.1` is the tag this one builds on, so the range needs no commit count and stays correct however many commits the thirteen tasks produced:
+
 ```powershell
-git diff --name-only HEAD~13..HEAD | Select-String -Pattern '^drizzle/|^src/db/schema\.ts$'
+git diff --name-only v1.3.1..HEAD -- drizzle/ "src/db/schema.ts"
 ```
-Expected: **no output**. If anything is listed, the plan was wrong and the change must be reverted rather than accommodated (Global Constraints).
+Expected: **no output**. If anything is listed, the plan was wrong and the change must be reverted rather than accommodated (Global Constraints). Run it again after Step 9's commit; both answers must be empty.
 
 - [ ] **Step 9: Commit**
 
@@ -6339,7 +6697,7 @@ Every section of `docs/superpowers/specs/2026-08-18-predictive-dateranges-design
 | §3.3 Constants | MUST-3.6, MUST-3.7 | **1** |
 | §4.1 The window | MUST-4.1 … MUST-4.5 | **2** |
 | §4.2 The minimum-history guard | MUST-4.6, MUST-4.7 | **3** (the guard), **5** (end to end), **12** (the sentence) |
-| §4.3 `history.ts` | MUST-4.8 … MUST-4.11 | **2**; the seasonal gate in **5** |
+| §4.3 `history.ts` | MUST-4.8 … MUST-4.11 | **2**; the seasonal gate in **5**. MUST-4.10 is narrowed to budgetProgress()'s row set, argued in the header and pinned by **2**'s equality test |
 | §5.1 Median | MUST-5.1, MUST-5.2 | **1** |
 | §5.2 Average | MUST-5.3 | **1** |
 | §5.3 Trend | MUST-5.4, MUST-5.5 | **1** |
@@ -6373,7 +6731,7 @@ Every section of `docs/superpowers/specs/2026-08-18-predictive-dateranges-design
 | §13.3 The export route | MUST-13.9, MUST-13.10 | **11** |
 | §13.4 The pages that do not adopt it | MUST-13.11 | Nothing implemented; **11** touches only the three named files |
 | §14.1 The Budgets page | MUST-14.1 … MUST-14.6 | **12** |
-| §14.2 The baselines card | MUST-14.7, MUST-14.8, MUST-14.9 | **12** |
+| §14.2 The baselines card | MUST-14.7, MUST-14.8, MUST-14.9 | **12**, top-level categories only, so a parent and its child never sit side by side with overlapping medians |
 | §14.3 Required copy | MUST-14.10 | **6** (the two message sentences), **12** (the three UI sentences) |
 | §15 Error and empty states | MUST-15.1 … MUST-15.8 | **12** (15.1 to 15.6), **7**/**8**/**9** (15.7's try/catch), **11** (15.8 unchanged) |
 | §16.1 The egress invariant | MUST-16.1, MUST-16.2 | **13** |
