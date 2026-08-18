@@ -105,6 +105,35 @@ describe('MUST-3.2: the series is budgetProgress, row for row', () => {
     expect(pick(series, gone)).toBeUndefined();
   });
 
+  it('drops an archived top-level category with no own spend, and its spending child, from series and progress alike', () => {
+    const { db, spend, child } = setup();
+    const kids = categoryIdByName(db, 'Kids');
+    db.run(sql`update categories set is_archived = 1 where id = ${kids}`);
+    const leftover = child('Kids leftover', kids);
+    spend({ categoryId: leftover, amountCents: -5000, date: '2026-07-05' });
+
+    const series = categorySeries({ months: ['2026-07'], scope: 'household', userId: null });
+    const progress = flatten(budgetProgress('2026-07', 'household', null));
+    expect(series.some((row) => row.categoryId === kids || row.categoryId === leftover)).toBe(false);
+    expect(progress.some((row) => row.categoryId === kids || row.categoryId === leftover)).toBe(false);
+  });
+
+  it('surfaces an archived top-level category with its own spend, rolling in a live child that gets its own row', () => {
+    const { db, spend, child } = setup();
+    const kids = categoryIdByName(db, 'Kids');
+    db.run(sql`update categories set is_archived = 1 where id = ${kids}`);
+    const leftover = child('Kids leftover', kids);
+    spend({ categoryId: kids, amountCents: -4000, date: '2026-07-05' });
+    spend({ categoryId: leftover, amountCents: -3000, date: '2026-07-06' });
+
+    const series = categorySeries({ months: ['2026-07'], scope: 'household', userId: null });
+    const progress = flatten(budgetProgress('2026-07', 'household', null));
+    expect(pick(series, kids)?.monthlyCents).toEqual([7000]);
+    expect(pick(series, leftover)?.monthlyCents).toEqual([3000]);
+    expect(progress.find((row) => row.categoryId === kids)?.spentCents).toBe(7000);
+    expect(progress.find((row) => row.categoryId === leftover)?.spentCents).toBe(3000);
+  });
+
   it('drops income categories and never lets an income child change a spend parent', () => {
     const { db, spend, child } = setup();
     const food = categoryIdByName(db, 'Food');

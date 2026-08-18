@@ -4,6 +4,8 @@ import { transactions } from '@/db/schema';
 import { listCategories, type CategoryRecord } from '@/lib/categories';
 import { addMonths, monthEnd, monthOf, monthRange, monthStart } from '@/lib/dates';
 import { netSpentCents } from '@/lib/money';
+import { historyMonths, seasonalApplies } from '@/lib/predict/window';
+import { seasonalFactor, suggestBudget, type SuggestionResult } from '@/lib/predict/suggest';
 
 /**
  * The ONLY module under src/lib/predict/ that touches the database (MUST-2.1). Server-only:
@@ -171,4 +173,49 @@ export function seasonalReference(input: {
     });
   }
   return out;
+}
+
+export interface ScopeSuggestions {
+  /** The clipped window these were computed over. Its length drives MUST-15.1's sentence. */
+  months: string[];
+  byCategory: Map<number, SuggestionResult>;
+}
+
+/**
+ * The one composition of window, series, seasonality and suggestion, for one scope and one
+ * target month.
+ *
+ * It lives here, in the tree's only server module, because both the Budgets page render and
+ * applySuggestionAction need it and MUST-3.2 forbids a second definition: the button's label
+ * can never disagree with what the button did if there is one computation.
+ *
+ * MUST-16.3: one categorySeries() query, plus at most one seasonalReference() query and only
+ * on installs whose history covers a complete reference year (MUST-4.11's gate, via
+ * seasonalApplies which is at least as tight).
+ */
+export function suggestionsFor(input: {
+  targetMonth: string;
+  scope: 'household' | 'personal';
+  userId: number | null;
+}): ScopeSuggestions {
+  const first = firstDataMonth();
+  const months = historyMonths({ targetMonth: input.targetMonth, firstDataMonth: first });
+  const byCategory = new Map<number, SuggestionResult>();
+
+  const series = categorySeries({ months, scope: input.scope, userId: input.userId });
+  const reference = seasonalApplies({ targetMonth: input.targetMonth, firstDataMonth: first })
+    ? seasonalReference({ targetMonth: input.targetMonth, scope: input.scope, userId: input.userId })
+    : null;
+
+  for (const row of series) {
+    const found = reference?.get(row.categoryId) ?? null;
+    byCategory.set(
+      row.categoryId,
+      suggestBudget({
+        monthlyCents: row.monthlyCents,
+        seasonal: found === null ? null : seasonalFactor({ monthCents: found.monthCents, twelveMonths: found.twelveMonths }),
+      }),
+    );
+  }
+  return { months, byCategory };
 }
