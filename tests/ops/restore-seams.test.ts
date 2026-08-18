@@ -142,3 +142,24 @@ describe('MUST-14.2 / MUST-14.3: the notification raise sits between getDb and s
     expect(firstStatement).toBeLessThan(source.indexOf('getDb();'));
   });
 });
+
+describe('MUST-7.6 / MUST-7.7: the update reconciler sits between getDb and startScheduler', () => {
+  const source = read('src/instrumentation-node.ts');
+
+  it('calls reconcileApplyOnBoot() after raiseRestoreOutcome() and before startScheduler()', () => {
+    const raiseAt = source.indexOf('raiseRestoreOutcome()');
+    const reconcileAt = source.indexOf('reconcileApplyOnBoot()');
+    const schedulerAt = source.indexOf('startScheduler()');
+    expect(reconcileAt).toBeGreaterThan(raiseAt);
+    expect(schedulerAt).toBeGreaterThan(reconcileAt);
+    expect(source.lastIndexOf('getDb();')).toBeLessThan(reconcileAt);
+  });
+
+  it('wraps it so a reconciliation failure cannot stop the boot', () => {
+    expect(source).toMatch(/try\s*\{\s*reconcileApplyOnBoot\(\);\s*\}\s*catch/);
+  });
+
+  it('leaves applyStagedRestoreOnBoot() as the first statement (warranty §20 untouched)', () => {
+    expect(source.indexOf('applyStagedRestoreOnBoot()')).toBeLessThan(source.indexOf('getDb();'));
+  });
+});

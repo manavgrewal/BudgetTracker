@@ -13,6 +13,7 @@ import {
   newSigninKey,
   restoreOutcomeKey,
   staleImportKey,
+  updateAvailableKey,
   weeklyDigestKey,
 } from '@/lib/notify/events';
 import { resetSlotSkipLogForTests, runScheduledEvaluation } from '@/lib/notify/evaluate';
@@ -268,4 +269,28 @@ describe('MUST-3.12 (extended): pruning a sent coming_due row does not resurrect
     },
     30_000,
   );
+});
+
+describe('MUST-6.3: update:<version> and the one condition under which it regenerates', () => {
+  it('fires once per version, and again only after the 400-day sweep removes the row', () => {
+    const key = updateAvailableKey('1.4.0');
+    const userId = insertTestUser(t.db, { username: 'dedup-admin', role: 'admin' });
+    // A configured channel, so an enqueue actually produces a row (notify MUST-4.2).
+    saveSmtp({
+      preset: 'brevo', host: 'h', port: 587, security: 'starttls', username: 'u',
+      password: 'p', fromEmail: 'f@e.com', fromName: 'Budget Tracker', enabled: true,
+    });
+    saveEmailTarget({ userId, destination: 'a@b.com', enabled: true });
+    const first = enqueue({ userId, eventId: 'update_available', dedupKey: key, subject: 's', body: 'b', at: new Date('2026-08-18T00:00:00Z') });
+    expect(first.inserted.length).toBeGreaterThan(0);
+    const second = enqueue({ userId, eventId: 'update_available', dedupKey: key, subject: 's', body: 'b', at: new Date('2026-08-19T00:00:00Z') });
+    expect(second.inserted).toEqual([]);
+    // A newer version is a new key and enqueues again.
+    const newer = enqueue({ userId, eventId: 'update_available', dedupKey: updateAvailableKey('1.5.0'), subject: 's', body: 'b', at: new Date('2026-08-20T00:00:00Z') });
+    expect(newer.inserted.length).toBeGreaterThan(0);
+    // ...and after the retention sweep removes the 1.4.0 row, one more reminder is CORRECT.
+    t.sqlite.prepare(`delete from notification_outbox where dedup_key = ?`).run(key);
+    const afterPrune = enqueue({ userId, eventId: 'update_available', dedupKey: key, subject: 's', body: 'b', at: new Date('2027-10-01T00:00:00Z') });
+    expect(afterPrune.inserted.length).toBeGreaterThan(0);
+  });
 });

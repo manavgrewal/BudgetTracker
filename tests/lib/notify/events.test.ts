@@ -16,6 +16,7 @@ import {
   newSigninKey,
   restoreOutcomeKey,
   staleImportKey,
+  updateAvailableKey,
   weeklyDigestKey,
 } from '@/lib/notify/events';
 
@@ -31,10 +32,10 @@ describe('MUST-2.1: events.ts is pure and client-safe', () => {
 });
 
 describe('§4.2: the eight launch events', () => {
-  it('has exactly eight entries with unique, well-formed ids', () => {
-    expect(NOTIFICATION_EVENTS).toHaveLength(8);
+  it('has exactly nine entries with unique, well-formed ids', () => {
+    expect(NOTIFICATION_EVENTS).toHaveLength(9);
     const ids = NOTIFICATION_EVENTS.map((e) => e.id);
-    expect(new Set(ids).size).toBe(8);
+    expect(new Set(ids).size).toBe(9);
     for (const id of ids) expect(id).toMatch(/^[a-z][a-z0-9_]*$/);
   });
 
@@ -50,12 +51,13 @@ describe('§4.2: the eight launch events', () => {
       ['new_signin', 'all', 'immediate', true],
       ['restore_outcome', 'admin', 'immediate', true],
       ['stale_import', 'all', 'daily_slot', false],
+      ['update_available', 'admin', 'tick', true],
     ]);
   });
 
   it('MUST-4.1: the default-on set is the wrong-or-imminent half', () => {
     const on = NOTIFICATION_EVENTS.filter((e) => e.defaultEnabled).map((e) => e.id).sort();
-    expect(on).toEqual(['backup_failed', 'budget_exceeded', 'coming_due', 'new_signin', 'restore_outcome']);
+    expect(on).toEqual(['backup_failed', 'budget_exceeded', 'coming_due', 'new_signin', 'restore_outcome', 'update_available']);
   });
 
   it('gives every event a label and a one-sentence blurb', () => {
@@ -78,7 +80,7 @@ describe('lookup helpers', () => {
     expect(eventsFor('member').map((e) => e.id)).not.toContain('backup_failed');
     expect(eventsFor('member').map((e) => e.id)).not.toContain('restore_outcome');
     expect(eventsFor('member')).toHaveLength(6);
-    expect(eventsFor('admin')).toHaveLength(8);
+    expect(eventsFor('admin')).toHaveLength(9);
   });
 
   it('exposes the two channels', () => {
@@ -118,5 +120,30 @@ describe('MUST-3.11: the exact dedup key strings', () => {
 
   it('household and personal are two different facts for the same category', () => {
     expect(budgetExceededKey('household', 7, '2026-08')).not.toBe(budgetExceededKey('personal', 7, '2026-08'));
+  });
+});
+
+describe('MUST-6.1: the update_available registry entry', () => {
+  it('brings the registry to nine and is admin-audience, default-on, tick-triggered', () => {
+    expect(NOTIFICATION_EVENTS).toHaveLength(9);
+    const entry = eventDef('update_available');
+    expect(entry).toEqual({
+      id: 'update_available',
+      label: 'An update is available',
+      blurb: 'A newer version of Budget Tracker is published and is waiting for your say-so.',
+      audience: 'admin',
+      trigger: 'tick',
+      defaultEnabled: true,
+    });
+  });
+
+  it('MUST-4.3: eventsFor(member) excludes it', () => {
+    expect(eventsFor('member').some((e) => e.id === 'update_available')).toBe(false);
+    expect(eventsFor('admin').some((e) => e.id === 'update_available')).toBe(true);
+  });
+
+  it('MUST-6.3: the dedup key is per version and only ever goes up', () => {
+    expect(updateAvailableKey('1.4.0')).toBe('update:1.4.0');
+    expect(updateAvailableKey('1.4.0')).not.toBe(updateAvailableKey('1.5.0'));
   });
 });

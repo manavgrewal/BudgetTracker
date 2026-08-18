@@ -78,7 +78,15 @@ export type RenderInput =
       missingReceiptRows: number;
       error: string | null;
     }
-  | { event: 'stale_import'; weeks: number; lastImportIso: string; daysAgo: number };
+  | { event: 'stale_import'; weeks: number; lastImportIso: string; daysAgo: number }
+  | {
+      event: 'update_available';
+      currentVersion: string;
+      latestVersion: string;
+      severity: 'patch' | 'minor' | 'major';
+      publishedAt: string | null;
+      canApplyInApp: boolean;
+    };
 
 function money(cents: number): string {
   return formatCents(cents, { currency: true });
@@ -93,6 +101,12 @@ function inDays(todayIso: string, targetIso: string): string {
   if (days <= 0) return 'today';
   if (days === 1) return 'tomorrow';
   return `in ${days} days`;
+}
+
+/** notify §11.4's amendment: iso.slice(0, 16).replace('T', ' ') is the app's ONE convention. */
+function publishedLine(publishedAt: string | null): string {
+  if (publishedAt === null) return '';
+  return `\n\nPublished ${publishedAt.slice(0, 16).replace('T', ' ')}.`;
 }
 
 /** Two columns, padded, so a digest reads as a table in a plain-text message. */
@@ -209,5 +223,32 @@ export function renderEvent(input: RenderInput): { subject: string; body: string
           'Bank exports are how this app learns what you spent.',
         ].join('\n'),
       };
+    case 'update_available': {
+      const major = input.severity === 'major';
+      const subject = major
+        ? `Budget Tracker ${input.latestVersion} is available (major update)`
+        : `Budget Tracker ${input.latestVersion} is available`;
+      if (major) {
+        return {
+          subject,
+          body:
+            `You are running ${input.currentVersion}. Version ${input.latestVersion} is a major update, so this ` +
+            'app will not install it on its own. Open Settings, read what changed, and press Review and update ' +
+            'when you are ready.' +
+            publishedLine(input.publishedAt),
+        };
+      }
+      // MUST-6.5: no body carries a URL (notify MUST-10.4), and publishedAt renders with the
+      // app's one timestamp convention and nothing else. Version strings are re-serialised
+      // from parsed integers upstream (MUST-4.2), so nothing from the remote payload reaches
+      // a message body unparsed.
+      const tail = input.canApplyInApp
+        ? 'Automatic updates are switched off, so open Settings and press Update now when you want it.'
+        : 'This install cannot update itself — see Settings for how to update it by hand.';
+      return {
+        subject,
+        body: `You are running ${input.currentVersion}. Version ${input.latestVersion} is published. ${tail}${publishedLine(input.publishedAt)}`,
+      };
+    }
   }
 }

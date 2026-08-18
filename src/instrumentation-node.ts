@@ -9,6 +9,7 @@ import { getDb } from '@/db/client';
 import { RESTART_EXIT_CODE, applyStagedRestoreOnBoot } from '@/lib/backup/restore';
 import { raiseRestoreOutcome } from '@/lib/notify/raise';
 import { startScheduler } from '@/lib/scheduler';
+import { reconcileApplyOnBoot } from '@/lib/update/state';
 import { assertOcrAssets, resolveOcrAssets } from '@/lib/warranty/ocr/assets';
 
 // MUST-20.26: FIRST, before anything can open the database. This ordering is load-bearing
@@ -54,6 +55,16 @@ try {
   raiseRestoreOutcome();
 } catch (error) {
   console.error('[notify] restore outcome raise failed', error);
+}
+
+// MUST-7.6: AFTER getDb() above (the outcome is written into the restored database) and
+// BEFORE the scheduler starts below. reconcileApplyOnBoot is internally guarded (MUST-7.7)
+// and never throws today; this catch is the same belt-and-braces the raise above carries,
+// so a future change to that guarantee cannot take the boot down with it.
+try {
+  reconcileApplyOnBoot();
+} catch (error) {
+  console.error('[update] boot reconciliation failed', error);
 }
 
 startScheduler();

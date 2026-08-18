@@ -109,6 +109,14 @@ export const NOTIFICATION_EVENTS: readonly NotificationEventDef[] = [
     trigger: 'daily_slot',
     defaultEnabled: false,
   },
+  {
+    id: 'update_available',
+    label: 'An update is available',
+    blurb: 'A newer version of Budget Tracker is published and is waiting for your say-so.',
+    audience: 'admin',
+    trigger: 'tick',
+    defaultEnabled: true,
+  },
 ];
 
 export function eventDef(id: string): NotificationEventDef | undefined {
@@ -173,4 +181,18 @@ export function restoreOutcomeKey(finishedAt: string): string {
 
 export function staleImportKey(mondayIso: string): string {
   return `stale:${mondayIso}`;
+}
+
+/**
+ * Once per remote version, ever. Versions only ever go up, so this key never recurs.
+ *
+ * MUST-6.3 (pruning safety, honestly stated): there is ONE residual case. An install that
+ * stays on its current version for more than 400 days while the same newer release remains
+ * the latest will have its `update:<version>` row pruned by the retention sweep and will be
+ * told once more, on the following check, that that version is available. One reminder every
+ * 400 days about an update you have been ignoring for 400 days is correct behaviour, not a
+ * defect, and it is the only condition under which this key can regenerate.
+ */
+export function updateAvailableKey(version: string): string {
+  return `update:${version}`;
 }

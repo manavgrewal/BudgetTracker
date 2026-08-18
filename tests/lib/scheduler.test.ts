@@ -9,6 +9,7 @@ import {
   isSchedulerRunning,
   runNightlyTick,
   runNotifyTick,
+  runUpdateTick,
   startScheduler,
   stopScheduler,
 } from '@/lib/scheduler';
@@ -18,6 +19,8 @@ import * as evaluateModule from '@/lib/notify/evaluate';
 import { drainOutboxForTests } from '@/lib/notify/outbox';
 import * as raiseModule from '@/lib/notify/raise';
 import { resetNotifySenderForTests, setNotifySenderForTests } from '@/lib/notify/send';
+import { recordCheckOutcome, setUpdateChecksEnabled } from '@/lib/update/state';
+import { APP_VERSION } from '@/lib/version';
 
 // M8: startScheduler() runs the OCR sweep once at boot, which calls getDb() via
 // sweepPendingReceipts(). Without an isolated test db, that call falls through to the
@@ -127,6 +130,72 @@ describe('MUST-6.1 / MUST-6.4: the notification tick', () => {
     } finally {
       raise.mockRestore();
       nightly.mockRestore();
+    }
+  });
+});
+
+describe('MUST-5.1 … MUST-5.4: the update tick', () => {
+  it('AC4: with checks disabled, a boot plus twelve ticks perform ZERO fetches', () => {
+    const spy = vi.fn(async () => new Response('', { status: 200 }));
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = spy as unknown as typeof fetch;
+    try {
+      startScheduler();
+      for (let i = 0; i < 12; i += 1) runUpdateTick(new Date(Date.now() + i * 5 * 60_000));
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it('respects the 24-hour interval: nothing at 23 hours, a check at 25', async () => {
+    const userId = insertTestUser(current!.db, { username: 'sched-admin', role: 'admin' });
+    setUpdateChecksEnabled({ enabled: true, userId });
+    recordCheckOutcome({ at: new Date('2026-08-18T00:00:00.000Z'), latestVersion: null });
+    const spy = vi.fn(async () => new Response(JSON.stringify({ tag_name: `v${APP_VERSION}` }), { status: 200 }));
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = spy as unknown as typeof fetch;
+    try {
+      runUpdateTick(new Date('2026-08-18T23:00:00.000Z'));
+      expect(spy).not.toHaveBeenCalled();
+      runUpdateTick(new Date('2026-08-19T01:00:00.000Z'));
+      await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it('MUST-5.2: the cron callback and the boot path call it BEFORE runNotifyTick', () => {
+    const source = fs.readFileSync(path.join(process.cwd(), 'src/lib/scheduler.ts'), 'utf8');
+    expect(source).toMatch(/runUpdateTick\(\);\s*\n\s*runNotifyTick\(\);/);
+    // Two occurrences: the cron callback and the boot call.
+    expect(source.match(/runUpdateTick\(\);/g)).toHaveLength(2);
+  });
+
+  it('MUST-5.3: notify\'s dormancy bail is still the first statement after its single-flight guard', () => {
+    const source = fs.readFileSync(path.join(process.cwd(), 'src/lib/scheduler.ts'), 'utf8');
+    expect(source).toContain('if (!hasAnyEnabledTarget() && countPendingOutbox() === 0) return;');
+  });
+
+  it('MUST-5.4: stopScheduler resets the update single-flight guard', () => {
+    const source = fs.readFileSync(path.join(process.cwd(), 'src/lib/scheduler.ts'), 'utf8');
+    expect(source).toMatch(/bootExpiryDone = false;[\s\S]{0,200}updateTicking = false;/);
+  });
+
+  it('a throwing runUpdateCheck does not prevent runNotifyTick from running', () => {
+    const userId = insertTestUser(current!.db, { username: 'sched-admin2', role: 'admin' });
+    setUpdateChecksEnabled({ enabled: true, userId });
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (() => {
+      throw new Error('network down');
+    }) as unknown as typeof fetch;
+    try {
+      expect(() => {
+        runUpdateTick(new Date());
+        runNotifyTick(new Date());
+      }).not.toThrow();
+    } finally {
+      globalThis.fetch = realFetch;
     }
   });
 });

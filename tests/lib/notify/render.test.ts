@@ -264,3 +264,36 @@ describe('MUST-10.4: no notification body contains a link', () => {
     }
   });
 });
+
+describe('MUST-6.4 / MUST-6.5: update_available renders three bodies and no URL', () => {
+  const base = { event: 'update_available' as const, currentVersion: '1.3.1', latestVersion: '1.4.0', publishedAt: null };
+
+  it('major', () => {
+    const { subject, body } = renderEvent({ ...base, severity: 'major', canApplyInApp: true });
+    expect(subject).toBe('Budget Tracker 1.4.0 is available (major update)');
+    expect(body).toBe(
+      'You are running 1.3.1. Version 1.4.0 is a major update, so this app will not install it on its own. ' +
+        'Open Settings, read what changed, and press Review and update when you are ready.',
+    );
+  });
+
+  it('patch with an apply path', () => {
+    const { subject, body } = renderEvent({ ...base, severity: 'patch', canApplyInApp: true });
+    expect(subject).toBe('Budget Tracker 1.4.0 is available');
+    expect(body).toBe(
+      'You are running 1.3.1. Version 1.4.0 is published. Automatic updates are switched off, so open Settings ' +
+        'and press Update now when you want it.',
+    );
+  });
+
+  it('minor with no apply path', () => {
+    const { body } = renderEvent({ ...base, severity: 'minor', canApplyInApp: false });
+    expect(body).toContain('This install cannot update itself');
+  });
+
+  it('renders publishedAt with the app\'s one timestamp convention and carries no URL', () => {
+    const { body } = renderEvent({ ...base, severity: 'patch', canApplyInApp: true, publishedAt: '2026-08-16T09:00:00Z' });
+    expect(body).toContain('Published 2026-08-16 09:00.');
+    expect(body).not.toMatch(/https?:/);
+  });
+});
