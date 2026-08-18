@@ -34,6 +34,12 @@ to fill in before starting.
   anyway? Uncomment the `SECRET_KEY:` line in the pasted compose file and set it to a random
   string of at least 32 bytes before starting the project.
 
+**Already running an older compose file from Option A?** If it predates 1.3.1, it still has
+Watchtower's old daily poll and needs no action to keep updating — but moving to the current
+file is worth doing anyway, since only the new file lets you see and control updates from
+Settings → About. See "Moving to in-app updates (1.3.1)" under "Updating" below for the
+three-step migration.
+
 Prefer to build from source instead (for example, to audit the code yourself first)? Continue
 with the walkthrough below.
 

@@ -10,6 +10,7 @@ import {
   recordApplyRequested,
   recordCheckOutcome,
   reconcileApplyOnBoot,
+  reconcilePendingApply,
   setAutoApply,
   setUpdateChecksEnabled,
 } from '@/lib/update/state';
@@ -51,6 +52,7 @@ describe('MUST-1.1 / MUST-3.1: absence is the off state', () => {
       applyRequestedAt: null,
       lastAppliedAt: null,
       lastApplyError: null,
+      lastApplyFailedVersion: null,
     });
   });
 });
@@ -185,9 +187,11 @@ describe('MUST-7.6: the boot reconciler closes the loop', () => {
     expect(state.applyRequestedAt).toBeNull();
     expect(state.lastApplyError).toBeNull();
     expect(state.latestVersion).toBeNull();
+    // Fix wave item 1: a confirmed apply is a clean slate -- no stale skip-marker survives it.
+    expect(state.lastApplyFailedVersion).toBeNull();
   });
 
-  it('times out a stale request past 30 minutes and records why', () => {
+  it('times out a stale request past 30 minutes and records why, and remembers the version (fix wave item 1c)', () => {
     const userId = insertTestUser(t.db, { username: 'admin9' });
     setUpdateChecksEnabled({ enabled: true, userId });
     recordApplyRequested({ version: '9.9.9', at: new Date('2026-08-17T10:00:00.000Z') });
@@ -200,6 +204,9 @@ describe('MUST-7.6: the boot reconciler closes the loop', () => {
     expect(state.lastApplyError).toBe(
       `The update was requested but the app is still on ${APP_VERSION}. Check the Watchtower container's logs.`,
     );
+    // Fix wave item 1(c): so a later check tick's auto-apply branch can skip re-triggering
+    // this exact version instead of firing at it once a day forever.
+    expect(state.lastApplyFailedVersion).toBe('9.9.9');
   });
 
   it('leaves a FRESH mismatched request pending — a boot can precede the replacement', () => {
@@ -212,6 +219,34 @@ describe('MUST-7.6: the boot reconciler closes the loop', () => {
     expect(state.applyRequestedVersion).toBe('9.9.9');
     expect(state.applyRequestedAt).toBe('2026-08-17T10:00:00.000Z');
     expect(state.lastApplyError).toBeNull();
+  });
+
+  it('fix wave item 1(b): reconcilePendingApply is the exact same function check.ts calls every tick, not a boot-only path', () => {
+    const userId = insertTestUser(t.db, { username: 'admin10b' });
+    setUpdateChecksEnabled({ enabled: true, userId });
+    recordApplyRequested({ version: '9.9.9', at: new Date('2026-08-17T10:00:00.000Z') });
+    const later = new Date(Date.parse('2026-08-17T10:00:00.000Z') + APPLY_CONFIRM_MAX_AGE_MS + 1000);
+    // Called directly, exactly as check.ts's runUpdateCheck does at the top of every tick --
+    // NOT reconcileApplyOnBoot, which only ever runs once, at boot.
+    reconcilePendingApply(later);
+
+    const state = readUpdateState();
+    expect(state.applyRequestedVersion).toBeNull();
+    expect(state.lastApplyFailedVersion).toBe('9.9.9');
+  });
+
+  it('fix wave item 1(c): a fresh apply request clears any earlier skip-marker', () => {
+    const userId = insertTestUser(t.db, { username: 'admin11' });
+    setUpdateChecksEnabled({ enabled: true, userId });
+    recordApplyRequested({ version: '9.9.9', at: new Date('2026-08-17T10:00:00.000Z') });
+    reconcileApplyOnBoot(new Date(Date.parse('2026-08-17T10:00:00.000Z') + APPLY_CONFIRM_MAX_AGE_MS + 1000));
+    expect(readUpdateState().lastApplyFailedVersion).toBe('9.9.9');
+
+    // A manual retry (or a newer version's auto-apply) fires recordApplyRequested again --
+    // the skip-marker must not survive it, or a genuinely successful retry would still read
+    // as "skip this version" on the next check.
+    recordApplyRequested({ version: '9.9.9', at: new Date('2026-08-18T10:00:00.000Z') });
+    expect(readUpdateState().lastApplyFailedVersion).toBeNull();
   });
 });
 

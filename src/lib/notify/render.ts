@@ -229,12 +229,19 @@ export function renderEvent(input: RenderInput): { subject: string; body: string
         ? `Budget Tracker ${input.latestVersion} is available (major update)`
         : `Budget Tracker ${input.latestVersion} is available`;
       if (major) {
+        // Fix wave item 2: the app's own "Review and update" screen only exists on an
+        // install with an apply path (Watchtower configured). An install without one — see
+        // §7.4's fallback, updates-client.tsx's !canApplyInApp branch — has no such button to
+        // press, so it gets the honest manual-update wording instead of an instruction it
+        // cannot follow.
+        const tail = input.canApplyInApp
+          ? 'Open Settings, read what changed, and press Review and update when you are ready.'
+          : 'Open Settings → About for the release notes, then update by hand.';
         return {
           subject,
           body:
             `You are running ${input.currentVersion}. Version ${input.latestVersion} is a major update, so this ` +
-            'app will not install it on its own. Open Settings, read what changed, and press Review and update ' +
-            'when you are ready.' +
+            `app will not install it on its own. ${tail}` +
             publishedLine(input.publishedAt),
         };
       }

@@ -57,7 +57,7 @@
 # inside its own container) so the app can ask it to update. That port is NEVER published to
 # the host -- there is no ports: mapping on the watchtower service and there must never be one
 # -- so the endpoint is reachable only by service name from this project's private network, in
-# the same way the healthcheck above talks to 127.0.0.1. The token above is a second fence
+# the same way the healthcheck above talks to 127.0.0.1. The token below is a second fence
 # behind that one.
 services:
   budget-tracker:

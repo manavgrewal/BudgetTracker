@@ -600,6 +600,18 @@ function EditForm({
           <input type="hidden" name="itemId" value={item.id} />
           <input type="hidden" name="transactionId" value={item.transactionId ?? ''} />
           <input type="hidden" name="staged" value="[]" />
+          {/* Fix wave item 4: the balance this form was RENDERED with, from the `item` prop
+              at mount -- deliberately NOT the live `currentBalance` state above, and NOT
+              gated on whether the loan fields are currently shown, so it still reflects the
+              true render-time value even if the person switches the Type dropdown away from
+              a loan kind mid-edit. The action compares the posted `currentBalance` against
+              THIS to tell "untouched" from "edited", instead of against whatever is stored
+              in the database at save time -- see actions.ts's readItemInput docblock. */}
+          <input
+            type="hidden"
+            name="currentBalanceSeed"
+            value={item.currentBalanceCents === null ? '' : (item.currentBalanceCents / 100).toFixed(2)}
+          />
 
           <div className="grid gap-4 sm:grid-cols-2">
             <Field label="Name" className="sm:col-span-2">

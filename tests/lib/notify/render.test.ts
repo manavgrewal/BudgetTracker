@@ -286,6 +286,7 @@ const SAMPLES_BY_EVENT: Record<string, RenderInput[]> = {
   stale_import: [{ event: 'stale_import', weeks: 3, lastImportIso: '2026-07-27', daysAgo: 21 }],
   update_available: [
     { event: 'update_available', currentVersion: '1.3.1', latestVersion: '1.4.0', severity: 'major', publishedAt: null, canApplyInApp: true },
+    { event: 'update_available', currentVersion: '1.3.1', latestVersion: '1.4.0', severity: 'major', publishedAt: null, canApplyInApp: false },
     { event: 'update_available', currentVersion: '1.3.1', latestVersion: '1.4.0', severity: 'patch', publishedAt: null, canApplyInApp: true },
     { event: 'update_available', currentVersion: '1.3.1', latestVersion: '1.4.0', severity: 'minor', publishedAt: '2026-08-16T09:00:00Z', canApplyInApp: false },
   ],
@@ -318,6 +319,16 @@ describe('MUST-6.4 / MUST-6.5: update_available renders three bodies and no URL'
       'You are running 1.3.1. Version 1.4.0 is a major update, so this app will not install it on its own. ' +
         'Open Settings, read what changed, and press Review and update when you are ready.',
     );
+  });
+
+  it('fix wave item 2: major with no apply path gets the manual-update wording, not "press Review and update"', () => {
+    const { subject, body } = renderEvent({ ...base, severity: 'major', canApplyInApp: false });
+    expect(subject).toBe('Budget Tracker 1.4.0 is available (major update)');
+    expect(body).toBe(
+      'You are running 1.3.1. Version 1.4.0 is a major update, so this app will not install it on its own. ' +
+        'Open Settings → About for the release notes, then update by hand.',
+    );
+    expect(body).not.toContain('press Review and update');
   });
 
   it('patch with an apply path', () => {

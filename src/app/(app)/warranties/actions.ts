@@ -153,6 +153,21 @@ function readBalanceCents(formData: FormData): number | null {
   return Math.abs(cents);
 }
 
+/**
+ * Fix wave item 4: `currentBalanceSeed` is a hidden field warranty-detail-client.tsx posts
+ * alongside the visible one, carrying the balance the form was RENDERED with (the item prop
+ * at mount), untouched by anything the user does in the tab afterwards. Unlike the visible
+ * field it is never required to parse as a valid amount -- a malformed or absent seed (an
+ * old cached page, a form this app didn't render) just means "no seed", so readItemInput
+ * falls back to treating the post as an edit rather than throwing on it.
+ */
+function readSeedBalanceCents(formData: FormData): number | null {
+  const raw = str(formData, 'currentBalanceSeed').trim();
+  if (raw.length === 0) return null;
+  const cents = parseAmountToCents(raw);
+  return cents === null ? null : Math.abs(cents);
+}
+
 function readMonths(formData: FormData): number | null {
   const raw = str(formData, 'warrantyMonths').trim();
   if (raw.length === 0) return null;
@@ -190,12 +205,23 @@ function readTypeId(formData: FormData): number | null {
 /**
  * F6 fix-round: `existingBalance` is the item's balance/anchor AS ALREADY STORED, supplied
  * only by updateWarrantyAction (createWarrantyAction has no "existing" row, so a non-empty
- * balance there always gets a fresh anchor, unchanged). When the parsed figure is the SAME
- * cents value already on file, the anchor is carried forward untouched instead of being
- * re-stamped to "now" -- an unrelated edit (the loan fieldset simply re-submitting whatever
- * was already there) must not move MUST-11.8's anchor. Only a balance that actually DIFFERS
- * (including from-null and to-null transitions, both already handled by the null branch)
- * gets a fresh nowIso().
+ * balance there always gets a fresh anchor, unchanged).
+ *
+ * Fix wave item 4 (MEDIUM-adjacent LOW): the F6 fix-round comparison above used to be against
+ * `existingBalance`, which updateWarrantyAction fetches FRESH, right before this call. That
+ * made "was the balance touched by this submit" depend on whatever a matcher rule or another
+ * admin did to the stored balance WHILE this form sat open in a browser tab, rather than on
+ * whether the person actually typed into the field: the instant the stored value drifted from
+ * what the open tab last rendered, an untouched field looked "edited", and its stale,
+ * pre-drift figure silently clobbered the real (moved) one on save -- reverting an automatic
+ * balance move for a name-only edit.
+ *
+ * The fix compares the posted balance against `currentBalanceSeed`, a hidden field
+ * warranty-detail-client.tsx posts alongside the visible one, carrying the balance the form
+ * was RENDERED with (the item prop at mount) and nothing the tab does afterwards. Only a
+ * value that differs from that seed can be "user-edited"; an untouched field can therefore
+ * never overwrite a balance that moved underneath the form -- it keeps whatever is on file
+ * right now, anchor untouched, and a genuine edit still writes exactly as before.
  */
 function readItemInput(
   formData: FormData,
@@ -206,7 +232,10 @@ function readItemInput(
   // Hoisted so the anchor written just below can be derived from the SAME parsed value,
   // rather than re-reading (and re-parsing) the balance field a second time.
   const balanceCents = readBalanceCents(formData);
-  const balanceUnchanged = existingBalance !== undefined && existingBalance.cents === balanceCents;
+  const seedCents = readSeedBalanceCents(formData);
+  // No existing row (create) is always a fresh write, exactly as before this fix.
+  const userEditedBalance = existingBalance === undefined || seedCents !== balanceCents;
+  const effectiveBalanceCents = userEditedBalance ? balanceCents : existingBalance!.cents;
   return warrantyInputSchema(todayIso()).safeParse({
     name: str(formData, 'name'),
     vendor: str(formData, 'vendor'),
@@ -225,12 +254,17 @@ function readItemInput(
     billingAmountCents: readBillingAmountCents(formData),
     principalCents: readPrincipalCents(formData),
     interestRateBps: readInterestRateBps(formData),
-    currentBalanceCents: balanceCents,
+    currentBalanceCents: effectiveBalanceCents,
     // MUST-11.8: the HUMAN anchor. Written here and NOWHERE else -- never by a matched
     // payment, never by an unassign, never by an import undo. It answers "when did a person
     // last tell us the truth about this balance", which is exactly the question the debt
-    // reconstruction needs.
-    balanceUpdatedAt: balanceCents === null ? null : balanceUnchanged ? (existingBalance!.updatedAt ?? nowIso()) : nowIso(),
+    // reconstruction needs. An untouched field (fix wave item 4) can never move it.
+    balanceUpdatedAt:
+      effectiveBalanceCents === null
+        ? null
+        : userEditedBalance
+          ? nowIso()
+          : (existingBalance!.updatedAt ?? nowIso()),
   });
 }
 

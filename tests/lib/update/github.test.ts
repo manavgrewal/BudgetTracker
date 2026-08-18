@@ -72,6 +72,28 @@ describe('MUST-4.2 / MUST-4.3 / MUST-4.4: the release request, exactly', () => {
     stub(() => json({ tag_name: '1.4.0' }));
     await expect(fetchLatestRelease()).resolves.toEqual({ tag: '1.4.0', version: '1.4.0', publishedAt: null });
   });
+
+  describe('fix wave item 5: published_at is bounded before it reaches settings or a rendered message', () => {
+    it('accepts a real ISO-8601 UTC timestamp, with or without milliseconds', async () => {
+      stub(() => json({ tag_name: 'v1.4.0', published_at: '2026-08-16T09:00:00.123Z' }));
+      await expect(fetchLatestRelease()).resolves.toMatchObject({ publishedAt: '2026-08-16T09:00:00.123Z' });
+    });
+
+    it('a wildly oversized string is stored as null, not truncated and passed through', async () => {
+      stub(() => json({ tag_name: 'v1.4.0', published_at: `2026-08-16T09:00:00Z${'x'.repeat(10_000)}` }));
+      await expect(fetchLatestRelease()).resolves.toMatchObject({ publishedAt: null });
+    });
+
+    it('a value that is not ISO-shaped at all is stored as null', async () => {
+      stub(() => json({ tag_name: 'v1.4.0', published_at: 'not a timestamp' }));
+      await expect(fetchLatestRelease()).resolves.toMatchObject({ publishedAt: null });
+    });
+
+    it('a non-string published_at (e.g. a number) is stored as null', async () => {
+      stub(() => json({ tag_name: 'v1.4.0', published_at: 1755331200 }));
+      await expect(fetchLatestRelease()).resolves.toMatchObject({ publishedAt: null });
+    });
+  });
 });
 
 describe('MUST-4.7: error classification', () => {

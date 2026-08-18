@@ -1,6 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createTestDb, insertTestUser, type TestDb } from '../../helpers/db';
 import { UPDATE_CHECK_INTERVAL_MS, dueForCheck, runUpdateCheck } from '@/lib/update/check';
+import { setSetting } from '@/lib/settings';
+import { APPLY_CONFIRM_MAX_AGE_MS } from '@/lib/update/state';
 import { APPLY_MAX, resetUpdateRateLimitsForTests } from '@/lib/update/ratelimit';
 import { classify, parseSemver } from '@/lib/update/semver';
 import { readUpdateState, setAutoApply, setUpdateChecksEnabled } from '@/lib/update/state';
@@ -250,5 +252,77 @@ describe('Fix round finding 4: the APPLY bucket bounds the internal auto-apply p
     expect(refused.error).toBeNull();
     expect(refused.notified).toBe(true);
     expect(watchtowerCalls).toBe(APPLY_MAX);
+  });
+});
+
+/**
+ * Final pre-tag fix wave, MEDIUM: Watchtower 2xx-"accepts" a request even when it replaces
+ * nothing at all -- a pinned image tag is the concrete case, since Watchtower only ever
+ * replaces a container when a NEWER image actually lands for the tag it is running. Before
+ * this fix, that acceptance got recorded as `update.last_applied_at` (check.ts's
+ * recordApplyOutcome call, now emptied of that write), which permanently suppressed the
+ * `update_available` notification (MUST-5.7's "no notification, the container is about to be
+ * replaced" branch) even though the container never actually changed, and re-fired the same
+ * no-op Watchtower request once a day forever.
+ */
+describe('Fix wave item 1: the pinned-tag scenario -- acceptance is not application', () => {
+  it('end to end: accepted -> still on the old version past the 30-minute window -> honest error -> notification fires -> the next tick does NOT re-trigger', async () => {
+    withWatchtower(true);
+    setAutoApply(true);
+    const next = `v${APP_VERSION.split('.').slice(0, 2).join('.')}.${Number(APP_VERSION.split('.')[2]) + 1}`;
+    stubRelease(next);
+
+    // Day 1: the tick fires the apply. Watchtower 2xx-accepts it (the compose pins its tag,
+    // so nothing is actually replaced), and the app -- correctly, per MUST-5.7 -- raises no
+    // notification, because from here it looks exactly like an update in flight.
+    const day1 = await runUpdateCheck({ now: new Date('2026-08-18T00:00:00.000Z') });
+    expect(day1).toMatchObject({ severity: 'patch', applied: true, notified: false });
+    expect(watchtowerCalls).toBe(1);
+    let state = readUpdateState();
+    expect(state.applyRequestedVersion).toBe(next.slice(1));
+    expect(state.lastAppliedAt).toBeNull(); // fix wave item 1(a): acceptance never wrote this.
+
+    // Day 2: still on the same version (APP_VERSION never changed -- the container never
+    // rebooted), and well past the reconciler's 30-minute window. This tick's OWN
+    // reconcilePendingApply call is what finally notices, since a boot that will never
+    // happen could not have.
+    const day2At = new Date(Date.parse('2026-08-18T00:00:00.000Z') + APPLY_CONFIRM_MAX_AGE_MS + 60_000);
+    const day2 = await runUpdateCheck({ now: day2At });
+    expect(day2.applied).toBe(false);
+    expect(day2.notified).toBe(true);
+    // The honest failure, via the SAME last_apply_error path the card already renders.
+    state = readUpdateState();
+    expect(state.applyRequestedVersion).toBeNull();
+    expect(state.lastAppliedAt).toBeNull();
+    expect(state.lastApplyError).toContain(`still on ${APP_VERSION}`);
+    expect(state.lastApplyFailedVersion).toBe(next.slice(1));
+    // Fix wave item 1(c): NOT re-triggered -- still exactly the one call from day 1.
+    expect(watchtowerCalls).toBe(1);
+    expect(outboxRows().map((r) => r.event_id)).toContain('update_available');
+
+    // Day 3: same version still offered. Auto-apply stays skipped; still no second call.
+    const day3 = await runUpdateCheck({ now: new Date('2026-08-20T00:00:00.000Z') });
+    expect(day3.applied).toBe(false);
+    expect(watchtowerCalls).toBe(1);
+  });
+
+  it('the normal path is unaffected: a version that DOES change is confirmed and stamped, not skipped', async () => {
+    withWatchtower(true);
+    setAutoApply(true);
+    // Simulate "the boot after the replacement" the way state.test.ts's reconciler tests do:
+    // offer the version the app is ALREADY running, so reconcilePendingApply's "does the
+    // requested version match APP_VERSION" branch is the one that fires.
+    setSetting('update.apply_requested_version', APP_VERSION);
+    setSetting('update.apply_requested_at', new Date('2026-08-18T00:00:00.000Z').toISOString());
+
+    stubRelease(`v${APP_VERSION}`); // severity 'none' this tick -- the reconciler runs regardless.
+    const result = await runUpdateCheck({ now: new Date('2026-08-18T00:05:00.000Z') });
+    expect(result.severity).toBe('none');
+
+    const state = readUpdateState();
+    expect(state.lastAppliedAt).toBe('2026-08-18T00:05:00.000Z');
+    expect(state.applyRequestedVersion).toBeNull();
+    expect(state.lastApplyFailedVersion).toBeNull();
+    expect(watchtowerCalls).toBe(0);
   });
 });

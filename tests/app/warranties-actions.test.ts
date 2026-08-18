@@ -711,6 +711,9 @@ describe('MUST-14.4 / MUST-14.7 / MUST-14.14: the loan readers and the rule acti
           principal: '30,000.00',
           interestRate: '5.49',
           currentBalance: '25,000.00',
+          // Fix wave item 4: a real (post-fix) edit form also posts the seed it was rendered
+          // with, here the same figure the field itself carries -- an untouched field.
+          currentBalanceSeed: '25,000.00',
         }),
       ),
     );
@@ -740,10 +743,100 @@ describe('MUST-14.4 / MUST-14.7 / MUST-14.14: the loan readers and the rule acti
           principal: '30,000.00',
           interestRate: '5.49',
           currentBalance: '24,000.00',
+          currentBalanceSeed: '25,000.00',
         }),
       ),
     );
     const after = getWarrantyItem(id)!;
+    expect(after.currentBalanceCents).toBe(2_400_000);
+    expect(after.balanceUpdatedAt).not.toBeNull();
+    expect(after.balanceUpdatedAt).not.toBe(before.balanceUpdatedAt);
+  });
+});
+
+/**
+ * Fix wave item 4 (final pre-tag fix wave, LOW): readItemInput() used to decide "was the
+ * balance touched by this submit" by comparing the posted figure against whatever is stored
+ * in the database AT SAVE TIME (getWarrantyItem, fetched fresh in updateWarrantyAction). A
+ * matcher rule can move that stored value while an edit form sits open in a browser tab; the
+ * form's own visible field is a controlled React input seeded once at mount and never
+ * refetches, so it keeps posting the STALE pre-move figure. The old comparison read that as
+ * "the balance changed" (stale != freshly-moved) and used the posted, stale value --
+ * silently reverting the automatic move on a completely unrelated (e.g. name-only) save.
+ *
+ * The fix compares the posted balance against `currentBalanceSeed` instead: the value the
+ * form was rendered with, posted back unconditionally alongside the visible field
+ * (warranty-detail-client.tsx). Only a figure that differs from ITS OWN seed can be a real
+ * edit; an untouched field can therefore never overwrite a balance that moved underneath it.
+ */
+describe('Fix wave item 4: the seed decides "untouched", not the live stored value', () => {
+  it('a matcher moving the balance while the form is open survives a name-only save; the anchor does not move', async () => {
+    const to = await redirectPath(() =>
+      createWarrantyAction({}, formData(loanForm({ principal: '30,000.00', interestRate: '5.49', currentBalance: '25,000.00' }))),
+    );
+    const id = Number(to.split('/').pop());
+    const before = getWarrantyItem(id)!;
+    expect(before.currentBalanceCents).toBe(2_500_000);
+
+    // The matcher rule moves the balance directly, exactly as a real matched payment does
+    // (MUST-11.8: never touches balance_updated_at), WHILE the edit form -- rendered with the
+    // OLD $25,000.00 figure -- is still open in a browser tab.
+    current!.sqlite.prepare(`update warranty_items set current_balance_cents = ? where id = ?`).run(2_000_000, id);
+
+    // The tab submits a name-only change: the visible field still shows the STALE $25,000.00
+    // it was rendered with (a controlled input, never refetched), and the seed field posts
+    // that exact same stale figure, because it too was seeded from what the page loaded.
+    const result = await updateWarrantyAction(
+      {},
+      formData(
+        baseFields({
+          itemId: String(id),
+          typeId: String(before.typeId),
+          name: 'Renamed Loan',
+          principal: '30,000.00',
+          interestRate: '5.49',
+          currentBalance: '25,000.00',
+          currentBalanceSeed: '25,000.00',
+        }),
+      ),
+    );
+    expect(result.message).toBeTruthy();
+
+    const after = getWarrantyItem(id)!;
+    expect(after.name).toBe('Renamed Loan');
+    // The automatic move survives: the stale $25,000.00 the tab had did NOT clobber it.
+    expect(after.currentBalanceCents).toBe(2_000_000);
+    // And the human anchor was not stamped -- nothing the person did counts as an edit.
+    expect(after.balanceUpdatedAt).toBe(before.balanceUpdatedAt);
+  });
+
+  it('a real edit still writes, even though the stored value also moved underneath it', async () => {
+    const to = await redirectPath(() =>
+      createWarrantyAction({}, formData(loanForm({ principal: '30,000.00', interestRate: '5.49', currentBalance: '25,000.00' }))),
+    );
+    const id = Number(to.split('/').pop());
+    const before = getWarrantyItem(id)!;
+
+    current!.sqlite.prepare(`update warranty_items set current_balance_cents = ? where id = ?`).run(2_000_000, id);
+
+    const result = await updateWarrantyAction(
+      {},
+      formData(
+        baseFields({
+          itemId: String(id),
+          typeId: String(before.typeId),
+          principal: '30,000.00',
+          interestRate: '5.49',
+          currentBalance: '24,000.00',
+          currentBalanceSeed: '25,000.00',
+        }),
+      ),
+    );
+    expect(result.message).toBeTruthy();
+
+    const after = getWarrantyItem(id)!;
+    // The person's own new figure wins -- not the stale seed, and not whatever the matcher
+    // left behind either.
     expect(after.currentBalanceCents).toBe(2_400_000);
     expect(after.balanceUpdatedAt).not.toBeNull();
     expect(after.balanceUpdatedAt).not.toBe(before.balanceUpdatedAt);

@@ -11,6 +11,7 @@ import {
   recordApplyOutcome,
   recordApplyRequested,
   recordCheckOutcome,
+  reconcilePendingApply,
 } from '@/lib/update/state';
 import { WatchtowerError, triggerUpdate, watchtowerConfig, type TriggerOutcome } from '@/lib/update/watchtower';
 import { APP_VERSION } from '@/lib/version';
@@ -109,6 +110,16 @@ export async function runUpdateCheck(input: { now?: Date; manual?: boolean }): P
   const currentVersion = APP_VERSION;
   const current = parseSemver(currentVersion);
 
+  // Fix wave item 1(b): resolve any apply request left over from a PREVIOUS tick before this
+  // one decides anything. A container whose compose file pins its image tag never reboots
+  // after Watchtower 2xx-accepts a request that replaces nothing, so reconcileApplyOnBoot()
+  // alone can never close the loop for that install — only a later check tick, running the
+  // identical reconciliation, ever will. This is the same function instrumentation-node.ts
+  // calls once at boot (MUST-7.6); calling it here too is what lets a version whose apply
+  // never actually landed eventually surface as `update.last_apply_error` instead of quietly
+  // being retried forever.
+  reconcilePendingApply(at);
+
   let release: Awaited<ReturnType<typeof fetchLatestRelease>>;
   try {
     release = await fetchLatestRelease();
@@ -143,6 +154,14 @@ export async function runUpdateCheck(input: { now?: Date; manual?: boolean }): P
   // telling you something changed underneath you, and this app runs a household's financial
   // records unattended on a NAS.
   if (severity === 'major') autoApply = false;
+
+  // Fix wave item 1(c): a version whose previous apply attempt was reconciled as a timeout
+  // (the reconcilePendingApply call above, or an earlier tick's) — i.e. the app is still on
+  // the old version well past the window Watchtower needed to have replaced it by — must not
+  // be auto-retried once a day forever. The card still offers a manual Update now button
+  // below (Watchtower is still configured; this only forces autoApply off), and a genuinely
+  // NEWER release, a different version string, is never affected by this check.
+  if (state.lastApplyFailedVersion === release.version) autoApply = false;
 
   // Fix round finding 4: the APPLY bucket must bound EVERY triggerUpdate call, not only the
   // one applyUpdateAction's Apply button gates: this is the path a spammed Check-now button

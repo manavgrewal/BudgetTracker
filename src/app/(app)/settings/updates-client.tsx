@@ -153,14 +153,24 @@ export function UpdatesClient(props: UpdatesViewProps) {
           // <a href>. It keeps the zero-egress claim trivially auditable and it survives a
           // screenshot.
           <Notice tone="info" title="This install updates by hand.">
+            {/* Fix wave item 3: the old copy claimed "no Watchtower companion... cannot
+                replace itself" for EVERY !canApplyInApp install, which is false for a
+                pre-1.3.1 compose file — that install still has Watchtower, and it may still
+                be auto-pulling on its old daily timer, just without an HTTP endpoint this
+                app can ask on demand. The wording below covers both realities honestly
+                instead of asserting the wrong one for whichever install actually has no
+                trigger at all (build from source, a bare `npm start`). */}
             <p>
-              There is no Watchtower companion for the app to ask, so it cannot replace itself. That is normal if you
-              built from source or if you set this up before version 1.3.1.
+              This app has no way to trigger an update for itself here. That is expected if you built from source or
+              run it with a bare <code>npm start</code>. If your compose file predates 1.3.1 instead, it does not
+              have this trigger either — but it may still have Watchtower&apos;s old daily auto-pull running in the
+              background regardless, quietly updating this container without asking. Check that container&apos;s
+              logs if you want to be sure either way.
             </p>
             <p>
-              To move to the new version, run <code>./install/update.sh</code> on Linux, macOS, a Raspberry Pi, or
-              Synology over SSH, or <code>.\install\update.ps1</code> on Windows. Both scripts tag a rollback point
-              first and put it back automatically if the new version does not come up healthy.
+              To move to the new version by hand, run <code>./install/update.sh</code> on Linux, macOS, a Raspberry
+              Pi, or Synology over SSH, or <code>.\install\update.ps1</code> on Windows. Both scripts tag a rollback
+              point first and put it back automatically if the new version does not come up healthy.
             </p>
             <p>
               If you installed with the prebuilt image, you can switch to in-app updates instead by replacing your

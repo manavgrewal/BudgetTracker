@@ -29,6 +29,24 @@ export const UNPARSEABLE_TAG_ERROR = 'That release tag is not a version this app
 const MALFORMED_ERROR = 'GitHub returned something this app could not read.';
 const CHANGELOG_UNREADABLE = 'The release notes could not be read.';
 
+/** Fix wave item 5: the longest a real ISO-8601 UTC timestamp can be ("YYYY-MM-DDTHH:mm:ss.sssZ" is 24). */
+const MAX_PUBLISHED_AT_LENGTH = 32;
+const ISO_TIMESTAMP_SHAPE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/;
+
+/**
+ * Fix wave item 5: `published_at` is a value GitHub's own payload controls; nothing else in
+ * this module reads a remote field into `update.latest_published_at` (the settings table) or
+ * a rendered message without a length bound and a shape check first, the same discipline
+ * `boundRelease` applies to the changelog. Sliced to a generous bound BEFORE the shape check
+ * (so a wildly oversized string can't even reach the regex), and anything that still doesn't
+ * look like an ISO-8601 UTC timestamp is stored as absent rather than guessed at.
+ */
+function boundPublishedAt(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const sliced = value.slice(0, MAX_PUBLISHED_AT_LENGTH);
+  return ISO_TIMESTAMP_SHAPE.test(sliced) ? sliced : null;
+}
+
 export interface RemoteRelease {
   /** The release tag exactly as GitHub reports it, e.g. "v1.4.0". */
   tag: string;
@@ -119,7 +137,7 @@ export async function fetchLatestRelease(): Promise<RemoteRelease> {
     tag,
     // Re-serialised from the parsed integers, never passed through (MUST-4.2).
     version: formatSemver(parsed),
-    publishedAt: typeof payload.published_at === 'string' ? payload.published_at : null,
+    publishedAt: boundPublishedAt(payload.published_at),
   };
 }
 

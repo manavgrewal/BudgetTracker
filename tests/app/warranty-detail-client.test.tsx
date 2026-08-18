@@ -362,6 +362,38 @@ describe('MUST-14.1 / MUST-14.3 / MUST-14.5 / MUST-14.6 / MUST-12.3: the loan su
     expect((container.querySelector('form input[name="currentBalance"]') as HTMLInputElement).value).toBe('25000.00');
   });
 
+  // Fix wave item 4: the hidden seed the action compares the posted balance against to tell
+  // "untouched" from "edited" -- see actions.ts's readItemInput docblock. It must carry the
+  // exact render-time value and, unlike the visible field, exist even when the loan fieldset
+  // is not currently shown (a type switched away from loan mid-edit still needs SOMETHING to
+  // diff the now-absent balance against).
+  it('fix wave item 4: seeds a hidden currentBalanceSeed even for a non-loan item with no balance', () => {
+    const { container } = renderDetail({
+      item: item({ typeId: 1, typeName: 'Appliance', kind: 'warranty', currentBalanceCents: null }),
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    // Unconditional -- unlike the visible field (absent for a non-loan kind), so there is
+    // always something to diff the posted balance against, even if a type switch to loan
+    // happens mid-edit and the person then types a real balance for the first time.
+    expect(container.querySelector('form input[name="currentBalanceSeed"]')).toBeTruthy();
+    expect((container.querySelector('form input[name="currentBalanceSeed"]') as HTMLInputElement).value).toBe('');
+  });
+
+  it('fix wave item 4: the seed matches the visible balance field at render, for a loan item', () => {
+    const { container } = renderDetail({
+      item: item({
+        typeId: 3,
+        typeName: 'Car loan',
+        kind: 'loan',
+        currentBalanceCents: 2_500_000,
+        balanceUpdatedAt: '2026-08-01T00:00:00.000Z',
+      }),
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));
+    expect((container.querySelector('form input[name="currentBalanceSeed"]') as HTMLInputElement).value).toBe('25000.00');
+    expect((container.querySelector('form input[name="currentBalance"]') as HTMLInputElement).value).toBe('25000.00');
+  });
+
   it('the billing labels read Payment / Payment amount for a loan and Billing / Amount otherwise', () => {
     const { container } = renderDetail({ item: item({ typeId: 3, typeName: 'Car loan', kind: 'loan' }) });
     fireEvent.click(screen.getByRole('button', { name: /^edit$/i }));

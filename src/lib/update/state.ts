@@ -24,6 +24,14 @@ const KEY_APPLY_REQUESTED_VERSION = 'update.apply_requested_version';
 const KEY_APPLY_REQUESTED_AT = 'update.apply_requested_at';
 const KEY_LAST_APPLIED_AT = 'update.last_applied_at';
 const KEY_LAST_APPLY_ERROR = 'update.last_apply_error';
+/**
+ * Fix wave item 1(c): the version of the LAST apply request that the reconciler timed out
+ * (still on the old version past the 30-minute window). It exists so a version that can
+ * never actually replace this container — a pinned image tag is the concrete case — does not
+ * get auto-retried once a day forever. Set only by reconcilePendingApply's timeout branch;
+ * cleared by a fresh apply request (recordApplyRequested) or a confirmed apply.
+ */
+const KEY_LAST_APPLY_FAILED_VERSION = 'update.last_apply_failed_version';
 
 /** MUST-3.4: every key the disable action wipes. The flag itself is written, not deleted. */
 const WIPED_ON_DISABLE = [
@@ -39,6 +47,7 @@ const WIPED_ON_DISABLE = [
   KEY_APPLY_REQUESTED_AT,
   KEY_LAST_APPLIED_AT,
   KEY_LAST_APPLY_ERROR,
+  KEY_LAST_APPLY_FAILED_VERSION,
 ] as const;
 
 /** MUST-7.6: past this, an unconfirmed apply is declared not to have happened. */
@@ -59,6 +68,8 @@ export interface UpdateState {
   applyRequestedAt: string | null;
   lastAppliedAt: string | null;
   lastApplyError: string | null;
+  /** Fix wave item 1(c): non-null only while auto-apply is skipping this exact version. */
+  lastApplyFailedVersion: string | null;
 }
 
 function iso(at: Date): string {
@@ -102,6 +113,7 @@ export function readUpdateState(): UpdateState {
     applyRequestedAt: getSetting(KEY_APPLY_REQUESTED_AT),
     lastAppliedAt: getSetting(KEY_LAST_APPLIED_AT),
     lastApplyError: getSetting(KEY_LAST_APPLY_ERROR),
+    lastApplyFailedVersion: getSetting(KEY_LAST_APPLY_FAILED_VERSION),
   };
 }
 
@@ -157,17 +169,29 @@ export function recordCheckOutcome(input: {
 /** MUST-7.4 step 1: written and COMMITTED before the fetch, because it may kill this process. */
 export function recordApplyRequested(input: { version: string; at: Date }): void {
   deleteSetting(KEY_LAST_APPLY_ERROR);
+  // Fix wave item 1(c): a fresh attempt — automatic against a NEWER version, or a manual
+  // retry of the same one — deserves a clean slate rather than an auto-apply guard that
+  // remembers last time's failure forever.
+  deleteSetting(KEY_LAST_APPLY_FAILED_VERSION);
   setSetting(KEY_APPLY_REQUESTED_VERSION, input.version);
   setSetting(KEY_APPLY_REQUESTED_AT, iso(input.at));
 }
 
+/**
+ * Fix wave item 1(a): Watchtower's 2xx means it ACCEPTED the request, not that it replaced
+ * anything — a pinned image tag can 2xx and never restart this container. Acceptance is
+ * therefore recorded here as "no error", nothing more; `update.last_applied_at` is written
+ * ONLY by reconcilePendingApply(), below, once a real boot (or a later check tick, for an
+ * install that never reboots) has had the chance to prove the running version actually
+ * changed. `recordApplyRequested` already committed the pending apply-request state that
+ * reconciliation resolves, before the fetch that may kill this process.
+ */
 export function recordApplyOutcome(input: { at: Date; error?: string | null }): void {
   if (input.error !== undefined && input.error !== null) {
     setSetting(KEY_LAST_APPLY_ERROR, input.error);
     return;
   }
   deleteSetting(KEY_LAST_APPLY_ERROR);
-  setSetting(KEY_LAST_APPLIED_AT, iso(input.at));
 }
 
 /**
@@ -188,41 +212,75 @@ export function dismissVersion(version: string): void {
  * MUST-7.6: what turns "we fired a request into the dark" into a state machine with a
  * definite end, and the reason recordApplyRequested writes BEFORE the fetch.
  *
+ * Fix wave item 1(a)/1(b): the ONLY place `update.last_applied_at` is written. Originally
+ * this ran on boot alone (`reconcileApplyOnBoot`), which is sufficient for an install that
+ * genuinely restarts into the new version, but a compose file that pins its image tag lets
+ * Watchtower 2xx-accept a request that replaces nothing — the container never reboots, so a
+ * boot-only reconciler could never close the loop for that install. `runUpdateCheck` (in
+ * check.ts) therefore calls this SAME function at the top of every tick too, not just
+ * instrumentation-node.ts at boot: a later check tick is what finally notices the 30-minute
+ * window has passed with the version unchanged, at which point it is honest about the
+ * failure (writes `update.last_apply_error`, the card's existing error path) instead of
+ * silently pretending the update landed.
+ */
+function reconcilePendingApplyUnguarded(now: Date): void {
+  const requested = getSetting(KEY_APPLY_REQUESTED_VERSION);
+  if (requested === null) return;
+
+  if (requested === APP_VERSION) {
+    // The apply worked: the container we asked to be replaced is the one we are not.
+    setSetting(KEY_LAST_APPLIED_AT, iso(now));
+    deleteSetting(KEY_APPLY_REQUESTED_VERSION);
+    deleteSetting(KEY_APPLY_REQUESTED_AT);
+    deleteSetting(KEY_LAST_APPLY_ERROR);
+    deleteSetting(KEY_LATEST_VERSION);
+    deleteSetting(KEY_LATEST_PUBLISHED_AT);
+    deleteSetting(KEY_LAST_APPLY_FAILED_VERSION);
+    console.log(`[update] confirmed apply to ${APP_VERSION}`);
+    return;
+  }
+
+  const requestedAt = getSetting(KEY_APPLY_REQUESTED_AT);
+  const requestedMs = requestedAt === null ? Number.NaN : Date.parse(requestedAt);
+  if (Number.isFinite(requestedMs) && now.getTime() - requestedMs > APPLY_CONFIRM_MAX_AGE_MS) {
+    // The apply did not happen: still on the old version, well past the window Watchtower
+    // needed to have already replaced this container by. delete apply_requested_* and admit
+    // it via the same last_apply_error path the card already renders.
+    deleteSetting(KEY_APPLY_REQUESTED_VERSION);
+    deleteSetting(KEY_APPLY_REQUESTED_AT);
+    setSetting(
+      KEY_LAST_APPLY_ERROR,
+      `The update was requested but the app is still on ${APP_VERSION}. Check the Watchtower container's logs.`,
+    );
+    // Fix wave item 1(c): remember which version this was so the NEXT check's auto-apply
+    // branch skips re-triggering it. Without this a version that can never actually replace
+    // the container (a pinned image tag, concretely) would be re-fired once a day forever,
+    // each time 2xx-"accepted" and each time going nowhere.
+    setSetting(KEY_LAST_APPLY_FAILED_VERSION, requested);
+    return;
+  }
+  // Otherwise leave the pending state alone: a check (or boot) that happens to precede the
+  // replacement must not erase the record of what was asked for.
+}
+
+/**
+ * Exported so check.ts's runUpdateCheck can call the exact same reconciliation every tick,
+ * not only reconcileApplyOnBoot below. Never throws (MUST-7.7's guarantee, generalised
+ * beyond just the boot path now that a check tick relies on it too).
+ */
+export function reconcilePendingApply(now: Date = new Date()): void {
+  try {
+    reconcilePendingApplyUnguarded(now);
+  } catch (error) {
+    console.error('[update] apply reconciliation failed', error);
+  }
+}
+
+/**
  * MUST-7.7: this must NEVER throw into the boot path, exactly as notify's
  * raiseRestoreOutcome must not. Called from src/instrumentation-node.ts after getDb() and
  * before startScheduler().
  */
 export function reconcileApplyOnBoot(now: Date = new Date()): void {
-  try {
-    const requested = getSetting(KEY_APPLY_REQUESTED_VERSION);
-    if (requested === null) return;
-
-    if (requested === APP_VERSION) {
-      // The apply worked: the container we asked to be replaced is the one we are not.
-      setSetting(KEY_LAST_APPLIED_AT, iso(now));
-      deleteSetting(KEY_APPLY_REQUESTED_VERSION);
-      deleteSetting(KEY_APPLY_REQUESTED_AT);
-      deleteSetting(KEY_LAST_APPLY_ERROR);
-      deleteSetting(KEY_LATEST_VERSION);
-      deleteSetting(KEY_LATEST_PUBLISHED_AT);
-      console.log(`[update] confirmed apply to ${APP_VERSION}`);
-      return;
-    }
-
-    const requestedAt = getSetting(KEY_APPLY_REQUESTED_AT);
-    const requestedMs = requestedAt === null ? Number.NaN : Date.parse(requestedAt);
-    if (Number.isFinite(requestedMs) && now.getTime() - requestedMs > APPLY_CONFIRM_MAX_AGE_MS) {
-      deleteSetting(KEY_APPLY_REQUESTED_VERSION);
-      deleteSetting(KEY_APPLY_REQUESTED_AT);
-      setSetting(
-        KEY_LAST_APPLY_ERROR,
-        `The update was requested but the app is still on ${APP_VERSION}. Check the Watchtower container's logs.`,
-      );
-      return;
-    }
-    // Otherwise leave the pending state alone: a boot that happens to precede the
-    // replacement must not erase the record of what was asked for.
-  } catch (error) {
-    console.error('[update] boot reconciliation failed', error);
-  }
+  reconcilePendingApply(now);
 }
