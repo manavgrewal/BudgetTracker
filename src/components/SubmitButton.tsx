@@ -15,16 +15,21 @@ export function SubmitButton({
   disabled = false,
   variant = 'primary',
   size = 'md',
+  onClick,
 }: {
   children: React.ReactNode;
   className?: string;
   disabled?: boolean;
   variant?: ButtonVariant;
   size?: ButtonSize;
+  /** An ordinary click handler, fired before the form's own action starts — for the rare
+   *  case (the Updates card's review panel) where something needs to happen at urgent
+   *  priority rather than being deferred until the action settles. */
+  onClick?: () => void;
 }) {
   const { pending } = useFormStatus();
   return (
-    <button type="submit" disabled={pending || disabled} className={buttonClass(variant, size, className)}>
+    <button type="submit" disabled={pending || disabled} onClick={onClick} className={buttonClass(variant, size, className)}>
       {pending ? 'Working…' : children}
     </button>
   );

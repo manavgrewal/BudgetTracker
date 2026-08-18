@@ -13,8 +13,14 @@ import { UpdatesClient } from './updates-client';
  *
  * MUST-7.3: the client half receives `canApplyInApp: boolean` and nothing more. No page
  * prop carries WATCHTOWER_TOKEN, or WATCHTOWER_URL, or any fragment of either.
+ *
+ * Review fix (bug): NOT async, deliberately — readUpdateState()/watchtowerConfig() are both
+ * synchronous, and an async component can only be rendered by Next's RSC pipeline. Marking
+ * it async made it impossible to unit-test SettingsPage() with plain react-dom (as
+ * settings-page-notifications.test.tsx does), the same reason AboutPanel is a plain function
+ * too, and `render()`ing it as a member never touches this path so the bug went unnoticed.
  */
-export async function UpdatesCard() {
+export function UpdatesCard() {
   const state = readUpdateState();
 
   const current = parseSemver(APP_VERSION);

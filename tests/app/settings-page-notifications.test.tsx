@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { render, cleanup, screen } from '@testing-library/react';
+import { createTestDb } from '../helpers/db';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const settingsPage = fs.readFileSync(path.join(root, 'src/app/(app)/settings/page.tsx'), 'utf8');
@@ -57,5 +58,20 @@ describe('MUST-9.1: the Updates card', () => {
     const { default: SettingsPage } = await import('@/app/(app)/settings/page');
     render(await SettingsPage());
     expect(screen.queryByText('Updates')).toBeNull();
+  });
+
+  // Review fix (LOW): the positive mirror of the test above — without it, deleting
+  // <UpdatesCard /> from page.tsx would leave every test in this file green.
+  it('an admin sees the Updates card', async () => {
+    const t = createTestDb();
+    try {
+      currentUser.value.role = 'admin';
+      const { default: SettingsPage } = await import('@/app/(app)/settings/page');
+      render(await SettingsPage());
+      expect(screen.getByText('Updates')).toBeTruthy();
+    } finally {
+      currentUser.value.role = 'member';
+      t.cleanup();
+    }
   });
 });

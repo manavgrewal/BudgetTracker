@@ -2,10 +2,10 @@
 
 import { useActionState, useState } from 'react';
 import { FormError } from '@/components/FormError';
+import { renderEmphasis } from '@/components/render-emphasis';
 import { SubmitButton } from '@/components/SubmitButton';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { Notice } from '@/components/ui/Notice';
-import type { ChangelogRelease } from '@/lib/changelog';
 import type { UpdateSeverity } from '@/lib/update/semver';
 import {
   applyUpdateAction,
@@ -49,24 +49,6 @@ function stamp(iso: string | null): string {
   return iso === null ? 'Never' : iso.slice(0, 16).replace('T', ' ');
 }
 
-/**
- * The SAME bold-run renderer AboutPanel uses on the local changelog — one renderer, two
- * sources, so remote and local notes cannot drift in appearance. It handles exactly this one
- * inline form and nothing else, and dangerouslySetInnerHTML appears nowhere (MUST-4.8).
- */
-function renderEmphasis(text: string): React.ReactNode {
-  if (!text.includes('**')) return text;
-  return text.split(/\*\*(.+?)\*\*/g).map((part, index) =>
-    index % 2 === 1 ? (
-      <strong key={index} className="font-semibold text-ink">
-        {part}
-      </strong>
-    ) : (
-      part
-    ),
-  );
-}
-
 export function UpdatesClient(props: UpdatesViewProps) {
   const [enableState, enable] = useActionState(async () => enableUpdateChecksAction(), initial);
   const [disableState, disable] = useActionState(async () => disableUpdateChecksAction(), initial);
@@ -74,7 +56,10 @@ export function UpdatesClient(props: UpdatesViewProps) {
   const [checkState, checkNow] = useActionState(async () => checkForUpdateNowAction(), initial);
   const [applyState, apply] = useActionState(async (_prev: UpdateActionState, formData: FormData) => applyUpdateAction(formData), initial);
   const [dismissState, dismiss] = useActionState(async (_prev: UpdateActionState, formData: FormData) => dismissUpdateAction(formData), initial);
-  const [review, runReview] = useActionState(async (_prev: ReviewUpdateState, formData: FormData) => reviewUpdateAction(formData), {} as ReviewUpdateState);
+  const [review, runReview, reviewPending] = useActionState(
+    async (_prev: ReviewUpdateState, formData: FormData) => reviewUpdateAction(formData),
+    {} as ReviewUpdateState,
+  );
   const [panelOpen, setPanelOpen] = useState(false);
 
   const messages = [enableState, disableState, autoState, checkState, applyState, dismissState];
@@ -186,14 +171,17 @@ export function UpdatesClient(props: UpdatesViewProps) {
         ) : severity === 'major' ? (
           <div className="flex flex-col gap-3">
             <div className="flex flex-wrap items-center gap-3">
-              <form
-                action={(formData: FormData) => {
-                  setPanelOpen(true);
-                  return runReview(formData);
-                }}
-              >
+              <form action={runReview}>
                 <input type="hidden" name="version" value={offered} />
-                <SubmitButton className="btn btn--primary">Review and update</SubmitButton>
+                {/* Review fix (MED): panelOpen is set from onClick — an ordinary, urgent
+                    event handler — rather than from inside the form's action. React does
+                    not commit a state update made INSIDE a pending action/transition until
+                    that action settles, so setting it there left the panel (and therefore
+                    reviewPending's "Fetching release notes…" line) invisible for the whole
+                    length of the fetch; onClick fires before the transition starts. */}
+                <SubmitButton className="btn btn--primary" onClick={() => setPanelOpen(true)}>
+                  Review and update
+                </SubmitButton>
               </form>
               <form action={dismiss}>
                 <input type="hidden" name="version" value={offered} />
@@ -203,7 +191,13 @@ export function UpdatesClient(props: UpdatesViewProps) {
             {!panelOpen ? null : (
               <div className="flex flex-col gap-3 rounded-md border border-line px-4 py-4">
                 <h3 className="text-sm font-semibold text-ink">What changed in {offered}</h3>
-                {review.release === undefined ? (
+                {reviewPending ? (
+                  // Review fix (MED): this used to be indistinguishable from a genuinely
+                  // failed fetch, because panelOpen flips true and review.release is still
+                  // undefined for the entire duration of the request — every review would
+                  // flash the "could not be fetched" sentence before the real notes arrived.
+                  <p className="text-sm text-muted">Fetching release notes…</p>
+                ) : review.release === undefined ? (
                   // MUST-9.6: a failed changelog read must not become a wall that stops an
                   // admin updating — the confirm button below is still offered.
                   <p className="text-sm text-muted">

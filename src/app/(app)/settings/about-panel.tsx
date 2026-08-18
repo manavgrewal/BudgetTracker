@@ -1,6 +1,7 @@
 import { loadChangelog } from '@/lib/changelog';
 import { APP_VERSION } from '@/lib/version';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
+import { renderEmphasis } from '@/components/render-emphasis';
 
 /**
  * Server component: the changelog is read from disk on render, so a corrected typo in
@@ -11,28 +12,12 @@ import { Card, CardBody, CardHeader } from '@/components/ui/Card';
  * The releases are set as a timeline: a hairline rail with a dot per release. Release notes
  * ARE a sequence — that is the one thing the reader needs from them — so the structure earns
  * its keep rather than decorating the list.
+ *
+ * CHANGELOG.md leans on `**bold**` to name the feature a bullet is about — rendered through
+ * the shared renderEmphasis() (@/components/render-emphasis), the SAME helper the Updates
+ * card's major-review panel uses on the remote changelog, so the two never drift in
+ * appearance (MUST-9.5).
  */
-/**
- * CHANGELOG.md leans on `**bold**` to name the feature a bullet is about, and those
- * asterisks were being printed literally. Resolving them here rather than in
- * loadChangelog() keeps the parser (and its tests) about structure, and keeps this about
- * presentation — which is also why it handles exactly this one inline form and nothing
- * else: it is a bold-run renderer, not a markdown engine.
- */
-function renderEmphasis(text: string): React.ReactNode {
-  if (!text.includes('**')) return text;
-  return text.split(/\*\*(.+?)\*\*/g).map((part, index) =>
-    // Odd indices are the captured inner runs; even indices are the plain text between them.
-    index % 2 === 1 ? (
-      <strong key={index} className="font-semibold text-ink">
-        {part}
-      </strong>
-    ) : (
-      part
-    ),
-  );
-}
-
 export function AboutPanel() {
   const releases = loadChangelog();
 
