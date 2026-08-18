@@ -147,7 +147,7 @@ describe('MUST-3.11: the exact dedup key strings', () => {
 });
 
 describe('MUST-6.1: the update_available registry entry', () => {
-  it('brings the registry to nine and is admin-audience, default-on, tick-triggered', () => {
+  it('brings the registry to fifteen and is admin-audience, default-on, tick-triggered', () => {
     expect(NOTIFICATION_EVENTS).toHaveLength(15);
     const entry = eventDef('update_available');
     expect(entry).toEqual({

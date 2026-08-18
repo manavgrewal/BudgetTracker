@@ -430,7 +430,11 @@ export function renderEvent(input: RenderInput): { subject: string; body: string
       return { subject: `${label}: what we expected against what happened`, body: blocks.join('\n\n') };
     }
     case 'suggested_budget_refresh': {
-      const blocks: string[] = [];
+      const label = monthLabel(input.month);
+      // Task 9 review carry: input.month is read here (the month the suggestions are FOR,
+      // T), rather than left declared and unused. The subject stays month-free (pinned by an
+      // existing exact-match test), so the month appears as the body's opening line instead.
+      const blocks: string[] = [`Suggested budgets for ${label}.`];
       if (input.household.length > 0) blocks.push(['Household', ...refreshLines(input.household)].join('\n'));
       if (input.personal.length > 0) blocks.push(['Yours', ...refreshLines(input.personal)].join('\n'));
       // MUST-9.33: the message never applies anything.
