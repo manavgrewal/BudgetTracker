@@ -6,6 +6,7 @@ import { getUserSettings, notifiableUsers } from '@/lib/notify/config';
 import { evaluateBudgets } from '@/lib/notify/evaluate/budget';
 import { evaluateComingDue } from '@/lib/notify/evaluate/coming-due';
 import { evaluateWeeklyDigest } from '@/lib/notify/evaluate/digest';
+import { evaluateBudgetPace } from '@/lib/notify/evaluate/pace';
 import { evaluateStaleImport } from '@/lib/notify/evaluate/stale';
 import { dailySlot, weeklySlot } from '@/lib/notify/evaluate/slots';
 import { weeklyDigestKey } from '@/lib/notify/events';
@@ -76,6 +77,7 @@ export function runScheduledEvaluation(now: Date = new Date()): void {
       if (daily.fires) {
         evaluateComingDue({ userId: user.id, now, tz });
         evaluateStaleImport({ userId: user.id, now, tz });
+        evaluateBudgetPace({ userId: user.id, now, tz });
       } else {
         logSlotSkipOnce('daily', user.id, daily.slotDate, daily.hoursSince);
       }
