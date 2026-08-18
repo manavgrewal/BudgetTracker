@@ -144,9 +144,11 @@ export function runMaintenanceSweep(at: Date = new Date()): SweepResult {
     // MUST-20.33: budget.pre-restore-*.db (+ -wal/-shm), receipts.pre-restore-*/ and
     // restore-failed-*/ older than 30 days, except the most recent of each kind.
     preRestoreCopiesPurged: purgePreRestoreCopies(at),
-    // MUST-3.14: sent/failed notification_outbox rows older than OUTBOX_RETENTION_DAYS = 90.
-    // Ninety days comfortably outlives the longest-lived dedup key that could still matter
-    // (a monthly budget key, ~31 days) and keeps the table trivial.
+    // MUST-3.14: sent/failed notification_outbox rows older than OUTBOX_RETENTION_DAYS = 400.
+    // Retention must exceed the longest coming_due window (365 days, the top of the
+    // notification_user_settings range) with margin, or the sweep could delete a 'sent'
+    // coming_due row while the item is still inside the user's lookahead window,
+    // resurrecting its dedup key and re-alerting on the same item.
     outboxRowsPurged: purgeOldOutboxRows(at),
   };
 }

@@ -21,7 +21,7 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
-## [1.3.0] - 2026-08-18
+## [1.3.0] - 2026-08-17
 
 ### Added
 

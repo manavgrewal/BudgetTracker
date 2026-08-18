@@ -1,6 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createTestDb, insertTestUser, type TestDb } from '../helpers/db';
-import { getSmtp, getTarget, getUserSettings, saveEmailTarget, saveSmtp, saveTelegramTarget, saveUserSettings, setPref } from '@/lib/notify/config';
+import {
+  effectivePref,
+  getSmtp,
+  getTarget,
+  getUserSettings,
+  saveEmailTarget,
+  saveSmtp,
+  saveTelegramTarget,
+  saveUserSettings,
+  setPref,
+} from '@/lib/notify/config';
 import { resetNotifyRateLimitsForTests } from '@/lib/notify/ratelimit';
 import { resetNotifySenderForTests, setNotifySenderForTests, NotifyError } from '@/lib/notify/send';
 import { resetOutboxPumpForTests } from '@/lib/notify/outbox';
@@ -307,8 +317,44 @@ describe('MUST-12.7: Send test bypasses the outbox', () => {
   });
 });
 
+describe('Review fix (IMPORTANT): testSmtpAction can verify a fresh relay before any personal target exists', () => {
+  it('sends to the relay’s own from_email when the calling admin has no email target yet', async () => {
+    relay();
+    const sent: string[] = [];
+    setNotifySenderForTests(async (request) => {
+      sent.push(request.destination);
+    });
+    const result = await actions.testSmtpAction();
+    expect(result.error).toBeUndefined();
+    expect(sent).toEqual(['me@example.com']);
+    expect(result.message).toBe('Test email sent to me@example.com. Check the inbox.');
+  });
+
+  it('sends to the admin’s own target when one exists (existing behaviour)', async () => {
+    relay();
+    saveEmailTarget({ userId: currentUser.value.id, destination: 'sam@example.com', enabled: true });
+    const sent: string[] = [];
+    setNotifySenderForTests(async (request) => {
+      sent.push(request.destination);
+    });
+    const result = await actions.testSmtpAction();
+    expect(result.error).toBeUndefined();
+    expect(sent).toEqual(['sam@example.com']);
+    expect(result.message).toBe('Test email sent to sam@example.com. Check the inbox.');
+  });
+
+  it('still refuses when no relay has been saved at all — the relay-exists guard runs before quota is spent', async () => {
+    const result = await actions.testSmtpAction();
+    expect(result.error).toBe('An admin needs to set up outbound email before this can send.');
+  });
+});
+
 describe('MUST-3.7: savePreferencesAction writes only changed toggles', () => {
-  it('stores a row only where the value differs from the registry default', async () => {
+  it('stores a row only where the value differs from the registry default, for a configured channel', async () => {
+    // Review fix (IMPORTANT, the seam bug): a channel's checkboxes are rendered disabled
+    // until it has a configured, enabled target (they never submit), so this pinning test
+    // needs an actual configured channel to exercise the write path at all.
+    saveEmailTarget({ userId: currentUser.value.id, destination: 'sam@example.com', enabled: true });
     const result = await actions.savePreferencesAction(
       {},
       form({
@@ -424,6 +470,76 @@ describe('MUST-3.7: savePreferencesAction writes only changed toggles', () => {
     );
     const rows = t.sqlite.prepare(`select event_id from notification_prefs where event_id = 'backup_failed'`).all();
     expect(rows).toHaveLength(0);
+  });
+});
+
+describe('Review fix (IMPORTANT): an unconfigured or disabled channel is never wiped by a prefs save', () => {
+  it('(a) a knobs-only save with zero configured channels leaves notification_prefs empty and default-on events still effective', async () => {
+    const result = await actions.savePreferencesAction(
+      {},
+      form({
+        comingDueDays: '14',
+        budgetThresholdPct: '80',
+        staleImportWeeks: '3',
+        dailyHour: '8',
+        digestWeekday: '1',
+        digestHour: '8',
+      }),
+    );
+    expect(result.error).toBeUndefined();
+    const { n } = t.sqlite.prepare('select count(*) as n from notification_prefs').get() as { n: number };
+    expect(n).toBe(0);
+    // MUST-3.7's read side: with no row at all, coming_due's registry default (ON) is what
+    // an evaluator would still see.
+    expect(effectivePref(currentUser.value.id, 'coming_due', 'email')).toBe(true);
+  });
+
+  it('(b) disabling a Telegram target, saving prefs, then re-enabling it leaves that channel’s prefs unchanged', async () => {
+    saveTelegramTarget({ userId: currentUser.value.id, destination: '5551234', botToken: TOKEN, enabled: true });
+    // A non-default choice on Telegram, made while the channel was configured and enabled.
+    setPref(currentUser.value.id, 'coming_due', 'telegram', false);
+    const telegramRows = () =>
+      t.sqlite
+        .prepare('select event_id, channel, enabled from notification_prefs where channel = ? order by event_id')
+        .all('telegram');
+    const before = telegramRows();
+
+    saveTelegramTarget({ userId: currentUser.value.id, destination: '5551234', botToken: null, enabled: false });
+    await actions.savePreferencesAction(
+      {},
+      form({
+        comingDueDays: '14',
+        budgetThresholdPct: '80',
+        staleImportWeeks: '3',
+        dailyHour: '8',
+        digestWeekday: '1',
+        digestHour: '8',
+      }),
+    );
+    saveTelegramTarget({ userId: currentUser.value.id, destination: '5551234', botToken: null, enabled: true });
+
+    expect(telegramRows()).toEqual(before);
+  });
+
+  it('(c) a configured, enabled channel still writes enabled=0 when its checkbox is left unchecked', async () => {
+    saveEmailTarget({ userId: currentUser.value.id, destination: 'sam@example.com', enabled: true });
+    await actions.savePreferencesAction(
+      {},
+      form({
+        // coming_due defaults ON; leaving it unchecked for a CONFIGURED channel must still
+        // write the row, exactly as before this fix (absence = unchecked).
+        comingDueDays: '14',
+        budgetThresholdPct: '80',
+        staleImportWeeks: '3',
+        dailyHour: '8',
+        digestWeekday: '1',
+        digestHour: '8',
+      }),
+    );
+    const row = t.sqlite
+      .prepare('select enabled from notification_prefs where user_id = ? and event_id = ? and channel = ?')
+      .get(currentUser.value.id, 'coming_due', 'email') as { enabled: number } | undefined;
+    expect(row?.enabled).toBe(0);
   });
 });
 

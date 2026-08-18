@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { sql } from 'drizzle-orm';
 import { createTestDb, insertTestUser, type TestDb } from '../../../helpers/db';
-import { saveEmailTarget, saveSmtp, saveUserSettings, DEFAULT_USER_SETTINGS } from '@/lib/notify/config';
+import { saveEmailTarget, saveSmtp, saveTelegramTarget, saveUserSettings, DEFAULT_USER_SETTINGS } from '@/lib/notify/config';
 import { resetNotifySenderForTests, setNotifySenderForTests } from '@/lib/notify/send';
 import { resetOutboxPumpForTests } from '@/lib/notify/outbox';
 import { MAX_NEW_ROWS_PER_USER_PER_EVALUATION, evaluateComingDue } from '@/lib/notify/evaluate/coming-due';
@@ -36,6 +36,12 @@ function emailUser(): number {
     enabled: true,
   });
   saveEmailTarget({ userId, destination: 'sam@example.com', enabled: true });
+  return userId;
+}
+
+function bothChannelsUser(): number {
+  const userId = emailUser();
+  saveTelegramTarget({ userId, destination: '5551234', botToken: '123456789:AAHk3f-EXAMPLE-tokenxxxxxxxxxxxxxxxxxx', enabled: true });
   return userId;
 }
 
@@ -150,6 +156,19 @@ describe('MUST-6.13: the flood guard', () => {
     expect(evaluateComingDue({ userId, now: NOW, tz: TZ })).toBe(20);
     expect(evaluateComingDue({ userId, now: new Date('2026-08-18T12:00:00Z'), tz: TZ })).toBe(5);
     expect(queued()).toHaveLength(25);
+  });
+
+  it('counts ROWS, not items: a user with both channels enabled hits the cap at 10 items (20 rows)', () => {
+    const userId = bothChannelsUser();
+    for (let i = 0; i < 25; i += 1) item({ ownerUserId: userId, name: `Item ${i}`, expiryDate: '2026-08-20' });
+    expect(evaluateComingDue({ userId, now: NOW, tz: TZ })).toBe(20);
+    // 10 items × 2 channels = 20 rows; the 11th item's pair is left for the next slot.
+    expect(queued()).toHaveLength(20);
+    expect(evaluateComingDue({ userId, now: new Date('2026-08-18T12:00:00Z'), tz: TZ })).toBe(20);
+    // The remaining 15 items × 2 channels = 30 rows; capped again at 20.
+    expect(queued()).toHaveLength(40);
+    expect(evaluateComingDue({ userId, now: new Date('2026-08-19T12:00:00Z'), tz: TZ })).toBe(10);
+    expect(queued()).toHaveLength(50);
   });
 });
 

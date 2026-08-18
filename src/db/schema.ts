@@ -566,7 +566,7 @@ export const notificationUserSettings = sqliteTable('notification_user_settings'
  *
  * MUST-7.2: `subject` and `body` are rendered at ENQUEUE time, not send time.
  * MUST-3.10: sent/failed rows are retained as the "Recent deliveries" list and the dedup
- * memory; only runMaintenanceSweep()'s 90-day purge removes them.
+ * memory; only runMaintenanceSweep()'s 400-day purge removes them.
  */
 export const notificationOutbox = sqliteTable(
   'notification_outbox',

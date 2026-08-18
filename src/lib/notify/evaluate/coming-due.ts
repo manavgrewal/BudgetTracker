@@ -56,9 +56,12 @@ export function evaluateComingDue(input: { userId: number; now: Date; tz: string
     .orderBy(asc(warrantyItems.expiryDate), asc(warrantyItems.id))
     .all();
 
-  let enqueued = 0;
+  // MUST-6.13 counts ROWS, not items: enqueue() inserts one row per enabled channel, so a
+  // user with both Telegram and email on gets two rows per item. Counting items here would
+  // let the cap through at up to double the outbox rows MUST-6.13 actually promises.
+  let enqueuedRows = 0;
   for (const row of rows) {
-    if (enqueued >= MAX_NEW_ROWS_PER_USER_PER_EVALUATION) break;
+    if (enqueuedRows >= MAX_NEW_ROWS_PER_USER_PER_EVALUATION) break;
     const expiryDate = row.expiryDate;
     if (expiryDate === null) continue;
     // MUST-6.14: the verb comes from expiryPhraseForKind() through render.ts. An item with
@@ -81,7 +84,7 @@ export function evaluateComingDue(input: { userId: number; now: Date; tz: string
       body,
       at: input.now,
     });
-    if (result.inserted.length > 0) enqueued += 1;
+    enqueuedRows += result.inserted.length;
   }
-  return enqueued;
+  return enqueuedRows;
 }

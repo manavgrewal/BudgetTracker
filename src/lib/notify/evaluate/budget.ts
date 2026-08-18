@@ -175,7 +175,6 @@ export function evaluateBudgets(input: { now: Date; tz: string }): number {
 
   const key = fingerprint(month, [...everyone.values()]);
   if (key === lastBudgetKey) return 0;
-  lastBudgetKey = key;
 
   let fired = 0;
   const householdRows = flatten(budgetProgress(month, 'household', null));
@@ -189,5 +188,12 @@ export function evaluateBudgets(input: { now: Date; tz: string }): number {
     }
   }
 
+  // Review fix (MINOR): recorded only once every participant has been processed without
+  // throwing. Setting this before the loop meant one participant's row throwing (a
+  // transient error, say) burned the fingerprint for the WHOLE household until the
+  // underlying data changed again, silently suppressing everyone else's notifications
+  // until then. A retried evaluation with the same fingerprint is dedup-safe: every
+  // enqueue() is itself idempotent (MUST-3.9), so re-running it costs nothing.
+  lastBudgetKey = key;
   return fired;
 }

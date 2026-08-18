@@ -217,10 +217,26 @@ export async function testTargetAction(formData: FormData): Promise<Notification
  * writes no outbox row, but it DOES update last_error / last_success_at / verified_at.
  */
 async function runTest(userId: number, channel: Channel, opts: { relayOnly: boolean }): Promise<NotificationsState> {
-  const target = getTarget(userId, channel);
-  if (!target) return { error: 'Set this channel up first.' };
-  if (channel === 'email' && getSmtp() === null) {
-    return { error: 'An admin needs to set up outbound email before this can send.' };
+  let destination: string;
+
+  if (opts.relayOnly) {
+    // Review fix (IMPORTANT): testSmtpAction proves the RELAY works, and the on-screen
+    // guide's own steps end at "press Send test email" before the admin has necessarily
+    // saved a personal email target. A brand-new admin following those steps hit "Set
+    // this channel up first." with no way to clear it. The relay's own from_email always
+    // exists once the relay itself has been saved, so it stands in as the destination
+    // whenever the calling admin has no target of their own; a configured target is still
+    // preferred when one exists.
+    const relay = getSmtp();
+    if (!relay) return { error: 'An admin needs to set up outbound email before this can send.' };
+    destination = getTarget(userId, 'email')?.destination ?? relay.fromEmail;
+  } else {
+    const target = getTarget(userId, channel);
+    if (!target) return { error: 'Set this channel up first.' };
+    if (channel === 'email' && getSmtp() === null) {
+      return { error: 'An admin needs to set up outbound email before this can send.' };
+    }
+    destination = target.destination;
   }
 
   // Quota is spent only once a send is actually about to be attempted: checked AFTER the
@@ -238,14 +254,14 @@ async function runTest(userId: number, channel: Channel, opts: { relayOnly: bool
   try {
     if (channel === 'telegram') {
       credential = getTelegramToken(userId);
-      await deliver({ channel: 'telegram', destination: target.destination, botToken: credential, subject, body });
+      await deliver({ channel: 'telegram', destination, botToken: credential, subject, body });
     } else {
       const relay = getSmtp();
       if (!relay) return { error: 'An admin needs to set up outbound email before this can send.' };
       credential = getSmtpPassword();
       await deliver({
         channel: 'email',
-        destination: target.destination,
+        destination,
         smtp: {
           host: relay.host,
           port: relay.port,
@@ -271,12 +287,14 @@ async function runTest(userId: number, channel: Channel, opts: { relayOnly: bool
     return { error: message };
   }
 
+  // recordTargetOutcome() is a no-op UPDATE when relayOnly sent to the relay's own
+  // from_email with no target row for this user yet — there is nothing to record it on.
   recordTargetOutcome({ userId, channel, ok: true, verify: true });
   if (channel === 'email') recordSmtpOutcome({ ok: true });
   revalidatePath(PATH);
   return {
     message: opts.relayOnly
-      ? 'Test email sent through the relay. Check the inbox.'
+      ? `Test email sent to ${destination}. Check the inbox.`
       : channel === 'telegram'
         ? 'Test message sent. Check Telegram.'
         : 'Test email sent. Check your inbox.',
@@ -298,12 +316,24 @@ export async function savePreferencesAction(_prev: NotificationsState, formData:
   });
   if (!parsed.success) return { error: firstIssue(parsed.error) };
 
+  // Review fix (IMPORTANT, the seam bug): a channel with no configured-and-enabled target
+  // renders every one of its checkboxes disabled, and a disabled control never submits.
+  // Absence therefore means two different things depending on the channel: "the user
+  // unchecked this" for a configured channel, and "this field was never in the form at
+  // all" for an unconfigured one. Treating both as "unchecked" would write enabled=0 rows
+  // for every default-on event the moment somebody saves the knobs with, say, Telegram not
+  // yet set up (or disabled), silently wiping their prefs for that channel. So a channel
+  // that is not currently configured-and-enabled is skipped entirely below: no reads of its
+  // fields, no writes, no deletes. A configured channel keeps the exact existing behaviour
+  // (absence = unchecked, MUST-3.7's sparse storage).
+  const writableChannels = CHANNELS.filter((channel) => getTarget(user.id, channel)?.enabled === true);
+
   // MUST-4.3: only the events this role may see are writable, so a forged field for an
   // admin-only event from a member is ignored rather than stored.
   // MUST-3.7: applyPref writes a row only where the value differs from the registry
   // default, and deletes the row when it matches: the table stays sparse.
   for (const event of eventsFor(user.role)) {
-    for (const channel of CHANNELS) {
+    for (const channel of writableChannels) {
       applyPref(user.id, event.id, channel, checkbox(formData, `pref:${event.id}:${channel}`));
     }
   }

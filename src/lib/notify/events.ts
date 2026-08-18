@@ -133,7 +133,7 @@ export function eventsFor(role: 'admin' | 'member'): readonly NotificationEventD
  *
  * MUST-3.12 (pruning safety): every key below is either bounded to a calendar period that
  * evaluation only visits within the current few days, or derived from a monotonically
- * increasing timestamp that never recurs, so the 90-day retention sweep can never
+ * increasing timestamp that never recurs, so the 400-day retention sweep can never
  * resurrect an already-delivered event.
  */
 function scopeLetter(scope: BudgetScopeKey): 'h' | 'p' {

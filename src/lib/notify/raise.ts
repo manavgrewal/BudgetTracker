@@ -22,7 +22,7 @@ import { renderEvent } from '@/lib/notify/render';
 
 /**
  * MUST-14.2: result.json persists on disk across boots, so without this guard an
- * outbox row aging out under the 90-day sweep would let a months-old restore re-notify.
+ * outbox row aging out under the 400-day sweep would let a months-old restore re-notify.
  * This is the single case where MUST-3.12's pruning-safety argument needs an explicit
  * guard rather than following from the key's shape.
  */
