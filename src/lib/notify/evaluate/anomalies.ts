@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, inArray, lt, ne, or, sql } from 'drizzle-orm';
+import { and, asc, eq, gte, inArray, lt, ne, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
 import { accounts, transactions } from '@/db/schema';
 import { listCategories } from '@/lib/categories';
@@ -18,6 +18,7 @@ import {
   UNUSUAL_BASELINE_DAYS,
   UNUSUAL_LOOKBACK_DAYS,
   UNUSUAL_MAX_PER_EVALUATION,
+  UNUSUAL_MIN_ABS_CENTS,
 } from '@/lib/predict/constants';
 
 /**
@@ -82,12 +83,16 @@ function fingerprint(sliceStart: string, people: AnomalyParticipant[]): string {
   return `${sliceStart}|${row?.n ?? 0}|${row?.maxId ?? 0}|${row?.maxUpdated ?? ''}|${roster}`;
 }
 
-/** MUST-9.10 condition 1's input: the oldest non-transfer row in the household. */
+/**
+ * MUST-9.10 condition 1's input: the household's plain earliest transaction. Task 8 review
+ * ruling (LOW): condition 1 reads "measured from min(transactions.date) to today", with no
+ * non-transfer filter; that filter belongs to condition 2's candidate rows, not to this one,
+ * and a household whose first-ever row is a transfer has still been using the app that long.
+ */
 function earliestTransactionDate(): string | null {
   const row = getDb()
     .select({ first: sql<string | null>`min(${transactions.date})` })
     .from(transactions)
-    .where(eq(transactions.isTransfer, false))
     .get();
   return row?.first ?? null;
 }
@@ -110,22 +115,49 @@ function readSlice(sliceStart: string): SliceRow[] {
     .all();
 }
 
-/**
- * One baseline aggregate per candidate (MUST-10.9). MUST-9.11: the tested row is excluded in
- * the WHERE, because including it pulls the median toward the outlier.
- */
-function baselineSamples(candidate: SliceRow, yearStart: string): { merchantSample: number[]; categorySample: number[] } {
-  const match =
-    candidate.categoryId === null
-      ? eq(transactions.normalizedMerchant, candidate.merchant)
-      : or(eq(transactions.normalizedMerchant, candidate.merchant), eq(transactions.categoryId, candidate.categoryId));
+interface CategoryBaselineRow {
+  id: number;
+  magnitude: number;
+}
 
+/**
+ * Task 8 review fix (MEDIUM, perf): every candidate in the same category previously re-ran an
+ * identical scan of that category's spend. The category's full magnitude list (its own id kept
+ * alongside, so a specific candidate can be excluded from it afterward without a second query)
+ * is fetched once per evaluation and cached here, keyed by category id.
+ */
+function categoryBaselineRows(
+  categoryId: number,
+  yearStart: string,
+  cache: Map<number, CategoryBaselineRow[]>,
+): CategoryBaselineRow[] {
+  const cached = cache.get(categoryId);
+  if (cached) return cached;
   const rows = getDb()
-    .select({
-      merchant: transactions.normalizedMerchant,
-      categoryId: transactions.categoryId,
-      magnitude: sql<number>`abs(${transactions.amountCents})`,
-    })
+    .select({ id: transactions.id, magnitude: sql<number>`abs(${transactions.amountCents})` })
+    .from(transactions)
+    .where(
+      and(
+        gte(transactions.date, yearStart),
+        eq(transactions.isTransfer, false),
+        lt(transactions.amountCents, 0),
+        eq(transactions.categoryId, categoryId),
+      ),
+    )
+    .all();
+  cache.set(categoryId, rows);
+  return rows;
+}
+
+/**
+ * One merchant baseline aggregate per candidate (MUST-10.9). MUST-9.11: the tested row is
+ * excluded in the WHERE, because including it pulls the median toward the outlier. Selects
+ * only the magnitude column (Task 8 review fix): nothing downstream needs the merchant or
+ * category text back, only the numbers that feed medianCents.
+ */
+function merchantBaselineMagnitudes(candidate: SliceRow, yearStart: string): number[] {
+  return getDb()
+    .select({ magnitude: sql<number>`abs(${transactions.amountCents})` })
     .from(transactions)
     .where(
       and(
@@ -133,17 +165,26 @@ function baselineSamples(candidate: SliceRow, yearStart: string): { merchantSamp
         eq(transactions.isTransfer, false),
         lt(transactions.amountCents, 0),
         ne(transactions.id, candidate.id),
-        match,
+        eq(transactions.normalizedMerchant, candidate.merchant),
       ),
     )
-    .all();
+    .all()
+    .map((row) => row.magnitude);
+}
 
-  const merchantSample: number[] = [];
-  const categorySample: number[] = [];
-  for (const row of rows) {
-    if (row.merchant === candidate.merchant) merchantSample.push(row.magnitude);
-    if (candidate.categoryId !== null && row.categoryId === candidate.categoryId) categorySample.push(row.magnitude);
-  }
+/** The two baselines a candidate needs, per MUST-9.10 condition 4. */
+function baselineSamples(
+  candidate: SliceRow,
+  yearStart: string,
+  categoryCache: Map<number, CategoryBaselineRow[]>,
+): { merchantSample: number[]; categorySample: number[] } {
+  const merchantSample = merchantBaselineMagnitudes(candidate, yearStart);
+  const categorySample =
+    candidate.categoryId === null
+      ? []
+      : categoryBaselineRows(candidate.categoryId, yearStart, categoryCache)
+          .filter((row) => row.id !== candidate.id)
+          .map((row) => row.magnitude);
   return { merchantSample, categorySample };
 }
 
@@ -156,13 +197,23 @@ interface UnusualFinding {
 function findUnusual(slice: SliceRow[], today: string): UnusualFinding[] {
   const lookbackStart = addDaysIso(today, -UNUSUAL_LOOKBACK_DAYS);
   const yearStart = addDaysIso(today, -UNUSUAL_BASELINE_DAYS);
+  // Task 8 review fix (MEDIUM, perf): shared across every candidate in this call, so a category
+  // with several candidates in the same evaluation is queried once, not once per candidate.
+  const categoryCache = new Map<number, CategoryBaselineRow[]>();
   const findings: UnusualFinding[] = [];
   for (const row of slice) {
     // MUST-9.13: oldest first, and stop querying once the cap is met. The remainder are simply
     // not enqueued; this is a deliberate cap on noise, not a queue.
     if (findings.length >= UNUSUAL_MAX_PER_EVALUATION) break;
-    if (row.date < lookbackStart) continue;
-    const { merchantSample, categorySample } = baselineSamples(row, yearStart);
+    // MUST-9.10 condition 2 bounds the window on both sides ("within the last 14 days"). Task 8
+    // review fix (LOW): a future-dated row (a post-dated entry or a bad import) is not "within
+    // the last 14 days" either, so it is excluded here rather than treated as a candidate.
+    if (row.date < lookbackStart || row.date > today) continue;
+    // MUST-9.10 condition 3, checked before any baseline query (Task 8 review fix, MEDIUM,
+    // perf): a spend under the floor can never be unusual no matter what the baseline says, so
+    // there is nothing worth querying for yet.
+    if (Math.abs(row.amountCents) < UNUSUAL_MIN_ABS_CENTS) continue;
+    const { merchantSample, categorySample } = baselineSamples(row, yearStart, categoryCache);
     const verdict = unusualVerdict({ amountCents: row.amountCents, merchantSample, categorySample });
     if (verdict === null) continue;
     findings.push({ row, baselineCents: verdict.baselineCents, baselineKind: verdict.baselineKind });

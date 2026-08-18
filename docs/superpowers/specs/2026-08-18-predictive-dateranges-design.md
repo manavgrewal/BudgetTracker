@@ -674,17 +674,17 @@ and, beside the existing `evaluateBudgets` call at the end:
 
 ### 10.2 The tick fingerprint
 
-**MUST-10.4** `evaluateAnomalies` runs on **every** tick, so it needs the same guard `evaluateBudgets` uses. The fingerprint is one query over the 14-day slice both anomaly detectors read:
+**MUST-10.4** `evaluateAnomalies` runs on **every** tick, so it needs the same guard `evaluateBudgets` uses. The fingerprint is one query over the derived 17-day slice both anomaly detectors read (`DUPLICATE_LOOKBACK_DAYS` + `DUPLICATE_WINDOW_DAYS`), wider than `unusual_transaction`'s own 14-day window so that a duplicate pair whose later half sits on the 14-day boundary still has its earlier half inside the slice:
 
 ```ts
 select count(*) as n,
        coalesce(max(id), 0) as maxId,
        coalesce(max(updated_at), '') as maxUpdated
 from transactions
-where date >= :lookbackStart
+where date >= :sliceStart
 ```
 
-served by `transactions_date_idx`, concatenated with the participant list (`userId:enabled` pairs, sorted by user id) exactly as `budget.ts` does. An unchanged fingerprint returns immediately.
+served by `transactions_date_idx`, concatenated with the participant list (`userId:enabled` pairs, sorted by user id) exactly as `budget.ts` does. An unchanged fingerprint returns immediately. (Amended after the Task 8 review: the earlier wording named a plain 14-day slice; the shipped slice is 17 days, a strict superset of the 14-day window that is therefore also safe as the fingerprint's basis, sanctioned by the Task 8 implementation brief.)
 
 **MUST-10.5** `max(updated_at)` is in the fingerprint so that **re-categorising** an existing transaction, which changes neither the count nor the max id, still triggers a re-evaluation. That matters here because the `unusual_transaction` category baseline (MUST-9.10 condition 4) depends on `category_id`.
 
@@ -696,7 +696,7 @@ served by `transactions_date_idx`, concatenated with the participant list (`user
 
 ### 10.3 Cost
 
-**MUST-10.9** On a tick where the fingerprint is unchanged, the total added cost of this release is **one indexed count query**. On a tick where it has changed, it is one 14-day row read plus, per candidate, one baseline aggregate. There is no per-tick suggestion computation anywhere: suggestions are computed on the Budgets page render, in the two daily-slot month events, and nowhere else.
+**MUST-10.9** On a tick where the fingerprint is unchanged, the total added cost of this release is **one indexed count query**. On a tick where it has changed, it is one 17-day row read, plus per candidate a merchant baseline query, plus, at most once per distinct category represented among the candidates, a memoised category baseline query. There is no per-tick suggestion computation anywhere: suggestions are computed on the Budgets page render, in the two daily-slot month events, and nowhere else. (Amended after the Task 8 review: the earlier wording named a 14-day row read and a single unconditional baseline aggregate per candidate; the shipped slice is 17 days for the reason given at MUST-10.4, and `findUnusual()` now shares one category baseline query across every candidate in the same category instead of repeating it.)
 
 **MUST-10.10** A household with **no user** having any anomaly event enabled skips the fingerprint query entirely, via the same `computeParticipants()`-shaped early return `evaluateBudgets` uses. Zero enabled participants means zero queries.
 
@@ -1185,5 +1185,6 @@ A median needs equal-length observation buckets. Over an arbitrary range of, say
 ## Revision history
 
 - **v1.0** (2026-08-18): initial approved design. Ships as **v1.4.0**. Two features, no migration, no new table, no new egress destination. **Predictive spending targets:** `src/lib/predict/` computes per-category median, average and a two-half trend over the last 6 full calendar months clipped to the household's first data month, with zero-spend months counting as zero and a three-month minimum; a suggested budget from the median with a halved trend adjustment, a clamped same-month-last-year seasonal factor, a 3x cap and a round up to the dollar, applied through the existing `upsertBudget()` for both household and personal scopes and never overwriting a typed limit; a mid-month pace projection from the seventh day; and six new notification events (`budget_pace`, `unusual_transaction`, `subscription_creep`, `duplicate_charge`, `predicted_vs_actual`, `suggested_budget_refresh`) riding the existing registry, renderer and outbox dedup with per-month or per-transaction keys, all far inside the 400-day retention. **Date-range presets:** one pure `resolveRange()` taking `today` as a parameter so the server's timezone always wins, a URL carrying a preset token rather than a resolved date pair, one `DateRangePicker` form control, and adoption by Reports, Transactions and the CSV export route with both pages' current defaults preserved exactly. Four deviations recorded in section 20.
+- **v1.1** (2026-08-18): Task 8 review correction, no behaviour change intended beyond the fixes named here. MUST-10.4 and MUST-10.9 named a 14-day fingerprint slice; the slice `evaluateAnomalies` actually reads and always read is `DUPLICATE_LOOKBACK_DAYS` plus `DUPLICATE_WINDOW_DAYS`, 17 days, a strict superset of the 14-day `unusual_transaction` window that keeps a duplicate pair straddling that boundary intact, sanctioned by the Task 8 implementation brief. Both bullets are amended in place to name the 17-day slice and this rationale. MUST-10.9's cost line is also corrected to reflect a genuine Task 8 review fix landing in the same round: `findUnusual()` now skips a candidate under the unusual floor before querying for it at all, and shares one category baseline query across every candidate in the same category instead of repeating it per candidate.
 </content>
 </invoke>
