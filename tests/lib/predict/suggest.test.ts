@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { medianCents } from '@/lib/predict/stats';
+import { divRound, medianCents } from '@/lib/predict/stats';
 import { seasonalFactor, suggestBudget, type SuggestionResult } from '@/lib/predict/suggest';
 
 const flat = (cents: number, months = 6) => Array.from({ length: months }, () => cents);
@@ -121,6 +121,11 @@ describe('MUST-6.1 step 7: the floor', () => {
     expect(medianCents(series)).toBe(100);
     expect(suggestBudget({ monthlyCents: series, seasonal: null })).toEqual({ reason: 'below-floor' });
   });
+
+  it('boundary: a flat $5.00 series suggests $5.00, and a flat $4.01 series rounds up to it', () => {
+    expect(suggestionOf(suggestBudget({ monthlyCents: flat(500), seasonal: null })).suggestedCents).toBe(500);
+    expect(suggestionOf(suggestBudget({ monthlyCents: flat(401), seasonal: null })).suggestedCents).toBe(500);
+  });
 });
 
 describe('MUST-6.7 and MUST-6.8: confidence is a label derived from two things', () => {
@@ -143,26 +148,57 @@ describe('MUST-6.7 and MUST-6.8: confidence is a label derived from two things',
     const three = [10000, 50000, 160000];
     expect(suggestionOf(suggestBudget({ monthlyCents: three, seasonal: null })).confidence).toBe('low');
   });
+
+  it('boundary: a spread of exactly twice the median stays high, one cent more drops to medium', () => {
+    // median 30000, spread 60000, exactly 2x median: the <= keeps the level at high.
+    const atLimit = [0, 30000, 30000, 30000, 30000, 60000];
+    expect(medianCents(atLimit)).toBe(30000);
+    expect(suggestionOf(suggestBudget({ monthlyCents: atLimit, seasonal: null })).confidence).toBe('high');
+    // Same series, last value one cent higher: spread 60001 is over 2x median, so high drops
+    // to medium.
+    const overLimit = [0, 30000, 30000, 30000, 30000, 60001];
+    expect(medianCents(overLimit)).toBe(30000);
+    expect(suggestionOf(suggestBudget({ monthlyCents: overLimit, seasonal: null })).confidence).toBe('medium');
+  });
 });
 
 describe('AC6 and MUST-6.5: the property that has to hold over any series', () => {
   it('is null or a positive whole-dollar amount at most 3x median + 99, over 500 series', () => {
+    // A 32-bit LCG. seed * 1103515245 alone leaves the safe-integer range on the first step,
+    // so % 2147483648 stopped mattering and the sequence collapsed toward a narrow band.
+    // Math.imul keeps the multiply inside 32 bits, and >>> 0 makes the result unsigned, so the
+    // generator actually spans its full range instead of degenerating.
     let seed = 20260818;
     const next = () => {
-      seed = (seed * 1103515245 + 12345) % 2147483648;
+      seed = (Math.imul(seed, 1103515245) + 12345) >>> 0;
       return seed;
     };
+    let sawCapBind = false;
+    let sawRisingTrend = false;
     for (let run = 0; run < 500; run += 1) {
       const length = 3 + (next() % 4);
       const monthlyCents = Array.from({ length }, () => (next() % 400000) - 100000);
       const seasonal = next() % 3 === 0 ? { num: 50 + (next() % 150), den: 100 } : null;
       const result = suggestBudget({ monthlyCents, seasonal });
       if (!('suggestion' in result)) continue;
-      const { suggestedCents } = result.suggestion;
+      const { suggestedCents, trend } = result.suggestion;
       const median = medianCents(monthlyCents) ?? 0;
       expect(suggestedCents).toBeGreaterThan(0);
       expect(suggestedCents % 100).toBe(0);
       expect(suggestedCents).toBeLessThanOrEqual(median * 3 + 99);
+
+      if (trend.direction === 'rising') sawRisingTrend = true;
+
+      // Mirrors suggest.ts steps 3 to 5, to tell whether step 5's cap actually clamped this
+      // run rather than merely passing a value that already happened to sit under it.
+      let preCap = median;
+      if (trend.direction === 'rising' || trend.direction === 'falling') {
+        preCap = median + divRound(trend.deltaCents, 2);
+      }
+      if (seasonal !== null) preCap = divRound(preCap * seasonal.num, seasonal.den);
+      if (preCap > median * 3) sawCapBind = true;
     }
+    expect(sawRisingTrend).toBe(true);
+    expect(sawCapBind).toBe(true);
   });
 });

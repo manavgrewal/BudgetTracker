@@ -7,6 +7,14 @@ import {
   unusualVerdict,
   type SpendRow,
 } from '@/lib/predict/anomalies';
+import {
+  CREEP_LOOKBACK_DAYS,
+  CREEP_MONTHLY_GAP_MAX_DAYS,
+  CREEP_MONTHLY_GAP_MIN_DAYS,
+  CREEP_YEARLY_GAP_MIN_DAYS,
+  DUPLICATE_LOOKBACK_DAYS,
+  DUPLICATE_WINDOW_DAYS,
+} from '@/lib/predict/constants';
 
 const TODAY = '2026-08-18';
 
@@ -81,25 +89,47 @@ describe('MUST-9.15 and MUST-9.16: creepVerdict', () => {
     expect(creepVerdict({ charges: monthlyCharges.slice(1), today: TODAY })).toBeNull();
   });
 
+  // Four charges ending on 2026-08-14, which is four days inside the 35-day lookback, spaced
+  // `days` apart. Only the gap band changes between cases.
+  const at = (days: number) =>
+    creepVerdict({
+      charges: [0, 1, 2, 3].map((step) =>
+        row({ id: step + 1, date: addDaysIso('2026-08-14', -(3 - step) * days), amountCents: step === 3 ? -2099 : -1649 }),
+      ),
+      today: TODAY,
+    });
+
   it('accepts a 28-day gap and a 365-day gap, and rejects 7 and 90', () => {
-    // Four charges ending on 2026-08-14, which is four days inside the 35-day lookback,
-    // spaced `days` apart. Only the gap band changes between cases.
-    const at = (days: number) =>
-      creepVerdict({
-        charges: [0, 1, 2, 3].map((step) =>
-          row({ id: step + 1, date: addDaysIso('2026-08-14', -(3 - step) * days), amountCents: step === 3 ? -2099 : -1649 }),
-        ),
-        today: TODAY,
-      });
     expect(at(28)).not.toBeNull();
     expect(at(365)).not.toBeNull();
     expect(at(7)).toBeNull();
     expect(at(90)).toBeNull();
   });
 
+  it('boundary: the monthly band fires at its two edges and not one day outside them', () => {
+    expect(at(CREEP_MONTHLY_GAP_MIN_DAYS)).not.toBeNull();
+    expect(at(CREEP_MONTHLY_GAP_MAX_DAYS)).not.toBeNull();
+    expect(at(CREEP_MONTHLY_GAP_MIN_DAYS - 1)).toBeNull();
+    expect(at(CREEP_MONTHLY_GAP_MAX_DAYS + 1)).toBeNull();
+  });
+
+  it('boundary: the yearly band fires at its lower edge', () => {
+    expect(at(CREEP_YEARLY_GAP_MIN_DAYS)).not.toBeNull();
+  });
+
   it('does not fire when the newest charge is older than the 35-day lookback', () => {
     const stale = monthlyCharges.map((charge) => row({ ...charge, date: addDaysIso(charge.date, -60) }));
     expect(creepVerdict({ charges: stale, today: TODAY })).toBeNull();
+  });
+
+  it('boundary: fires when the newest charge is exactly CREEP_LOOKBACK_DAYS old, not one day older', () => {
+    // Charges spaced 30 days apart (inside the monthly band), ending `daysOld` before TODAY.
+    const agedCharges = (daysOld: number): SpendRow[] =>
+      [0, 1, 2, 3].map((step) =>
+        row({ id: step + 1, date: addDaysIso(TODAY, -daysOld - (3 - step) * 30), amountCents: step === 3 ? -2099 : -1649 }),
+      );
+    expect(creepVerdict({ charges: agedCharges(CREEP_LOOKBACK_DAYS), today: TODAY })).not.toBeNull();
+    expect(creepVerdict({ charges: agedCharges(CREEP_LOOKBACK_DAYS + 1), today: TODAY })).toBeNull();
   });
 
   it('does not fire when the increase clears only one of the two thresholds', () => {
@@ -189,5 +219,25 @@ describe('MUST-9.20 to MUST-9.23: findDuplicates', () => {
   it('ignores refunds and deposits', () => {
     const rows = [row({ id: 1, date: '2026-08-12', amountCents: 8950 }), row({ id: 2, date: '2026-08-13', amountCents: 8950 })];
     expect(findDuplicates({ rows, today: TODAY })).toEqual([]);
+  });
+
+  it('boundary: a pair exactly DUPLICATE_WINDOW_DAYS apart fires', () => {
+    const laterDate = addDaysIso(TODAY, -5);
+    const earlierDate = addDaysIso(laterDate, -DUPLICATE_WINDOW_DAYS);
+    const rows = [row({ id: 1, date: earlierDate, amountCents: -8950 }), row({ id: 2, date: laterDate, amountCents: -8950 })];
+    expect(findDuplicates({ rows, today: TODAY })).toHaveLength(1);
+  });
+
+  it('boundary: fires when the later charge is exactly DUPLICATE_LOOKBACK_DAYS old, not one day older', () => {
+    const atLimit = addDaysIso(TODAY, -DUPLICATE_LOOKBACK_DAYS);
+    const limitRows = [row({ id: 1, date: addDaysIso(atLimit, -1), amountCents: -8950 }), row({ id: 2, date: atLimit, amountCents: -8950 })];
+    expect(findDuplicates({ rows: limitRows, today: TODAY })).toHaveLength(1);
+
+    const oneDayOlder = addDaysIso(TODAY, -(DUPLICATE_LOOKBACK_DAYS + 1));
+    const olderRows = [
+      row({ id: 1, date: addDaysIso(oneDayOlder, -1), amountCents: -8950 }),
+      row({ id: 2, date: oneDayOlder, amountCents: -8950 }),
+    ];
+    expect(findDuplicates({ rows: olderRows, today: TODAY })).toEqual([]);
   });
 });
