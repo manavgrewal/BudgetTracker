@@ -4,7 +4,7 @@ import { budgetProgress, budgetTotals, type BudgetRow } from '@/lib/budgets';
 import { currentMonth, isMonthKey, monthEnd, todayIso } from '@/lib/dates';
 import { readEnv } from '@/lib/env';
 import { flattenBudgetRows } from '@/lib/notify/evaluate/pace';
-import { suggestionsFor, type ScopeSuggestions } from '@/lib/predict/history';
+import { isAllNoSpend, suggestionsFor, type ScopeSuggestions } from '@/lib/predict/history';
 import { projectMonthEnd } from '@/lib/predict/pace';
 import type { BudgetPredictions, CategorySuggestion, SectionPredictions } from '@/lib/predict/suggest';
 import { BudgetsClient } from './budgets-client';
@@ -15,7 +15,7 @@ export const dynamic = 'force-dynamic';
  * MUST-8.7 and MUST-16.4: the projection reuses budgetProgress()'s own spentCents, so it adds
  * no query and can never disagree with the progress bar beside it.
  */
-function sectionFrom(
+export function sectionFrom(
   scoped: ScopeSuggestions,
   rows: BudgetRow[],
   dayOfMonth: number,
@@ -28,6 +28,9 @@ function sectionFrom(
   }
   const projections: { categoryId: number; projectedCents: number }[] = [];
   for (const row of flattenBudgetRows(rows)) {
+    // LOW cleanup: an archived row is read-only and carries no suggestion slot, so a pace
+    // line there would sit with nothing beside it.
+    if (row.isArchived) continue;
     if (row.limitCents === null) continue;
     const projectedCents = projectMonthEnd({ spentCents: row.spentCents, dayOfMonth, daysInMonth });
     if (projectedCents === null) continue;
@@ -65,25 +68,25 @@ export default async function BudgetsPage({
   if (month === currentMonth(new Date(), tz)) {
     // MUST-16.3 budgets this page at 2 + 2P grouped aggregates, so each scope is read ONCE.
     const householdScope = suggestionsFor({ targetMonth: month, scope: 'household', userId: null });
-    const householdHasSpend = flattenBudgetRows(household).some((row) => row.spentCents !== 0);
+    const householdAllNoSpend = isAllNoSpend(householdScope.byCategory);
     predictions = {
       monthsUsed: householdScope.months.length,
       dayOfMonth,
       household: sectionFrom(householdScope, household, dayOfMonth, daysInMonth),
-      personal: personal.map((person) => ({
-        userId: person.userId,
-        predictions: {
-          ...sectionFrom(
-            suggestionsFor({ targetMonth: month, scope: 'personal', userId: person.userId }),
-            person.rows,
-            dayOfMonth,
-            daysInMonth,
-          ),
-          // MUST-15.2 and MUST-7.2: attributed_user_id is NULL on most imported rows until
-          // somebody sets it, so this is by far the most likely empty state on a real install.
-          noAttribution: householdHasSpend && flattenBudgetRows(person.rows).every((row) => row.spentCents === 0),
-        },
-      })),
+      personal: personal.map((person) => {
+        const personalScope = suggestionsFor({ targetMonth: month, scope: 'personal', userId: person.userId });
+        return {
+          userId: person.userId,
+          predictions: {
+            ...sectionFrom(personalScope, person.rows, dayOfMonth, daysInMonth),
+            // MUST-15.2 and MUST-7.2: derived from the HISTORICAL series suggestionsFor()
+            // already computed, not from this month's budgetProgress() snapshot. The current
+            // month is excluded from that series by construction (historyMonths), so this
+            // holds regardless of whether the person has posted anything yet this month.
+            noAttribution: isAllNoSpend(personalScope.byCategory) && !householdAllNoSpend,
+          },
+        };
+      }),
     };
   }
 

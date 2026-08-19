@@ -3,7 +3,8 @@ import { sql } from 'drizzle-orm';
 import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser, type TestDb } from '../../helpers/db';
 import { budgetProgress, type BudgetRow } from '@/lib/budgets';
 import { nowIso } from '@/lib/clock';
-import { categorySeries, firstDataMonth, seasonalReference, suggestionsFor } from '@/lib/predict/history';
+import { categorySeries, firstDataMonth, isAllNoSpend, seasonalReference, suggestionsFor } from '@/lib/predict/history';
+import type { SuggestionResult } from '@/lib/predict/suggest';
 
 let current: TestDb | null = null;
 afterEach(() => {
@@ -262,5 +263,74 @@ describe('MUST-4.11: seasonalReference', () => {
     expect(reference?.monthCents).toBe(60000);
     expect(reference?.twelveMonths[0]).toBe(12000);
     expect(reference?.twelveMonths[11]).toBe(60000);
+  });
+});
+
+describe('review finding (HIGH): isAllNoSpend', () => {
+  const NO_SPEND: SuggestionResult = { reason: 'no-spend' };
+  const BELOW_FLOOR: SuggestionResult = { reason: 'below-floor' };
+  const SUGGESTION: SuggestionResult = {
+    suggestion: {
+      suggestedCents: 6000,
+      medianCents: 6000,
+      meanCents: 6000,
+      trend: { direction: 'flat', deltaCents: 0 },
+      monthsUsed: 6,
+      seasonalApplied: false,
+      confidence: 'high',
+    },
+  };
+
+  it('is true when every category resolves to no-spend', () => {
+    expect(isAllNoSpend(new Map<number, SuggestionResult>([[1, NO_SPEND], [2, NO_SPEND]]))).toBe(true);
+  });
+
+  it('is false when any category carries a real suggestion', () => {
+    expect(isAllNoSpend(new Map<number, SuggestionResult>([[1, NO_SPEND], [2, SUGGESTION]]))).toBe(false);
+  });
+
+  it('is false when any category is below-floor rather than no-spend', () => {
+    expect(isAllNoSpend(new Map<number, SuggestionResult>([[1, NO_SPEND], [2, BELOW_FLOOR]]))).toBe(false);
+  });
+
+  it('is false for an empty map, not vacuously true', () => {
+    expect(isAllNoSpend(new Map())).toBe(false);
+  });
+});
+
+describe('review finding (HIGH): noAttribution reads the historical series, not the current month', () => {
+  it('false positive fixed: a person with real attributed history is not flagged just because the current month is quiet so far', () => {
+    const { db, alice, spend } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    // Alice has real attributed spend across the whole historical window.
+    for (const month of WINDOW) spend({ categoryId: groceries, amountCents: -6000, date: `${month}-10`, attributedUserId: alice });
+    // Unattributed household spend across the same window, so the household series is not
+    // no-spend either.
+    for (const month of WINDOW) spend({ categoryId: groceries, amountCents: -6000, date: `${month}-11` });
+    // TARGET month 2026-08: nothing attributed to Alice yet. historyMonths excludes the
+    // target month by construction, so this must not change the answer.
+    spend({ categoryId: groceries, amountCents: -9000, date: '2026-08-05' });
+
+    const household = suggestionsFor({ targetMonth: '2026-08', scope: 'household', userId: null });
+    const personal = suggestionsFor({ targetMonth: '2026-08', scope: 'personal', userId: alice });
+
+    expect(isAllNoSpend(household.byCategory)).toBe(false);
+    expect(isAllNoSpend(personal.byCategory)).toBe(false);
+    // The exact composition the Budgets page performs.
+    expect(isAllNoSpend(personal.byCategory) && !isAllNoSpend(household.byCategory)).toBe(false);
+  });
+
+  it('genuine trigger: every personal category is no-spend while the household has real history', () => {
+    const { db, alice, spend } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    // Household has real spend, none of it ever attributed to Alice.
+    for (const month of WINDOW) spend({ categoryId: groceries, amountCents: -6000, date: `${month}-10` });
+
+    const household = suggestionsFor({ targetMonth: '2026-08', scope: 'household', userId: null });
+    const personal = suggestionsFor({ targetMonth: '2026-08', scope: 'personal', userId: alice });
+
+    expect(isAllNoSpend(household.byCategory)).toBe(false);
+    expect(isAllNoSpend(personal.byCategory)).toBe(true);
+    expect(isAllNoSpend(personal.byCategory) && !isAllNoSpend(household.byCategory)).toBe(true);
   });
 });

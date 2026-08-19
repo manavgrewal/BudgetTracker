@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, cleanup } from '@testing-library/react';
 import { BudgetsClient } from '@/app/(app)/budgets/budgets-client';
+import { sectionFrom } from '@/app/(app)/budgets/page';
 import type { BudgetRow } from '@/lib/budgets';
 import type { BudgetPredictions, CategorySuggestion } from '@/lib/predict/suggest';
 
@@ -84,6 +85,12 @@ describe('BudgetsClient — review finding 2: archived rows are read-only', () =
     const rows = Array.from(container.querySelectorAll('tbody tr'));
     const archivedRowCells = rows.find((r) => r.textContent?.includes('Kids'));
     expect(archivedRowCells?.querySelector('input[name="amount"]')).toBeNull();
+  });
+
+  it('review LOW cleanup: sectionFrom gives an archived row no projection entry even though it still carries a limit and spend', () => {
+    const archived = makeRow({ categoryId: 42, isArchived: true, limitCents: 20000, spentCents: 5000 });
+    const { projections } = sectionFrom({ months: [], byCategory: new Map() }, [archived], 15, 30);
+    expect(projections.some((entry) => entry.categoryId === 42)).toBe(false);
   });
 
   it('still renders an editable limit form for a non-archived row', () => {

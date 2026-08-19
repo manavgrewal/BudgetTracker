@@ -223,3 +223,21 @@ export function suggestionsFor(input: {
   }
   return { months, byCategory };
 }
+
+/**
+ * MUST-15.2 and MUST-7.2: true when every category in this scope resolves to 'no-spend' over
+ * the historical window. An empty map returns false: nothing was computed, so there is
+ * nothing to call a no-spend scope.
+ *
+ * This reads the HISTORICAL series suggestionsFor() already computed, never the current
+ * month's budgetProgress() snapshot. The two differ on purpose: the window suggestionsFor
+ * uses is the full months strictly before the target month (historyMonths), so a person's
+ * attribution status does not flip on whichever day of the current month happens to be true.
+ */
+export function isAllNoSpend(byCategory: Map<number, SuggestionResult>): boolean {
+  if (byCategory.size === 0) return false;
+  for (const result of byCategory.values()) {
+    if (!('reason' in result) || result.reason !== 'no-spend') return false;
+  }
+  return true;
+}
