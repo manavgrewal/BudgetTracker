@@ -23,6 +23,7 @@ function filesUnder(dir: string, acc: string[] = []): string[] {
 
 const notifyDir = path.join(root, 'src/lib/notify');
 const updateDir = path.join(root, 'src/lib/update');
+const predictDir = path.join(root, 'src/lib/predict');
 const pageDir = path.join(root, 'src/app/(app)/settings/notifications');
 const rel = (file: string) => path.relative(root, file).replace(/\\/g, '/');
 
@@ -75,7 +76,7 @@ const FETCH_SITES: { dir: string; file: string; expected: number }[] = [
 it('every fetch( under src/lib/notify/ and src/lib/update/ is on the allowlist, with the expected count', () => {
   const counts = new Map<string, number>();
   const offenders: string[] = [];
-  for (const dir of [notifyDir, updateDir]) {
+  for (const dir of [notifyDir, updateDir, predictDir]) {
     for (const file of filesUnder(dir)) {
       const calls = stripComments(fs.readFileSync(file, 'utf8')).match(/(?<![.\w])fetch\s*\(/g)?.length ?? 0;
       if (calls === 0) continue;
@@ -137,10 +138,29 @@ describe('MUST-2.3: the only :// literal under src/lib/update/ is GITHUB_API_ORI
   });
 });
 
+describe('MUST-1.1 and MUST-16.1: the predictive tree and the date-range files leave nothing', () => {
+  const extraFiles = ['src/lib/date-range.ts', 'src/components/ui/DateRangePicker.tsx'];
+
+  it('src/lib/predict/ holds no fetch( call site and no :// literal', () => {
+    for (const file of filesUnder(predictDir)) {
+      expect({ file: rel(file), literals: urlLiterals(file) }).toEqual({ file: rel(file), literals: [] });
+      expect(stripComments(fs.readFileSync(file, 'utf8'))).not.toMatch(/(?<![.\w])fetch\s*\(/);
+    }
+  });
+
+  it('the two date-range files hold no fetch( call site and no :// literal either', () => {
+    for (const name of extraFiles) {
+      const file = path.join(root, name);
+      expect({ file: name, literals: urlLiterals(file) }).toEqual({ file: name, literals: [] });
+      expect(stripComments(fs.readFileSync(file, 'utf8'))).not.toMatch(/(?<![.\w])fetch\s*\(/);
+    }
+  });
+});
+
 describe('no file under src/lib/notify/ or src/lib/update/ imports an HTTP client library', () => {
   it('neither tree pulls in a second way to make an outbound request', () => {
     const banned = /from\s+['"](axios|node-fetch|got|undici|superagent|ky|request)['"]/;
-    for (const dir of [notifyDir, updateDir]) {
+    for (const dir of [notifyDir, updateDir, predictDir]) {
       for (const file of filesUnder(dir)) {
         expect(fs.readFileSync(file, 'utf8')).not.toMatch(banned);
       }
@@ -187,6 +207,13 @@ describe('MUST-2.1: the pure modules stay pure', () => {
     { dir: notifyDir, name: 'evaluate/slots.ts' },
     { dir: updateDir, name: 'semver.ts' },
     { dir: updateDir, name: 'egress.ts' },
+    { dir: predictDir, name: 'constants.ts' },
+    { dir: predictDir, name: 'stats.ts' },
+    { dir: predictDir, name: 'window.ts' },
+    { dir: predictDir, name: 'suggest.ts' },
+    { dir: predictDir, name: 'pace.ts' },
+    { dir: predictDir, name: 'anomalies.ts' },
+    { dir: path.join(root, 'src/lib'), name: 'date-range.ts' },
   ];
   for (const { dir, name } of pureModules) {
     it(`${rel(path.join(dir, name))} imports no @/db, no @/lib/env and no node builtin`, () => {
@@ -201,7 +228,7 @@ describe('MUST-2.1: the pure modules stay pure', () => {
 describe('MUST-2.2: server-only modules never reach a client component', () => {
   it('no *-client.tsx has a VALUE import of a notify or update server-only module', () => {
     const clients = filesUnder(path.join(root, 'src/app')).filter((file) => file.endsWith('-client.tsx'));
-    const banned = /from\s+['"]@\/lib\/(notify\/(crypto|config|outbox|raise|send|evaluate)|update\/(github|watchtower|state|check))/;
+    const banned = /from\s+['"]@\/lib\/(notify\/(crypto|config|outbox|raise|send|evaluate)|update\/(github|watchtower|state|check)|predict\/history)/;
     for (const file of clients) {
       // `import type { ... }` is erased before bundling and is how the client legitimately
       // names SmtpRecord / TargetRecord / DeliveryRow / UpdateSeverity. Only value imports

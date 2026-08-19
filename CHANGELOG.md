@@ -21,6 +21,44 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.4.0] - 2026-08-19
+
+### Added
+
+- **A suggested monthly budget for every category with enough history.** Budgets shows what
+  the last six full months point at, and one button writes it. The number is the median of
+  those months, nudged half way toward a rising or falling trend, adjusted for the same month
+  last year once there is enough history to know what that month usually looks like, capped at
+  three times the median and rounded up to the dollar. Suggestions appear once there are three
+  full calendar months, and each one carries a confidence label you can see before you press.
+- **Apply all suggestions**, per section, which fills in only the categories you have not set a
+  limit for. Nothing you have typed is ever changed, and the message tells you how many were
+  set and how many were skipped.
+- **A pace projection from the seventh of the month.** Each category with a limit shows where
+  the month is heading if the rest of it looks like the part already spent, in the same colour
+  the progress bar uses when a budget is blown. It says out loud what it assumes.
+- **A Category baselines card on Reports**, with each category's median, average, trend and
+  suggested amount over the last six full calendar months. It deliberately does not follow the
+  date filter above it, and the card says why.
+- **Six new notifications**, off or on per person per channel in the toggle matrix you already
+  have: a budget on pace to go over, an unusually large charge, a recurring charge that went
+  up, a possible duplicate charge, and two start-of-month summaries. Like every notification
+  before them, they send nothing to anybody who has not set up a channel.
+- **Date-range presets.** Reports and Transactions get one picker with This month, Last month,
+  Last 3 months, Last 6 months, Year to date, Last year and Custom. The range lives in the URL
+  as a name rather than a pair of dates, so a phone in another timezone sees the same
+  "This month" the server does, and the Export CSV link covers exactly what the page shows.
+
+### Changed
+
+- Transactions remembers the dates you filtered by when you reload the page. It still shows
+  everything by default, because that is the page you open to find a charge from March.
+
+### Fixed
+
+- Nothing. This release adds no migration, no table and no column, and it makes no outbound
+  connection it did not make before.
+
 ## [1.3.1] - 2026-08-18
 
 ### Changed

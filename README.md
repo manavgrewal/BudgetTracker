@@ -147,10 +147,14 @@ after an admin uses **Reset password**. Two-factor authentication stays optional
    saves a private copy for that account; the shared preset is never modified.
 4. **Review** — accept or fix the app's guesses. Every confirmation teaches it: it creates a rule
    for that merchant and updates the classifier.
-5. **Budgets** — set monthly limits per category, at household level and per person. A limit you
-   set in March applies to March and every month after it until you change it again.
+5. **Budgets**, set monthly limits per category, at household level and per person. A limit you
+   set in March applies to March and every month after it until you change it again. Categories
+   with three or more full months of history also show a suggested amount you can apply with one
+   press, and from the seventh of the month each budgeted category shows where the month is
+   heading.
 6. **Goals** — log money you set aside and watch the pace projection.
-7. **Reports** — category breakdowns, month-over-month trends, who-spent-what, CSV export.
+7. **Reports**, category breakdowns, month-over-month trends, who-spent-what, category
+   baselines, CSV export. Pick a date range from the presets or set your own.
 
 Re-importing an overlapping date range is safe: duplicate rows are detected and skipped, and
 undoing an import only deletes the transactions that no other import also covers.

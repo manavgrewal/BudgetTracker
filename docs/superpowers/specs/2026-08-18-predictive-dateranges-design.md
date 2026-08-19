@@ -566,7 +566,7 @@ export function budgetPaceKey(scope: BudgetScopeKey, categoryId: number, month: 
 
 **MUST-9.19 (pruning safety).** 35 days is far below 400.
 
-**Message.** Subject `Price went up: NETFLIX`. Body: `NETFLIX charged $20.99 on 2026-08-14. The last three charges were $16.49. That is $4.50 more, about 27 percent.`
+**Message.** Subject `Price went up: NETFLIX`. Body: `NETFLIX charged $20.99 on 2026-08-14. The last 3 charges were $16.49. That is $4.50 more, about 27 percent.`
 
 ### 9.5 `duplicate_charge`
 
@@ -601,7 +601,7 @@ export function budgetPaceKey(scope: BudgetScopeKey, categoryId: number, month: 
 
 **MUST-9.30** The body carries at most `MONTH_REPORT_MAX_LINES` (8) categories, chosen by the largest absolute difference between actual and predicted, plus one household total line. It is rendered with the existing `padded()` two-column helper in `render.ts`, so it reads as a table in plain text exactly as the weekly digest does.
 
-**Message.** Subject `July 2026: what we expected against what happened`. Body lines of the shape `Groceries        expected $620.00   actual $713.40   +$93.40`, then `Across every category with a suggestion, July came in $210.00 over what the last six months pointed at.`
+**Message.** Subject `July 2026: what we expected against what happened`. Body lines of the shape `Groceries        $620.00 expected, $713.40 actual, $93.40 difference`, then `Across every category with a suggestion, July 2026 came in $210.00 over what the last six months pointed at.`
 
 ### 9.7 `suggested_budget_refresh`
 
@@ -613,7 +613,7 @@ export function budgetPaceKey(scope: BudgetScopeKey, categoryId: number, month: 
 
 **MUST-9.34 (pruning safety).** Monthly key, current month only, same argument as MUST-9.29.
 
-**Message.** Subject `New month: 5 suggested budgets changed`. Body lines of the shape `Groceries        now $780.00   was $600.00`, then `Open Budgets to apply any of these. Nothing has been changed.`
+**Message.** Subject `New month: 5 suggested budgets changed`. Body lines of the shape `Groceries        $780.00 suggested, $600.00 set`, then `Open Budgets to apply any of these. Nothing has been changed.`
 
 ### 9.8 Scope handling, for the four category-shaped events
 

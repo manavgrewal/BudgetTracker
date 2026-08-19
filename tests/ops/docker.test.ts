@@ -161,16 +161,17 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-18.1 / MUST-18.3: the 1.3.1 release', () => {
+  it('MUST-18.1 / MUST-18.3: the 1.4.0 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.3.1');
+    expect(pkg.version).toBe('1.4.0');
     const changelog = read('CHANGELOG.md');
-    expect(changelog).toMatch(/^## \[1\.3\.1\] - 2026-08-18$/m);
+    expect(changelog).toMatch(/^## \[1\.4\.0\] - 2026-08-19$/m);
     // An empty Unreleased section is left in place for the next session.
-    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.3.1]'));
-    // MUST-18.2: the compose change leads, because auto-apply installs this release unattended.
-    const section = changelog.slice(changelog.indexOf('## [1.3.1]'), changelog.indexOf('## [1.3.0]'));
-    expect(section.indexOf('### Changed')).toBeLessThan(section.indexOf('### Added'));
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.4.0]'));
+    // This release carries no unattended-install warning the way 1.3.1 did, so the section
+    // keeps the plain Added, then Changed, then Fixed order instead of leading with Changed.
+    const section = changelog.slice(changelog.indexOf('## [1.4.0]'), changelog.indexOf('## [1.3.1]'));
+    expect(section.indexOf('### Added')).toBeLessThan(section.indexOf('### Changed'));
   });
 
   it('MUST-8.3 / MUST-18.5: the docs name the third egress exception and the two new variables', () => {
