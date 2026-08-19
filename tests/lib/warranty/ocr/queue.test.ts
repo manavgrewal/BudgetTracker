@@ -313,7 +313,7 @@ describe('queue never strands a job (IMPORTANT 3 fix report — Ruling P15 revis
 describe('Ruling P5 — timeout terminates and recreates the worker (MUST-7.11)', () => {
   it('terminates the cached worker when a job blows past OCR_TIMEOUT_MS, and still drains the queue', async () => {
     vi.useFakeTimers();
-    const terminateSpy = vi.spyOn(engineModule, 'terminateOcrWorker').mockResolvedValue(undefined);
+    const terminateSpy = vi.spyOn(engineModule, 'releaseOcrEngine').mockResolvedValue(undefined);
 
     // The hung job never resolves on its own — only a timeout can end it.
     setOcrEngineForTests({ recognize: () => new Promise(() => {}) });

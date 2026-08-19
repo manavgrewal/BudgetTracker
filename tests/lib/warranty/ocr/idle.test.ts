@@ -1,10 +1,18 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { setSetting } from '@/lib/settings';
+import {
+  SETTING_OCR_ENGINE,
+  SETTING_OCR_ENGINE_PROBED_VERSION,
+  probeCacheKey,
+  resetOcrProbeForTests,
+} from '@/lib/warranty/ocr/onnx/probe';
+import { createSeededTestDb, type TestDb } from '../../../helpers/db';
 import {
   OCR_IDLE_TERMINATE_MS,
   getOcrEngine,
+  releaseOcrEngine,
   setOcrEngineForTests,
   setOcrWorkerForTests,
-  terminateOcrWorker,
   type TesseractWorkerLike,
 } from '@/lib/warranty/ocr/engine';
 
@@ -17,11 +25,27 @@ import {
  * so getWorker()'s cache-hit path is taken and createWorker()/real tesseract.js/WASM are
  * never invoked (MUST-7.17).
  */
+let current: TestDb | null = null;
+
+beforeEach(() => {
+  current = createSeededTestDb();
+  resetOcrProbeForTests();
+  // The selector asks resolveOcrEngineKind() before it touches an engine. Seeding a
+  // verdict that matches this build's cache key is what keeps this file about the idle
+  // timer instead of about the probe: no child is spawned, and the fake worker below is
+  // what actually runs.
+  setSetting(SETTING_OCR_ENGINE, 'tesseract');
+  setSetting(SETTING_OCR_ENGINE_PROBED_VERSION, probeCacheKey());
+});
+
 afterEach(async () => {
   vi.useRealTimers();
-  await terminateOcrWorker();
+  await releaseOcrEngine();
   setOcrWorkerForTests(null);
   setOcrEngineForTests(null);
+  resetOcrProbeForTests();
+  current?.cleanup();
+  current = null;
 });
 
 describe('idle-terminate timer does not fire on a worker a job is actively using', () => {
@@ -80,5 +104,16 @@ describe('idle-terminate timer does not fire on a worker a job is actively using
     await getOcrEngine().recognize('/tmp/a.jpg', 'image/jpeg');
     await vi.advanceTimersByTimeAsync(OCR_IDLE_TERMINATE_MS + 1000);
     expect(terminate).toHaveBeenCalledTimes(1);
+  });
+
+  it('routes to the tesseract worker when that is the cached verdict, without spawning a probe', async () => {
+    setOcrEngineForTests(null);
+    const fake: TesseractWorkerLike = {
+      recognize: async () => ({ data: { text: 'from the fallback' } }),
+      terminate: async () => {},
+    };
+    setOcrWorkerForTests(fake);
+    const result = await getOcrEngine().recognize('/tmp/a.jpg', 'image/jpeg');
+    expect(result.text).toBe('from the fallback');
   });
 });

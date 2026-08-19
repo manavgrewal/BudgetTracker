@@ -8,7 +8,7 @@ import path from 'node:path';
  * forbids any test loading real WASM or reading eng.traineddata.
  */
 describe('tesseract worker construction', () => {
-  const source = fs.readFileSync(path.join(process.cwd(), 'src/lib/warranty/ocr/engine.ts'), 'utf8');
+  const source = fs.readFileSync(path.join(process.cwd(), 'src/lib/warranty/ocr/tesseract.ts'), 'utf8');
   const call = source.slice(source.indexOf('createWorker('), source.indexOf('as unknown as TesseractWorkerLike'));
 
   it.each(['workerPath', 'corePath', 'langPath', 'cachePath'])('passes %s', (option) => {

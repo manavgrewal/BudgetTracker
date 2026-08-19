@@ -9,7 +9,7 @@ import {
   OCR_TIMEOUT_MS,
   TRUNCATION_NOTE,
   getOcrEngine,
-  terminateOcrWorker,
+  releaseOcrEngine,
   truncateOcrText,
   type OcrEngine,
   type OcrResult,
@@ -138,7 +138,7 @@ async function recognizeWithTimeout(filePath: string, mime: Parameters<OcrEngine
   } finally {
     if (timer) clearTimeout(timer);
     if (timedOut) {
-      await terminateOcrWorker().catch((error) => {
+      await releaseOcrEngine().catch((error) => {
         console.warn('[ocr] worker terminate after timeout failed', error);
       });
     }
