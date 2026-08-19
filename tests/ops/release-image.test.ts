@@ -40,11 +40,11 @@ describe('.github/workflows/release-image.yml', () => {
     expect(onBlock).not.toMatch(/branches:/);
   });
 
-  it('declares packages: write and contents: read at the workflow level', () => {
+  it('declares packages: write and contents: write at the workflow level (the release step needs contents: write)', () => {
     const beforeJobs = workflow.slice(0, workflow.indexOf('\njobs:'));
     expect(beforeJobs).toMatch(/^permissions:\s*$/m);
     const permissionsBlock = beforeJobs.slice(beforeJobs.indexOf('permissions:'));
-    expect(permissionsBlock).toMatch(/contents:\s*read/);
+    expect(permissionsBlock).toMatch(/contents:\s*write/);
     expect(permissionsBlock).toMatch(/packages:\s*write/);
   });
 

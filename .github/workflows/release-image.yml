@@ -19,7 +19,9 @@ on:
 
 # GITHUB_TOKEN needs to push to GHCR; nothing else in this workflow needs write access.
 permissions:
-  contents: read
+  # contents: write (not read) because the last step publishes the GitHub release the
+  # app's update check reads; packages: write pushes the image to GHCR.
+  contents: write
   packages: write
 
 jobs:
@@ -122,3 +124,29 @@ jobs:
             ${{ env.IMAGE_NAME }}:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # The app's own update check reads api.github.com/repos/OWNER/REPO/releases/latest, and
+      # a git tag is NOT a release: without this step that endpoint 404s and every install
+      # reports "GitHub returned 404" no matter how many tags exist. Shipped v1.4.0 with tags
+      # only and hit exactly that. Notes come from the tag's CHANGELOG section so the release
+      # body and the file agree. Skipped on workflow_dispatch, which has no tag to publish.
+      - name: Publish the GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: |
+          set -euo pipefail
+          awk -v v="## [${VERSION}]" '
+            index($0, v) == 1 {found = 1; next}
+            found && /^## \[/ {exit}
+            found {print}
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "No CHANGELOG section found for ${VERSION}; refusing to publish an empty release." >&2
+            exit 1
+          fi
+          gh release create "v${VERSION}" \
+            --title "v${VERSION}" \
+            --notes-file release-notes.md \
+            --verify-tag
