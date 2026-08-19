@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { getSetting, setSetting } from '@/lib/settings';
 import { APP_VERSION } from '@/lib/version';
-import { OCR_PROBE_OK_LINE } from '@/lib/warranty/ocr/onnx/constants';
+import { OCR_PROBE_DETAIL_MAX_CHARS, OCR_PROBE_OK_LINE } from '@/lib/warranty/ocr/onnx/constants';
 import {
   SETTING_OCR_ENGINE,
   SETTING_OCR_ENGINE_PROBED_VERSION,
@@ -68,6 +68,14 @@ describe('the cache (MUST-5.6, MUST-5.10, MUST-12.5)', () => {
     expect(await resolveOcrEngineKind()).toBe('onnx');
     expect(getSetting(SETTING_OCR_ENGINE_PROBED_VERSION)).toBe(`${APP_VERSION}/${process.arch}`);
   });
+
+  it('re-probes when the cached engine value is corrupt or unrecognized, rather than trusting it', async () => {
+    fakeScript('ok.mjs', `console.log('${OCR_PROBE_OK_LINE}');`);
+    setSetting(SETTING_OCR_ENGINE, 'not-a-real-engine-kind');
+    setSetting(SETTING_OCR_ENGINE_PROBED_VERSION, probeCacheKey());
+    expect(await resolveOcrEngineKind()).toBe('onnx');
+    expect(getSetting(SETTING_OCR_ENGINE)).toBe('onnx');
+  });
 });
 
 describe('MUST-5.8: the verdict table, every row', () => {
@@ -84,22 +92,35 @@ describe('MUST-5.8: the verdict table, every row', () => {
     expect(readOcrEngineState().detail).toBe('probe exited cleanly without confirming');
   });
 
-  it('a killing signal gives tesseract and names the signal, and does not take the code === 0 branch', async () => {
-    // Self-directed process.kill with a POSIX-only signal name throws ENOSYS on Windows
-    // (matches the guard in tests/lib/env.test.ts): there is no real signal to raise on
-    // this dev platform, so the scenario is only exercisable on the Linux deployment target.
-    if (process.platform === 'win32') return;
-    fakeScript('sigill.mjs', `console.log('${OCR_PROBE_OK_LINE}');\nprocess.kill(process.pid, 'SIGILL');\nawait new Promise(() => {});`);
-    expect(await resolveOcrEngineKind()).toBe('tesseract');
-    expect(readOcrEngineState().detail).toMatch(/killed by SIG/);
-  });
+  // Self-directed process.kill with a POSIX-only signal name throws ENOSYS on Windows
+  // (matches the guard in tests/lib/env.test.ts): there is no real signal to raise on this
+  // dev platform, so this scenario is only exercisable on the Linux deployment target here.
+  // skipIf reports a skip rather than a silent pass, so coverage is never overstated.
+  // The signal branch itself is exercised on every platform by probe-mocked-child.test.ts.
+  it.skipIf(process.platform === 'win32')(
+    'a killing signal gives tesseract and names the signal, and does not take the code === 0 branch',
+    async () => {
+      fakeScript('sigill.mjs', `console.log('${OCR_PROBE_OK_LINE}');\nprocess.kill(process.pid, 'SIGILL');\nawait new Promise(() => {});`);
+      expect(await resolveOcrEngineKind()).toBe('tesseract');
+      expect(readOcrEngineState().detail).toMatch(/killed by SIG/);
+    },
+  );
 
   it('a nonzero exit gives tesseract with the first 200 characters of stderr, newlines collapsed', async () => {
     fakeScript('boom.mjs', "console.error('line one\\nline two');\nprocess.exit(3);");
     expect(await resolveOcrEngineKind()).toBe('tesseract');
     const detail = readOcrEngineState().detail ?? '';
     expect(detail).toBe('line one line two');
-    expect(detail.length).toBeLessThanOrEqual(200);
+    expect(detail.length).toBeLessThanOrEqual(OCR_PROBE_DETAIL_MAX_CHARS);
+  });
+
+  it('truncates stderr to exactly OCR_PROBE_DETAIL_MAX_CHARS, so a multi-megabyte stack trace cannot land whole in a settings row', async () => {
+    const long = 'x'.repeat(OCR_PROBE_DETAIL_MAX_CHARS + 500);
+    fakeScript('longboom.mjs', `console.error(${JSON.stringify(long)});\nprocess.exit(3);`);
+    expect(await resolveOcrEngineKind()).toBe('tesseract');
+    const detail = readOcrEngineState().detail ?? '';
+    expect(detail).toBe('x'.repeat(OCR_PROBE_DETAIL_MAX_CHARS));
+    expect(detail.length).toBe(OCR_PROBE_DETAIL_MAX_CHARS);
   });
 
   it('a spawn error gives tesseract and names the code', async () => {

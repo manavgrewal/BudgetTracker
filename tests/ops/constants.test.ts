@@ -64,6 +64,7 @@ const TABLE: Record<string, number | string | boolean | readonly number[]> = {
   ORT_GRAPH_OPT: 'all',
   ORT_LOG_SEVERITY: 3,
   ORT_CPU_MEM_ARENA: false,
+  OCR_PROBE_DETAIL_MAX_CHARS: 200,
 };
 
 /** 0, 1, 2 and 3 are excluded: they are array indices and channel counts everywhere. */

@@ -100,7 +100,9 @@ function runProbe(): Promise<Outcome> {
 
     const timer = setTimeout(() => {
       child.kill('SIGKILL');
-      finish({ kind: 'tesseract', detail: 'probe timed out after 60 seconds' });
+      // Derived from the constant rather than written as its own literal, so the reason
+      // recorded on the Settings surface cannot drift from the value actually enforced.
+      finish({ kind: 'tesseract', detail: `probe timed out after ${OCR_PROBE_TIMEOUT_MS} ms` });
     }, OCR_PROBE_TIMEOUT_MS);
     timer.unref?.();
 

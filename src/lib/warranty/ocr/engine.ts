@@ -62,10 +62,21 @@ export async function releaseOcrEngine(): Promise<void> {
     idleTimer = null;
   }
   if (onnxTouched) {
-    const { releaseOnnxOcrSessions } = await import('@/lib/warranty/ocr/onnx/session');
-    await releaseOnnxOcrSessions();
+    try {
+      const { releaseOnnxOcrSessions } = await import('@/lib/warranty/ocr/onnx/session');
+      await releaseOnnxOcrSessions();
+    } catch (error) {
+      // Independent of the tesseract release below: a rejection here must not skip it.
+      // Called from `void releaseOcrEngine()` by the idle timer, an unhandled rejection
+      // here would also take the whole process down.
+      console.warn('[ocr] onnx session release failed', error);
+    }
   }
-  await releaseTesseractWorker();
+  try {
+    await releaseTesseractWorker();
+  } catch (error) {
+    console.warn('[ocr] tesseract worker release failed', error);
+  }
 }
 
 const defaultEngine: OcrEngine = {
@@ -91,8 +102,10 @@ const defaultEngine: OcrEngine = {
       if (kind === 'onnx') {
         // Dynamic, so the ONNX tree is never evaluated on an install the probe rejected,
         // and so engine.ts and onnx/models.ts do not form an import cycle.
-        onnxTouched = true;
         const { onnxOcrEngine } = await import('@/lib/warranty/ocr/onnx/engine');
+        // Set only after the import resolves: a rejected import must not arm
+        // releaseOcrEngine()'s ONNX release path for a tree that was never actually loaded.
+        onnxTouched = true;
         return await onnxOcrEngine.recognize(filePath, mime);
       }
       return { text: await recognizeWithTesseract(filePath) };

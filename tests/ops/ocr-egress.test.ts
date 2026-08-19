@@ -22,9 +22,20 @@ function stripComments(source: string): string {
 const files = TREES.flatMap(walk);
 const sources = new Map(files.map((file) => [file, stripComments(fs.readFileSync(path.join(ROOT, file), 'utf8'))]));
 
+// src/lib/scanner does not exist yet (a later task). A single floor over both trees'
+// combined file count would stay green even with a completely empty (or missing) scanner
+// tree, as long as the OCR tree alone cleared it — silently vacuous for that half forever.
+// Each tree gets its own floor instead, and the scanner one is skipped, not silently passed,
+// until the directory exists, so it cannot stay vacuous once that task lands.
+const scannerExists = fs.existsSync(path.join(ROOT, 'src/lib/scanner'));
+
 describe('MUST-11.6 / AC3: the OCR and scanner trees make no outbound call', () => {
-  it('has at least one file to scan, so a rename cannot make this suite vacuous', () => {
-    expect(files.length).toBeGreaterThan(10);
+  it('has at least one file to scan in src/lib/warranty/ocr, so a rename cannot make this suite vacuous', () => {
+    expect(walk('src/lib/warranty/ocr').length).toBeGreaterThan(10);
+  });
+
+  it.skipIf(!scannerExists)('has at least one file to scan in src/lib/scanner now that the tree exists', () => {
+    expect(walk('src/lib/scanner').length).toBeGreaterThan(0);
   });
 
   it('contains no fetch( call site at all', () => {
