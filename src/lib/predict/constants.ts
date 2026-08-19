@@ -29,6 +29,7 @@ export const PACE_MIN_DAY_OF_MONTH = 7;
 
 // The pace notification (spec section 9.2)
 export const PACE_OVERSHOOT_MIN_PCT = 110; // projected must reach 110% of the limit
+export const PACE_MAX_PER_EVALUATION = 5; // same cap shape as the three anomaly detectors below
 
 // Unusual transaction (spec section 9.3)
 export const UNUSUAL_MULTIPLE = 3;

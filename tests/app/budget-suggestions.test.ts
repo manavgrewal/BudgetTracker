@@ -253,3 +253,88 @@ describe('cheap test additions from the Task 5 review', () => {
     expect(resolveBudget('personal', bob, groceries, TARGET)).toBeNull();
   });
 });
+
+/**
+ * MUST-6.6 (final-fix-wave item 1, HIGH): apply-all and apply-one may only ever act against the
+ * CURRENT month. src/lib/predict/window.ts:19-23 clips the history window only at the bottom,
+ * so for a FUTURE target month the six-month window includes the current, partial month —
+ * exactly the client must not choose the inputs to the computation discipline MUST-7.4 already
+ * applies to the amount. Both actions now reject any month key that is not the real current
+ * month, checked immediately after the zod parses, before either action's own permission or
+ * suggestion logic runs.
+ */
+describe('MUST-6.6: only the current month can be suggested against', () => {
+  const NEXT = '2026-09';
+  const PAST = '2026-07';
+
+  it('applySuggestionAction refuses a next-month key and writes nothing', async () => {
+    const { db, flatSix } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    flatSix(groceries, 60000);
+
+    const state = await applySuggestionAction(
+      {},
+      formData({ scope: 'household', userId: '', month: NEXT, categoryId: String(groceries) }),
+    );
+    expect(state.error).toBe('Suggestions are only available for the current month.');
+    expect(resolveBudget('household', null, groceries, NEXT)).toBeNull();
+  });
+
+  it('applySuggestionAction refuses a past-month key and writes nothing', async () => {
+    const { db, flatSix } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    flatSix(groceries, 60000);
+
+    const state = await applySuggestionAction(
+      {},
+      formData({ scope: 'household', userId: '', month: PAST, categoryId: String(groceries) }),
+    );
+    expect(state.error).toBe('Suggestions are only available for the current month.');
+    expect(resolveBudget('household', null, groceries, PAST)).toBeNull();
+  });
+
+  it('applySuggestionAction still works for the current month', async () => {
+    const { db, flatSix } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    flatSix(groceries, 60000);
+
+    const state = await applySuggestionAction(
+      {},
+      formData({ scope: 'household', userId: '', month: TARGET, categoryId: String(groceries) }),
+    );
+    expect(state.error).toBeUndefined();
+    expect(resolveBudget('household', null, groceries, TARGET)).toBe(60000);
+  });
+
+  it('applyAllSuggestionsAction refuses a next-month key and writes nothing', async () => {
+    const { db, flatSix } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    flatSix(groceries, 60000);
+
+    const state = await applyAllSuggestionsAction({}, formData({ scope: 'household', userId: '', month: NEXT }));
+    expect(state.error).toBe('Suggestions are only available for the current month.');
+    expect(resolveBudget('household', null, groceries, NEXT)).toBeNull();
+  });
+
+  it('applyAllSuggestionsAction refuses a past-month key and writes nothing', async () => {
+    const { db, flatSix } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    flatSix(groceries, 60000);
+
+    const state = await applyAllSuggestionsAction({}, formData({ scope: 'household', userId: '', month: PAST }));
+    expect(state.error).toBe('Suggestions are only available for the current month.');
+    expect(resolveBudget('household', null, groceries, PAST)).toBeNull();
+  });
+
+  it('applyAllSuggestionsAction still works for the current month', async () => {
+    const { db, flatSix } = setup();
+    const groceries = categoryIdByName(db, 'Groceries');
+    flatSix(groceries, 60000);
+
+    const state = await applyAllSuggestionsAction({}, formData({ scope: 'household', userId: '', month: TARGET }));
+    // Groceries and its rolled-up parent Food are the two rows with a suggestion (same shape
+    // as the other apply-all tests above that flatSix a single leaf category).
+    expect(state.message).toBe('Set 2 budgets from suggestions. Skipped 0 categories that already had a limit.');
+    expect(resolveBudget('household', null, groceries, TARGET)).toBe(60000);
+  });
+});

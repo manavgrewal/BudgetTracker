@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { RANGE_PRESETS, isRangePresetId, rangeParams, resolveRange, type RangePresetId } from '@/lib/date-range';
+import { RANGE_CEILING_DATE, RANGE_FLOOR_DATE, RANGE_PRESETS, isRangePresetId, rangeParams, resolveRange, type RangePresetId } from '@/lib/date-range';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const at = (today: string, preset: string) => resolveRange({ preset, from: null, to: null, today, fallback: null });
@@ -136,17 +136,37 @@ describe('MUST-11.5: custom validation', () => {
     ).toMatchObject({ preset: 'custom', from: '2026-01-01', to: '2026-03-31' });
   });
 
-  it('with no fallback, fills a missing "to" with the current month end and a missing "from" with the floor', () => {
+  it('L-9: with no fallback, fills a missing "to" with a far-future sentinel and a missing "from" with the floor, symmetrically', () => {
+    // A v1.3.1 bookmark like /transactions?from=2026-01-01 meant "everything from that date
+    // on". Filling the missing `to` with the current month end (the old behaviour) silently
+    // hid anything dated after the current month; the far-future sentinel keeps the one-sided
+    // meaning intact, the same way RANGE_FLOOR_DATE already does for a `to`-only bookmark.
     expect(resolveRange({ preset: null, from: '2026-01-01', to: null, today: '2026-08-18', fallback: null })).toMatchObject({
       preset: 'custom',
       from: '2026-01-01',
-      to: '2026-08-31',
+      to: RANGE_CEILING_DATE,
     });
     expect(resolveRange({ preset: null, from: null, to: '2026-03-31', today: '2026-08-18', fallback: null })).toMatchObject({
       preset: 'custom',
-      from: '1900-01-01',
+      from: RANGE_FLOOR_DATE,
       to: '2026-03-31',
     });
+  });
+
+  it('L-9: the from-only round trip survives rangeParams and a second resolveRange unchanged', () => {
+    const first = resolveRange({ preset: null, from: '2026-01-01', to: null, today: '2026-08-18', fallback: null });
+    const params = rangeParams(first);
+    const second = resolveRange({
+      preset: params.range ?? null,
+      from: params.from ?? null,
+      to: params.to ?? null,
+      today: '2026-08-18',
+      fallback: null,
+    });
+    expect(second).toEqual(first);
+    // A transaction dated well after "today" still falls inside the resolved range, which is
+    // the whole point: a from-only bookmark must not silently exclude future-dated rows.
+    expect(first!.to >= '2099-01-01').toBe(true);
   });
 });
 

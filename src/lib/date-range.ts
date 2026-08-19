@@ -37,6 +37,15 @@ export const RANGE_PRESETS: readonly { id: RangePresetId; label: string }[] = [
  */
 export const RANGE_FLOOR_DATE = '1900-01-01';
 
+/**
+ * L-9: the symmetric upper bound, used when a URL carries a `from` and no `to` and there is no
+ * fallback preset to borrow one from. It keeps a one-sided bookmark meaning "everything from
+ * that date on", which is what it meant in v1.3.1. Filling this gap with the current month's
+ * end instead (as the code did before this fix) silently hid anything dated after the current
+ * month, which is not what a v1.3.1 `?from=...` bookmark meant.
+ */
+export const RANGE_CEILING_DATE = '2999-12-31';
+
 export function isRangePresetId(value: string): value is RangePresetId {
   return RANGE_PRESETS.some((preset) => preset.id === value);
 }
@@ -119,7 +128,7 @@ export function resolveRange(input: {
     }
     const filler =
       input.fallback === null || input.fallback === 'custom'
-        ? { from: RANGE_FLOOR_DATE, to: monthEnd(monthOf(input.today)) }
+        ? { from: RANGE_FLOOR_DATE, to: RANGE_CEILING_DATE }
         : endpointsOf(input.fallback, input.today);
     return customRange(from ?? filler.from, to ?? filler.to);
   }

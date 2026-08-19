@@ -6,7 +6,8 @@ import { z } from 'zod';
 import { isSameOrigin } from '@/lib/auth/csrf';
 import { requireUser } from '@/lib/auth/session';
 import { clearBudget, copyBudgetsFromPreviousMonth, resolveBudget, upsertBudget, type BudgetScope } from '@/lib/budgets';
-import { isMonthKey } from '@/lib/dates';
+import { currentMonth, isMonthKey } from '@/lib/dates';
+import { readEnv } from '@/lib/env';
 import { formatCents, parseAmountToCents } from '@/lib/money';
 import { suggestionsFor } from '@/lib/predict/history';
 
@@ -17,6 +18,7 @@ export interface BudgetActionState {
 
 const CROSS_ORIGIN_ERROR = 'Cross-origin request rejected';
 const STALE_SUGGESTION_ERROR = 'That suggestion is no longer available. Reload the page.';
+const NOT_CURRENT_MONTH_ERROR = 'Suggestions are only available for the current month.';
 
 const scopeSchema = z.enum(['household', 'personal']);
 const monthSchema = z.string().refine(isMonthKey, { message: 'Month must be YYYY-MM.' });
@@ -94,6 +96,15 @@ export async function applySuggestionAction(_prev: BudgetActionState, formData: 
     return { error: 'Invalid request.' };
   }
 
+  // MUST-6.6: this release only ever suggests against the current month. A month key is a
+  // client-supplied input like any other, and MUST-7.4's discipline against a client choosing
+  // the AMOUNT applies just as much to a client choosing which month's window computes it: a
+  // future month's window pulls in the current, partial month (see historyMonths), and a past
+  // month is a suggestion nobody asked to apply retroactively.
+  if (month.data !== currentMonth(new Date(), readEnv().tz)) {
+    return { error: NOT_CURRENT_MONTH_ERROR };
+  }
+
   // MUST-7.6: setLimitAction's rule, verbatim.
   const userId = scope.data === 'personal' ? (rawUserId.data === '' ? user.id : Number(rawUserId.data)) : null;
   if (scope.data === 'personal' && userId !== user.id && user.role !== 'admin') {
@@ -129,6 +140,11 @@ export async function applyAllSuggestionsAction(_prev: BudgetActionState, formDa
   const month = monthSchema.safeParse(String(formData.get('month') ?? ''));
   const rawUserId = userIdField.safeParse(String(formData.get('userId') ?? ''));
   if (!scope.success || !month.success || !rawUserId.success) return { error: 'Invalid request.' };
+
+  // MUST-6.6: the same current-month-only rule as applySuggestionAction, verbatim.
+  if (month.data !== currentMonth(new Date(), readEnv().tz)) {
+    return { error: NOT_CURRENT_MONTH_ERROR };
+  }
 
   const userId = scope.data === 'personal' ? (rawUserId.data === '' ? user.id : Number(rawUserId.data)) : null;
   if (scope.data === 'personal' && userId !== user.id && user.role !== 'admin') {

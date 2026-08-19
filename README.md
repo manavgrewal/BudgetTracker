@@ -138,21 +138,21 @@ after an admin uses **Reset password**. Two-factor authentication stays optional
 
 ## 3. Use it
 
-1. **Settings → Users** — add the rest of the household.
-2. **Settings → Bank accounts** — add one account per bank account you import from (name,
+1. **Settings → Users**, add the rest of the household.
+2. **Settings → Bank accounts**, add one account per bank account you import from (name,
    institution, type, and whether it is joint or belongs to one person). The first-run wizard
    offers this too. Accounts are deactivated, never deleted.
-3. **Import** — pick an account, upload a CSV, check the preview, adjust the column
+3. **Import**, pick an account, upload a CSV, check the preview, adjust the column
    mapping if the bank's layout differs, then commit. Editing a built-in profile automatically
    saves a private copy for that account; the shared preset is never modified.
-4. **Review** — accept or fix the app's guesses. Every confirmation teaches it: it creates a rule
+4. **Review**, accept or fix the app's guesses. Every confirmation teaches it: it creates a rule
    for that merchant and updates the classifier.
 5. **Budgets**, set monthly limits per category, at household level and per person. A limit you
    set in March applies to March and every month after it until you change it again. Categories
    with three or more full months of history also show a suggested amount you can apply with one
    press, and from the seventh of the month each budgeted category shows where the month is
    heading.
-6. **Goals** — log money you set aside and watch the pace projection.
+6. **Goals**, log money you set aside and watch the pace projection.
 7. **Reports**, category breakdowns, month-over-month trends, who-spent-what, category
    baselines, CSV export. Pick a date range from the presets or set your own.
 

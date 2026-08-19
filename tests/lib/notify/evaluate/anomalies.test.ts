@@ -7,6 +7,7 @@ import * as outboxModule from '@/lib/notify/outbox';
 import { resetOutboxPumpForTests } from '@/lib/notify/outbox';
 import { resetNotifySenderForTests, setNotifySenderForTests } from '@/lib/notify/send';
 import { evaluateAnomalies, evaluateSubscriptionCreep, resetAnomalyFingerprintForTests } from '@/lib/notify/evaluate/anomalies';
+import { runScheduledEvaluation, resetSlotSkipLogForTests, resetDailyEvaluationSlotForTests } from '@/lib/notify/evaluate';
 
 let t: TestDb;
 let accountId: number;
@@ -172,6 +173,82 @@ describe('MUST-9.10: unusual_transaction end to end', () => {
       user_id: number;
     }[];
     expect(rows.map((row) => row.user_id).sort()).toEqual([sam, alex].sort());
+  });
+});
+
+/**
+ * R2 (final-fix-wave item 5): the risk table's mitigation named the 60-day household-history
+ * floor as what holds a first big import back, but that floor measures min(transactions.date)
+ * to today, and a 12-month import spans 365 days the moment it lands, so it clears the floor on
+ * the very first tick. The promised test ("drives a 12-month import into a fresh install and
+ * asserts zero messages") never existed. This is that test, written honestly: it does not
+ * assert zero, it asserts the ACTUAL count, which is what UNUSUAL_MAX_PER_EVALUATION,
+ * CREEP_MAX_PER_EVALUATION and DUPLICATE_MAX_PER_EVALUATION actually hold it to.
+ */
+describe('R2 (final-fix-wave item 5): a 12-month import into a fresh install is capped, not silenced', () => {
+  it('the first tick and the first daily slot together produce the real, capped message count', () => {
+    emailUser();
+    resetSlotSkipLogForTests();
+    resetDailyEvaluationSlotForTests();
+
+    // runScheduledEvaluation reads its tz from readEnv(), which resolves to the test
+    // environment's TZ (America/Toronto, EDT/UTC-4 in August), not this file's own UTC
+    // constant. 13:00 UTC is 09:00 local Wednesday: inside the daily catch-up window
+    // (dailyHour defaults to 8) so budget_pace/subscription_creep/monthBoundary all run, but
+    // outside the weekly one (digestWeekday defaults to Monday, and hoursSince here is 49
+    // against a 48h window), so the weekly digest's own message does not add uncertainty to
+    // the count. The calendar date is 2026-08-19 in both UTC and Toronto at this instant, so
+    // the transaction dates below (anchored to this file's UTC `today`) line up with what the
+    // evaluators compute as "today" too.
+    const importNow = new Date('2026-08-19T13:00:00Z');
+    const today = todayIso(importNow, TZ);
+
+    // 8 merchants, each with a $40.00 baseline (5 charges, 150 to 350 days old, 50 days apart
+    // so the gap never reads as a monthly rhythm) and one $150.00 charge in the last two
+    // weeks: 8 unusual_transaction candidates, more than that detector's 5-per-evaluation cap.
+    for (let i = 1; i <= 8; i += 1) {
+      const merchant = `IMPORT SHOP ${i}`;
+      for (const offset of [350, 300, 250, 200, 150]) {
+        charge({ merchant, cents: 4000, date: addDaysIso(today, -offset) });
+      }
+      charge({ merchant, cents: 15000, date: addDaysIso(today, -(1 + i)) });
+    }
+
+    // 8 recurring merchants, three monthly charges at $15.00 then a fourth, recent one at
+    // $17.00 (a 13 percent, $2.00 rise): 8 subscription_creep candidates, again more than that
+    // detector's cap. Both amounts sit under unusual_transaction's $50 floor, and no amount
+    // repeats within 3 days of itself, so these never cross into the other two detectors.
+    for (let i = 1; i <= 8; i += 1) {
+      const merchant = `IMPORT SUB ${i}`;
+      for (const offset of [100, 70, 40]) {
+        charge({ merchant, cents: 1500, date: addDaysIso(today, -offset) });
+      }
+      charge({ merchant, cents: 1700, date: addDaysIso(today, -(4 + i)) });
+    }
+
+    // 3 merchants charged twice at an identical $25.00 a day apart, in the last two weeks: 3
+    // duplicate_charge candidates, under that detector's cap so all 3 are expected to fire.
+    // $25.00 is also under unusual_transaction's floor and these merchants carry no other
+    // history, so creepVerdict's 4-charge minimum is never met either.
+    for (let i = 1; i <= 3; i += 1) {
+      const merchant = `IMPORT DUPE ${i}`;
+      charge({ merchant, cents: 2500, date: addDaysIso(today, -3) });
+      charge({ merchant, cents: 2500, date: addDaysIso(today, -2) });
+    }
+
+    expect((t.sqlite.prepare('select count(*) as n from notification_outbox').get() as { n: number }).n).toBe(0);
+
+    runScheduledEvaluation(importNow);
+
+    const total = (t.sqlite.prepare('select count(*) as n from notification_outbox').get() as { n: number }).n;
+    // The real figure: 5 unusual (of 8 candidates, capped) + 5 creep (of 8, capped) + 3
+    // duplicate (of 3, under its cap) = 13. Comfortably inside the "roughly 10 to 15" the
+    // fix-wave review accepted as documented behaviour from these three caps acting together,
+    // and nowhere near either the zero the spec wrongly promised or the "dozens" R2 warns
+    // about with the caps removed.
+    expect(total).toBe(13);
+    expect(total).toBeGreaterThan(0);
+    expect(total).toBeLessThanOrEqual(15);
   });
 });
 

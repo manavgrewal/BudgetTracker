@@ -26,6 +26,23 @@ export function resetSlotSkipLogForTests(): void {
   lastLoggedSlot = new Map();
 }
 
+/**
+ * MUST-10.9 (final-fix-wave item 4): mirrors digestAlreadySent's purpose for the three newer
+ * daily-slot evaluators (evaluateBudgetPace, evaluateSubscriptionCreep, evaluateMonthBoundary).
+ * `daily.fires` stays true for the whole DAILY_MAX_CATCHUP_HOURS (12h) window and the scheduler
+ * ticks every 5 minutes, so without this an unchanged tick recomputed all three roughly 144
+ * times a day per user. Each detector's own dedup key already makes a repeat enqueue a no-op;
+ * this in-memory per-user record of the last daily slotDate actually processed skips the
+ * recompute itself before any query runs, the same way lastAnomalyKey does for the tick-cadence
+ * detectors. A restart clears it, costing at most one wasted evaluation per user, which is
+ * dedup-safe for the same reason.
+ */
+let lastDailyEvaluatedSlot = new Map<number, string>();
+
+export function resetDailyEvaluationSlotForTests(): void {
+  lastDailyEvaluatedSlot = new Map();
+}
+
 function logSlotSkipOnce(kind: 'daily' | 'weekly', userId: number, slotDate: string, hoursSince: number): void {
   const key = `${kind}:${userId}`;
   if (lastLoggedSlot.get(key) === slotDate) return;
@@ -79,9 +96,16 @@ export function runScheduledEvaluation(now: Date = new Date()): void {
       if (daily.fires) {
         evaluateComingDue({ userId: user.id, now, tz });
         evaluateStaleImport({ userId: user.id, now, tz });
-        evaluateBudgetPace({ userId: user.id, now, tz });
-        evaluateSubscriptionCreep({ userId: user.id, now, tz });
-        evaluateMonthBoundary({ userId: user.id, now, tz });
+        // MUST-10.9: skip the three newer evaluators once this daily slot has already been
+        // processed, rather than recomputing them on every 5-minute tick inside the 12-hour
+        // catch-up window. Recorded only after all three return without throwing, so a
+        // transient failure retries on the next tick instead of being silently skipped.
+        if (lastDailyEvaluatedSlot.get(user.id) !== daily.slotDate) {
+          evaluateBudgetPace({ userId: user.id, now, tz });
+          evaluateSubscriptionCreep({ userId: user.id, now, tz });
+          evaluateMonthBoundary({ userId: user.id, now, tz });
+          lastDailyEvaluatedSlot.set(user.id, daily.slotDate);
+        }
       } else {
         logSlotSkipOnce('daily', user.id, daily.slotDate, daily.hoursSince);
       }

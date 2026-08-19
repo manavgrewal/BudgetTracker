@@ -4,8 +4,11 @@ import { createTestDb, insertTestUser, type TestDb } from '../../../helpers/db';
 import { nowIso } from '@/lib/clock';
 import { weeklyDigestKey } from '@/lib/notify/events';
 import * as digestModule from '@/lib/notify/evaluate/digest';
-import { runScheduledEvaluation, resetSlotSkipLogForTests } from '@/lib/notify/evaluate';
+import { runScheduledEvaluation, resetSlotSkipLogForTests, resetDailyEvaluationSlotForTests } from '@/lib/notify/evaluate';
 import { resetAnomalyFingerprintForTests } from '@/lib/notify/evaluate/anomalies';
+import * as paceModule from '@/lib/notify/evaluate/pace';
+import * as anomaliesModule from '@/lib/notify/evaluate/anomalies';
+import * as monthlyModule from '@/lib/notify/evaluate/monthly';
 
 let t: TestDb;
 const originalTz = process.env.TZ;
@@ -15,12 +18,14 @@ beforeEach(() => {
   process.env.TZ = 'UTC';
   resetSlotSkipLogForTests();
   resetAnomalyFingerprintForTests();
+  resetDailyEvaluationSlotForTests();
 });
 
 afterEach(() => {
   process.env.TZ = originalTz;
   resetSlotSkipLogForTests();
   resetAnomalyFingerprintForTests();
+  resetDailyEvaluationSlotForTests();
   t.cleanup();
 });
 
@@ -44,6 +49,33 @@ describe('slot-skip logging is deduped by (kind, userId, slotDate)', () => {
       expect(dailyLines()[1][0]).toContain('2026-08-18');
     } finally {
       logSpy.mockRestore();
+    }
+  });
+});
+
+describe('MUST-10.9 (final-fix-wave item 4): the three newer daily evaluators run once per slot, not once per tick', () => {
+  it('two ticks inside the same daily window run them once, and a new slot date runs them again', () => {
+    insertTestUser(t.db);
+    // dailyHour defaults to 8; 09:00 UTC on the 17th and 09:05 UTC on the 17th are both inside
+    // the same daily slot (slotDate '2026-08-17'). 09:00 on the 18th is the next day's slot.
+    const paceSpy = vi.spyOn(paceModule, 'evaluateBudgetPace').mockReturnValue(0);
+    const creepSpy = vi.spyOn(anomaliesModule, 'evaluateSubscriptionCreep').mockReturnValue(0);
+    const monthlySpy = vi.spyOn(monthlyModule, 'evaluateMonthBoundary').mockReturnValue(0);
+    try {
+      runScheduledEvaluation(new Date('2026-08-17T09:00:00Z'));
+      runScheduledEvaluation(new Date('2026-08-17T09:05:00Z'));
+      expect(paceSpy).toHaveBeenCalledTimes(1);
+      expect(creepSpy).toHaveBeenCalledTimes(1);
+      expect(monthlySpy).toHaveBeenCalledTimes(1);
+
+      runScheduledEvaluation(new Date('2026-08-18T09:00:00Z'));
+      expect(paceSpy).toHaveBeenCalledTimes(2);
+      expect(creepSpy).toHaveBeenCalledTimes(2);
+      expect(monthlySpy).toHaveBeenCalledTimes(2);
+    } finally {
+      paceSpy.mockRestore();
+      creepSpy.mockRestore();
+      monthlySpy.mockRestore();
     }
   });
 });

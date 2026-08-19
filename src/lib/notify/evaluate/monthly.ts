@@ -49,7 +49,15 @@ function comparePredicted(
     const row = actual.get(categoryId);
     if (row === undefined) continue;
     const expectedCents = result.suggestion.suggestedCents;
-    totalDeltaCents += row.spentCents - expectedCents;
+    // MEDIUM fix: per MUST-4.10, suggestionsFor's rows include both a rolled top-level parent
+    // and its non-archived children, so a child's spend is already counted once inside its
+    // parent's row. Only top-level household rows contribute to the total, matching the
+    // precedent budgetTotals() and the Reports baselines card already set for exactly this
+    // reason. Personal spend is a strict subset of household spend, so it never contributes to
+    // the total either (the caller uses household's total alone).
+    if (scope === 'household' && row.parentId === null) {
+      totalDeltaCents += row.spentCents - expectedCents;
+    }
     lines.push({ scope, line: { name: row.categoryName, expectedCents, actualCents: row.spentCents } });
   }
   return { lines, totalDeltaCents };
@@ -77,7 +85,10 @@ function firePredictedVsActual(input: { userId: number; month: string; now: Date
     month: input.month,
     household: shown.filter((entry) => entry.scope === 'household').map((entry) => entry.line),
     personal: shown.filter((entry) => entry.scope === 'personal').map((entry) => entry.line),
-    totalDeltaCents: household.totalDeltaCents + personal.totalDeltaCents,
+    // MEDIUM fix: household's total alone (top-level rows only, see comparePredicted). Adding
+    // personal on top double-counted every attributed dollar, since personal spend is already
+    // inside its household top-level row.
+    totalDeltaCents: household.totalDeltaCents,
   });
   const result = enqueue({
     userId: input.userId,

@@ -421,7 +421,7 @@ export function renderEvent(input: RenderInput): { subject: string; body: string
       if (input.household.length > 0) blocks.push(['Household', ...predictedLines(input.household)].join('\n'));
       if (input.personal.length > 0) blocks.push(['Yours', ...predictedLines(input.personal)].join('\n'));
       blocks.push(
-        `Across every category with a suggestion, ${label} came in ${money(Math.abs(input.totalDeltaCents))} ` +
+        `Across every household category with a suggestion, ${label} came in ${money(Math.abs(input.totalDeltaCents))} ` +
           `${input.totalDeltaCents >= 0 ? 'over' : 'under'} what the last six months pointed at.`,
       );
       // MUST-9.27: nothing was stored in advance, and the message says so rather than letting

@@ -23,6 +23,9 @@ All notable changes to Budget Tracker are recorded here.
 
 ## [1.4.0] - 2026-08-19
 
+This release adds no migration, no table and no column, and it makes no outbound connection it
+did not make before.
+
 ### Added
 
 - **A suggested monthly budget for every category with enough history.** Budgets shows what
@@ -53,11 +56,6 @@ All notable changes to Budget Tracker are recorded here.
 
 - Transactions remembers the dates you filtered by when you reload the page. It still shows
   everything by default, because that is the page you open to find a charge from March.
-
-### Fixed
-
-- Nothing. This release adds no migration, no table and no column, and it makes no outbound
-  connection it did not make before.
 
 ## [1.3.1] - 2026-08-18
 

@@ -46,13 +46,13 @@ function optedInUser(): number {
   return userId;
 }
 
-function spend(categoryId: number, cents: number, date: string): void {
+function spend(categoryId: number, cents: number, date: string, attributedUserId: number | null = null): void {
   t.db.run(
     sql`insert into transactions
           (account_id, date, amount_cents, raw_description, normalized_merchant, category_id,
            attributed_user_id, is_transfer, dedup_hash, created_by, created_at, updated_at)
         values (${accountId}, ${date}, ${-cents}, ${'MERCHANT'}, ${'merchant'}, ${categoryId},
-                null, 0, ${`h${Math.random()}`}, ${creatorId}, ${'2026-01-01T00:00:00.000Z'}, ${'2026-01-01T00:00:00.000Z'})`,
+                ${attributedUserId}, 0, ${`h${Math.random()}`}, ${creatorId}, ${'2026-01-01T00:00:00.000Z'}, ${'2026-01-01T00:00:00.000Z'})`,
   );
 }
 
@@ -117,8 +117,42 @@ describe('MUST-9.27: predicted is recomputed, not recalled', () => {
     expect(body).toContain('$600.00 expected');
     expect(body).toContain('$713.40 actual');
     expect(body).toContain('recomputed');
-    // Groceries and Food both carry the series, so both are lines and the total is doubled.
-    expect(body).toContain('$226.80 over');
+    // Groceries and Food both carry the series, so both are LINES, but only Food (the one
+    // top-level household row) contributes to the total. Counting the child too would double
+    // it to $226.80, which is exactly the MEDIUM fix this pins down.
+    expect(body).toContain('$113.40 over');
+    expect(body).not.toContain('$226.80 over');
+  });
+});
+
+/**
+ * MEDIUM fix (final-fix-wave item 2): suggestionsFor() returns a row for both a rolled-up
+ * parent and its non-archived child, and personal spend is always a subset of household spend.
+ * Summing every row (old behaviour) counted a child's dollars twice within household alone, and
+ * summing household plus personal counted an attributed member's dollars twice again. The fix
+ * counts household TOP-LEVEL rows only, matching budgetTotals()'s precedent.
+ */
+describe('MEDIUM fix: predicted_vs_actual totals household top-level rows once, not household plus personal', () => {
+  it('a parent, a child and a fully-attributed member no longer inflate the reported total', () => {
+    const userId = optedInUser();
+    setPref(userId, 'suggested_budget_refresh', 'email', false);
+    const groceries = categoryIdByName(t.db, 'Groceries');
+    // Every dollar is attributed to the notified user, so the personal series for this user is
+    // byte-identical to the household series for both Groceries and its parent Food.
+    for (const month of ['2026-01', '2026-02', '2026-03', '2026-04', '2026-05', '2026-06']) {
+      spend(groceries, 60000, `${month}-10`, userId);
+    }
+    spend(groceries, 71340, '2026-07-10', userId);
+
+    expect(evaluateMonthBoundary({ userId, now: new Date('2026-08-01T09:00:00Z'), tz: TZ })).toBe(1);
+    const body = (t.sqlite.prepare('select body from notification_outbox limit 1').get() as { body: string }).body;
+
+    // Naive sum before the fix: household counts Food + Groceries ($113.40 x 2 = $226.80),
+    // then personal counts the identical Food + Groceries pair again ($226.80), for $453.60.
+    // The correct figure counts Food, the one household top-level row, exactly once.
+    expect(body).toContain('$113.40 over');
+    expect(body).not.toContain('$226.80 over');
+    expect(body).not.toContain('$453.60 over');
   });
 });
 

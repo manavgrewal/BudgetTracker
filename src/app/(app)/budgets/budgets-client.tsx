@@ -280,17 +280,22 @@ export function BudgetsClient({
                 <input type="hidden" name="month" value={month} />
                 <button type="submit" className="btn btn--secondary btn--sm">Copy previous month</button>
               </form>
-              <form action={applyAllAction}>
-                <input type="hidden" name="scope" value="household" />
-                <input type="hidden" name="month" value={month} />
-                <button
-                  type="submit"
-                  className="btn btn--secondary btn--sm"
-                  title="Only fills in categories with no limit set. Nothing you have typed is changed."
-                >
-                  Apply all suggestions
-                </button>
-              </form>
+              {/* MUST-15.1: a control that cannot act is not offered. There is nothing to apply
+                  when there are no suggestions, whether that is because history is short or
+                  because every category with history failed the suggestion floor. */}
+              {householdPredict !== null && householdPredict.suggestionOf.size > 0 ? (
+                <form action={applyAllAction}>
+                  <input type="hidden" name="scope" value="household" />
+                  <input type="hidden" name="month" value={month} />
+                  <button
+                    type="submit"
+                    className="btn btn--secondary btn--sm"
+                    title="Only fills in categories with no limit set. Nothing you have typed is changed."
+                  >
+                    Apply all suggestions
+                  </button>
+                </form>
+              ) : null}
             </>
           }
         />
@@ -360,18 +365,21 @@ export function BudgetsClient({
                       <input type="hidden" name="month" value={month} />
                       <button type="submit" className="btn btn--secondary btn--sm">Copy previous month</button>
                     </form>
-                    <form action={applyAllAction}>
-                      <input type="hidden" name="scope" value="personal" />
-                      <input type="hidden" name="userId" value={person.userId} />
-                      <input type="hidden" name="month" value={month} />
-                      <button
-                        type="submit"
-                        className="btn btn--secondary btn--sm"
-                        title="Only fills in categories with no limit set. Nothing you have typed is changed."
-                      >
-                        Apply all suggestions
-                      </button>
-                    </form>
+                    {/* Same MUST-15.1 rule as the household section above. */}
+                    {personPredict !== null && personPredict.suggestionOf.size > 0 ? (
+                      <form action={applyAllAction}>
+                        <input type="hidden" name="scope" value="personal" />
+                        <input type="hidden" name="userId" value={person.userId} />
+                        <input type="hidden" name="month" value={month} />
+                        <button
+                          type="submit"
+                          className="btn btn--secondary btn--sm"
+                          title="Only fills in categories with no limit set. Nothing you have typed is changed."
+                        >
+                          Apply all suggestions
+                        </button>
+                      </form>
+                    ) : null}
                   </>
                 ) : null
               }
@@ -383,7 +391,10 @@ export function BudgetsClient({
                 ) : null}
                 {personNoAttribution ? (
                   <p className="text-sm text-muted">
-                    No transactions are attributed to you yet, so there is nothing to base a personal suggestion on.
+                    {/* L-6: "to you" is only true in the viewer's own section. Everyone else's
+                        section names the person it is actually about. */}
+                    No transactions are attributed {person.userId === currentUserId ? 'to you' : `to ${person.name}`} yet, so
+                    there is nothing to base a personal suggestion on.
                   </p>
                 ) : null}
               </CardBody>

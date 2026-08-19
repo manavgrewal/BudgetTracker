@@ -212,6 +212,36 @@ describe('BudgetsClient — review finding 1: three-number household headline', 
   });
 });
 
+describe('L-6: the no-attribution sentence names the viewer, not always "you"', () => {
+  it('says "to you" in the viewer\'s own section and names the other person in theirs', () => {
+    const row = makeRow({ categoryId: 7, categoryName: 'Hobbies', limitCents: 15000 });
+    const { container } = render(
+      <BudgetsClient
+        month="2026-03"
+        currentUserId={1}
+        household={[]}
+        householdTotals={{ budgetedLimitCents: 0, budgetedSpentCents: 0, totalSpentCents: 0 }}
+        personal={[
+          { userId: 1, name: 'Alice', rows: [row] },
+          { userId: 2, name: 'Bob', rows: [row] },
+        ]}
+        predictions={predictionsWith({
+          personal: [
+            { userId: 1, predictions: { suggestions: [], projections: [], noAttribution: true } },
+            { userId: 2, predictions: { suggestions: [], projections: [], noAttribution: true } },
+          ],
+        })}
+      />,
+    );
+    const sections = Array.from(container.querySelectorAll('section'));
+    const aliceSection = sections.find((node) => node.querySelector('h2')?.textContent?.startsWith('Alice'));
+    const bobSection = sections.find((node) => node.querySelector('h2')?.textContent?.startsWith('Bob'));
+    expect(aliceSection?.textContent).toContain('No transactions are attributed to you yet');
+    expect(bobSection?.textContent).toContain('No transactions are attributed to Bob yet');
+    expect(bobSection?.textContent).not.toContain('attributed to you');
+  });
+});
+
 describe('MUST-14.3 to MUST-14.6: the predictive controls', () => {
   it('renders a Use button carrying no amount field, and its reasoning in the title', () => {
     const { container } = renderBudgets(
@@ -260,6 +290,42 @@ describe('MUST-14.3 to MUST-14.6: the predictive controls', () => {
     );
     expect(button).toBeTruthy();
     expect(button!.getAttribute('title')).toBe('Only fills in categories with no limit set. Nothing you have typed is changed.');
+  });
+
+  it('final-fix-wave item 1: the household apply-all control is absent whenever there are no suggestions', () => {
+    // No predictions at all (a past month, or a fresh install where predictions is null).
+    const { container: noPredictions } = renderBudgets(null);
+    expect(
+      Array.from(noPredictions.querySelectorAll('button')).some((el) => el.textContent === 'Apply all suggestions'),
+    ).toBe(false);
+
+    // Predictions computed, but this section has zero qualifying suggestions (under
+    // MIN_HISTORY_MONTHS, or every category failed the suggestion floor).
+    const { container: emptySuggestions } = renderBudgets(
+      predictionsWith({ household: { suggestions: [], projections: [], noAttribution: false } }),
+    );
+    expect(
+      Array.from(emptySuggestions.querySelectorAll('button')).some((el) => el.textContent === 'Apply all suggestions'),
+    ).toBe(false);
+  });
+
+  it('final-fix-wave item 1: the personal section apply-all control is absent when that person has no suggestions', () => {
+    const row = makeRow({ categoryId: 7, categoryName: 'Hobbies', limitCents: 15000 });
+    const { container } = render(
+      <BudgetsClient
+        month="2026-03"
+        currentUserId={1}
+        household={[]}
+        householdTotals={{ budgetedLimitCents: 0, budgetedSpentCents: 0, totalSpentCents: 0 }}
+        personal={[{ userId: 1, name: 'Alice', rows: [row] }]}
+        predictions={predictionsWith({
+          personal: [{ userId: 1, predictions: { suggestions: [], projections: [], noAttribution: false } }],
+        })}
+      />,
+    );
+    expect(Array.from(container.querySelectorAll('button')).some((el) => el.textContent === 'Apply all suggestions')).toBe(
+      false,
+    );
   });
 
   it('MUST-15.1: under three months there is a sentence and no disabled button', () => {

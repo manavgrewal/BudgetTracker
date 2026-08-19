@@ -151,6 +151,61 @@ describe('MUST-9.35: household rows reach every enabled user, personal rows only
   });
 });
 
+/**
+ * MEDIUM fix (final-fix-wave item 3): PACE_MAX_PER_EVALUATION caps this detector the same way
+ * the three anomaly detectors already cap themselves. Twelve leaf categories, each with a
+ * $100.00 limit and a distinct spend so every overshoot is a distinct value, all qualify; only
+ * the five worst should ever be enqueued.
+ */
+describe('MEDIUM fix: PACE_MAX_PER_EVALUATION caps the detector at its five largest overshoots', () => {
+  it('12 qualifying categories produce exactly 5 messages, the 5 with the largest overshoot', () => {
+    const userId = emailUser();
+    // Twelve distinct leaf categories from the seed tree (Food x3, Transport x6, Shopping x3),
+    // none sharing a parent budget, so only these 12 rows are pace candidates.
+    const leaves = [
+      'Groceries',
+      'Restaurants',
+      'Coffee',
+      'Gas',
+      'Car Payment',
+      'Car Insurance',
+      'Maintenance',
+      'Transit',
+      'Parking',
+      'Clothing',
+      'Electronics',
+      'General',
+    ];
+    // Descending spend, 500 cents apart, so every projected overshoot is distinct: 10000 down
+    // to 4500 in 12 steps. All 12 clear the 110 percent floor at day 12 of a 31-day month
+    // (even the smallest, 4500, projects to 11625 against a 11000 floor).
+    const spentByLeaf = new Map(leaves.map((name, index) => [name, 10000 - index * 500]));
+
+    const ids = new Map(leaves.map((name) => [name, categoryIdByName(t.db, name)]));
+    for (const name of leaves) {
+      const categoryId = ids.get(name)!;
+      upsertBudget({ scope: 'household', userId: null, categoryId, month: '2026-08', amountCents: 10000 });
+      spend(categoryId, spentByLeaf.get(name)!);
+    }
+
+    expect(evaluateBudgetPace({ userId, now: NOW, tz: TZ })).toBe(5);
+
+    // The 5 largest spends (and therefore the 5 largest overshoots) are the first 5 in the
+    // descending list: Groceries, Restaurants, Coffee, Gas, Car Payment.
+    const expectedFired = ['Groceries', 'Restaurants', 'Coffee', 'Gas', 'Car Payment'];
+    const expectedSkipped = leaves.filter((name) => !expectedFired.includes(name));
+
+    const fired = keys();
+    for (const name of expectedFired) {
+      expect(fired).toContain(`pace:h:${ids.get(name)}:2026-08`);
+    }
+    for (const name of expectedSkipped) {
+      expect(fired).not.toContain(`pace:h:${ids.get(name)}:2026-08`);
+    }
+    expect(fired.length).toBe(5);
+  });
+});
+
 describe('notify MUST-4.2: a user with the event switched off hears nothing', () => {
   it('enqueues no row when every channel is off for budget_pace', () => {
     const userId = emailUser();

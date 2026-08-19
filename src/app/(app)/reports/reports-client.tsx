@@ -83,9 +83,13 @@ export function ReportsClient({
           description="Median and average over the last 6 full calendar months. This card does not follow the date filter above: a median needs equal-length months, and an arbitrary range does not have them."
         />
         <CardBody padded={false}>
-          {baselineMonthsUsed < 3 || baselines.length === 0 ? (
+          {baselineMonthsUsed < 3 ? (
             <EmptyState icon={ReportsIcon} title="Not enough history yet">
               Baselines appear after three full calendar months.
+            </EmptyState>
+          ) : baselines.length === 0 ? (
+            <EmptyState icon={ReportsIcon} title="No category has enough regular spend for a baseline yet">
+              A category needs a median spend above the suggestion floor, and this household's does not clear it yet.
             </EmptyState>
           ) : (
             <TableWrap bare>

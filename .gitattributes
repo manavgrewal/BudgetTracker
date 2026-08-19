@@ -6,3 +6,9 @@
 vendor/ocr-models/en_dict.txt -text
 vendor/ocr-models/NOTICE -text
 vendor/ocr-models/*.onnx -text
+
+# A fresh Windows clone with core.autocrlf=true otherwise checks these out with CRLF line
+# endings, which breaks their #!/bin/bash shebang the moment they run under bash and fails the
+# three shebang assertions in tests/ops/install.test.ts. Forcing LF here is what every other
+# platform already gets by default.
+*.sh text eol=lf

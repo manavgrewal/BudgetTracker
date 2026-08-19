@@ -240,4 +240,15 @@ describe('MUST-9.20 to MUST-9.23: findDuplicates', () => {
     ];
     expect(findDuplicates({ rows: olderRows, today: TODAY })).toEqual([]);
   });
+
+  it('L-8: rejects a future-dated pair, aligned with the unusual detector', () => {
+    // A post-dated entry or a bad import, one day apart, both after "today". Without the L-8
+    // fix, daysBetweenIso(later.date, today) is NEGATIVE here and therefore passes the
+    // "<= DUPLICATE_LOOKBACK_DAYS" check unintentionally, so the pair fired.
+    const rows = [
+      row({ id: 1, date: addDaysIso(TODAY, 1), amountCents: -8950 }),
+      row({ id: 2, date: addDaysIso(TODAY, 2), amountCents: -8950 }),
+    ];
+    expect(findDuplicates({ rows, today: TODAY })).toEqual([]);
+  });
 });

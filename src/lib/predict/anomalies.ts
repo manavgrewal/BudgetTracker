@@ -158,6 +158,11 @@ export function findDuplicates(input: { rows: SpendRow[]; today: string }): Dupl
     const ordered = group.slice().sort((a, b) => (a.date === b.date ? a.id - b.id : a.date < b.date ? -1 : 1));
     for (let index = 1; index < ordered.length; index += 1) {
       const later = ordered[index];
+      // L-8: aligned with the unusual detector (src/lib/notify/evaluate/anomalies.ts), which
+      // also rejects a future-dated row (a post-dated entry or a bad import) rather than
+      // treating it as "within the last N days". Sorted ascending, so once `later` clears this
+      // check every earlier row in the same group does too.
+      if (later.date > input.today) continue;
       if (daysBetweenIso(later.date, input.today) > DUPLICATE_LOOKBACK_DAYS) continue;
       // MUST-9.23: the single NEAREST earlier match, never all of them. Three identical
       // charges on three consecutive days produce two events, not three.
