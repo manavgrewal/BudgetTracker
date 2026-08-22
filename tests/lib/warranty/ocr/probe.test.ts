@@ -237,11 +237,22 @@ describe('defect fix (v1.5.0): the crash-guard settings primitives', () => {
     expect(readOcrCrashGuardState()).toEqual({ inFlightJobKey: 'r:1', crashJobKey: 'r:1', crashAttempts: 1 });
   });
 
-  it('clearOcrCrashGuard wipes all three keys at once', () => {
+  it('clearOcrCrashGuard wipes all three keys when the completing job matches the recorded crash job', () => {
     markOcrJobInFlight('r:1');
     recordOcrJobCrashSurvived('r:1', OCR_CRASH_ATTEMPT_LIMIT - 1);
-    clearOcrCrashGuard();
+    clearOcrCrashGuard('r:1');
     expect(readOcrCrashGuardState()).toEqual({ inFlightJobKey: null, crashJobKey: null, crashAttempts: 0 });
+  });
+
+  it('F1 defect fix: clearOcrCrashGuard leaves a DIFFERENT job\'s crash history untouched', () => {
+    // r:1 crashed once already and is waiting for a retry.
+    recordOcrJobCrashSurvived('r:1', 1);
+    // r:2 -- a totally unrelated job -- runs and finishes normally.
+    markOcrJobInFlight('r:2');
+    clearOcrCrashGuard('r:2');
+    // Before the fix, this unconditionally wiped r:1's crash history too, resetting the
+    // 3-attempt poison-pill count back to zero every time ANY other job finished normally.
+    expect(readOcrCrashGuardState()).toEqual({ inFlightJobKey: null, crashJobKey: 'r:1', crashAttempts: 1 });
   });
 
   it('recordOcrJobCrashSurvived records the job and count, and clears the in-flight mark', () => {

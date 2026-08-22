@@ -171,12 +171,16 @@ function messageOf(error: unknown): string {
  * exactly the case reconcileOcrCrashOnBoot() below is looking for.
  */
 async function runJob(job: OcrJob): Promise<void> {
-  markOcrJobInFlight(jobKey(job));
+  const key = jobKey(job);
+  markOcrJobInFlight(key);
   try {
     if (job.kind === 'staged') await runStagedJob(job.stagingId);
     else await runReceiptJob(job.receiptId);
   } finally {
-    clearOcrCrashGuard();
+    // F1 fix: only THIS job's own crash history (if any) is cleared. Passing `key` is what
+    // stops an unrelated job finishing normally from resetting a different, still-poison
+    // receipt's crash count back to zero.
+    clearOcrCrashGuard(key);
   }
 }
 
@@ -303,7 +307,7 @@ export function reconcileOcrCrashOnBoot(): void {
 
     console.error(`[ocr] job ${key} has crashed the app ${attempts} times in a row; marking it failed instead of retrying forever`);
     condemnCrashedJob(key);
-    clearOcrCrashGuard();
+    clearOcrCrashGuard(key);
   } catch (error) {
     console.error('[ocr] crash reconciliation failed', error);
   }

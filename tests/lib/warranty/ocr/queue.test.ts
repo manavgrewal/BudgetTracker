@@ -366,6 +366,29 @@ describe('defect fix (v1.5.0): the crash guard around every job', () => {
     expect(readOcrCrashGuardState()).toEqual({ inFlightJobKey: null, crashJobKey: null, crashAttempts: 0 });
   });
 
+  it("F1 defect fix: a DIFFERENT job finishing normally does not reset this job's crash count", async () => {
+    // Receipt A already survived one crash and is waiting for a retry -- the boot sweep has
+    // not re-run it yet.
+    const itemId = makeItem();
+    const receiptA = makeReceipt(itemId, writeReceiptFile(JPEG, 'image/jpeg'), 'pending');
+    const keyA = `r:${receiptA}`;
+    markOcrJobInFlight(keyA);
+    reconcileOcrCrashOnBoot();
+    expect(readOcrCrashGuardState()).toEqual({ inFlightJobKey: null, crashJobKey: keyA, crashAttempts: 1 });
+
+    // A totally unrelated job -- e.g. a lower-id pending receipt the boot sweep happened to
+    // process first, a staged upload, or a Re-run OCR click -- runs to completion normally.
+    setOcrEngineForTests({ recognize: async () => ({ text: 'ok' }) });
+    const receiptB = makeReceipt(itemId, writeReceiptFile(JPEG, 'image/jpeg'));
+    enqueueOcrJob({ kind: 'receipt', receiptId: receiptB });
+    await drainOcrQueue();
+
+    // Receipt A has not run again, let alone crashed or succeeded, since it was marked. Its
+    // crash count must survive B's unrelated success untouched -- before the fix, ANY job
+    // finishing normally reset it to zero, and OCR_CRASH_ATTEMPT_LIMIT was never reached.
+    expect(readOcrCrashGuardState()).toEqual({ inFlightJobKey: null, crashJobKey: keyA, crashAttempts: 1 });
+  });
+
   it('marks the job in flight the instant it starts, before the engine is even called', async () => {
     let seenDuringRecognize: ReturnType<typeof readOcrCrashGuardState> | null = null;
     setOcrEngineForTests({

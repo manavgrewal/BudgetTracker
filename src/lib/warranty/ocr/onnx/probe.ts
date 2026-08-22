@@ -253,14 +253,25 @@ export function markOcrJobInFlight(jobKey: string): void {
 
 /**
  * Called by queue.ts in a `finally` wrapped around every job, whatever the outcome: the
- * process is still alive to run this line, so THIS job did not crash it. Wipes any earlier
- * crash history too — a job that finishes cleanly, even by failing normally, has proven
- * itself and deserves a clean slate the next time it is unlucky.
+ * process is still alive to run this line, so THIS job did not crash it. The in-flight mark
+ * is always this job's own (concurrency is 1, and markOcrJobInFlight(jobKey) was the last
+ * thing written to that key), so it is always safe to clear unconditionally.
+ *
+ * The crash history (crash_job/crash_attempts), however, belongs to whichever job it was
+ * last recorded for — not necessarily this one. Defect fix: this used to wipe it
+ * unconditionally too, so ANY job finishing normally (a lower-id pending receipt the boot
+ * sweep happened to process first, a staged upload, a Re-run OCR click) reset a totally
+ * unrelated poison receipt's count back to zero, and OCR_CRASH_ATTEMPT_LIMIT was never
+ * reached. It is only this job's own history to clear — a job that finishes cleanly, even by
+ * failing normally, has proven itself and deserves a clean slate the next time IT is unlucky,
+ * but that says nothing about some other job's crash count.
  */
-export function clearOcrCrashGuard(): void {
+export function clearOcrCrashGuard(jobKey: string): void {
   deleteSetting(SETTING_OCR_INFLIGHT_JOB);
-  deleteSetting(SETTING_OCR_CRASH_JOB);
-  deleteSetting(SETTING_OCR_CRASH_ATTEMPTS);
+  if (getSetting(SETTING_OCR_CRASH_JOB) === jobKey) {
+    deleteSetting(SETTING_OCR_CRASH_JOB);
+    deleteSetting(SETTING_OCR_CRASH_ATTEMPTS);
+  }
 }
 
 /** Called only by the boot crash reconciler's "forgive" branch (queue.ts). */
