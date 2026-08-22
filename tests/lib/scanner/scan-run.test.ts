@@ -180,6 +180,32 @@ describe('B1: the scanner converts the canvas to a cv.Mat before calling findPap
     expect(rig.contourMat.deleted).toBe(true);
     expect(rig.scanner.extractPaper).not.toHaveBeenCalled();
   });
+
+  it('F4: falls back gracefully, via isUsableQuad returning false, when jscanify leaves a corner unset', async () => {
+    const rig = buildRig();
+    // node_modules/jscanify/src/jscanify.js:207-259's getCornerPoints leaves a corner
+    // undefined when no contour point lands in that quadrant -- this is that exact shape,
+    // not a degenerate-but-defined quad. Before the F4 fix this threw a TypeError inside
+    // isUsableQuad instead of the gate cleanly returning false.
+    rig.scanner.getCornerPoints = vi.fn(() => ({
+      topLeftCorner: { x: 10, y: 10 },
+      topRightCorner: { x: 90, y: 12 },
+      bottomRightCorner: { x: 92, y: 90 },
+      bottomLeftCorner: undefined,
+    }));
+    vi.spyOn(loadModule, 'loadScanner').mockResolvedValue({ cv: rig.cv, scanner: rig.scanner });
+    vi.stubGlobal('createImageBitmap', vi.fn(async () => fakeBitmap(100, 100)));
+
+    const result = await scanReceiptFile(new File(['jpeg-bytes'], 'receipt.jpg', { type: 'image/jpeg' }));
+
+    // MUST-8.15's fallback, but reached via isUsableQuad actually running and returning
+    // false -- proven by extractPaper never being called and both Mats still being freed --
+    // not via the outer catch-all swallowing a thrown TypeError.
+    expect(result.corrected).toBeUndefined();
+    expect(rig.imreadMats[0].deleted).toBe(true);
+    expect(rig.contourMat.deleted).toBe(true);
+    expect(rig.scanner.extractPaper).not.toHaveBeenCalled();
+  });
 });
 
 describe('B2: the validated quad is handed to extractPaper instead of being discarded', () => {

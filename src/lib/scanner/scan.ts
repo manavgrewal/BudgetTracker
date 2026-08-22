@@ -27,13 +27,38 @@ export interface ScanResult {
   corrected?: { url: string; quad: ScanQuad; sourceWidth: number; sourceHeight: number };
 }
 
-const corners = (quad: ScanQuad) => [quad.topLeft, quad.topRight, quad.bottomRight, quad.bottomLeft];
+/**
+ * F4 defect fix: the shape scanner.getCornerPoints() actually hands back, before MUST-8.13
+ * has validated it. jscanify's getCornerPoints (node_modules/jscanify/src/jscanify.js:
+ * 207-259) leaves a corner `undefined` -- it is never assigned -- when no contour point falls
+ * in that corner's quadrant; jscanify's own highlightPaper guards for exactly this (lines
+ * 111-116) before it will draw. ScanQuad above is the validated shape every OTHER caller in
+ * this file and beyond gets to assume; this is the honest, unvalidated one that only
+ * isUsableQuad ever sees.
+ */
+export interface RawScanQuad {
+  topLeft?: { x: number; y: number };
+  topRight?: { x: number; y: number };
+  bottomRight?: { x: number; y: number };
+  bottomLeft?: { x: number; y: number };
+}
 
-/** MUST-8.13's five conditions, all of which must hold. A quad hugging the whole frame is
- *  the detector finding the photo's border; a sliver is a countertop edge. */
-export function isUsableQuad(quad: ScanQuad, workWidth: number, workHeight: number): boolean {
-  const points = corners(quad);
-  if (points.length !== 4) return false;
+const corners = (quad: RawScanQuad) => [quad.topLeft, quad.topRight, quad.bottomRight, quad.bottomLeft];
+
+/**
+ * MUST-8.13's five conditions, all of which must hold. A quad hugging the whole frame is the
+ * detector finding the photo's border; a sliver is a countertop edge. A missing corner (F4:
+ * jscanify leaves one unset rather than fail outright -- see RawScanQuad above) is exactly as
+ * unusable as one that fails any of the other five, so it is checked first and, like them,
+ * makes this return false rather than throw. The `quad is ScanQuad` predicate is what lets
+ * every caller past the `if (!isUsableQuad(...))` guard use all four corners as plain,
+ * defined points with no further narrowing of its own.
+ */
+export function isUsableQuad(quad: RawScanQuad, workWidth: number, workHeight: number): quad is ScanQuad {
+  const raw = corners(quad);
+  if (raw.length !== 4) return false;
+  if (raw.some((point) => point === undefined)) return false;
+  const points = raw as { x: number; y: number }[];
   if (points.some((point) => !Number.isFinite(point.x) || !Number.isFinite(point.y))) return false;
 
   let cross = 0;
@@ -102,7 +127,7 @@ async function run(file: File): Promise<ScanResult> {
     // canvas directly throws a BindingError on every call. Both the Mat and the contour Mat
     // findPaperContour hands back are ours to free -- the wasm heap does not garbage-collect.
     const workMat = cv.imread(work);
-    let workQuad: ScanQuad;
+    let workQuad: RawScanQuad;
     try {
       const contour = scanner.findPaperContour(workMat) as { delete(): void } | null | undefined;
       if (contour === null || contour === undefined) return { file };

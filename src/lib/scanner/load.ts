@@ -4,12 +4,21 @@ import { SCANNER_LOAD_TIMEOUT_MS } from '@/lib/warranty/ocr/onnx/constants';
  * jscanify 1.4.3's surface, as much of it as the scanner uses. The names are documented but
  * were not verified against the published bundle during design, so scan.ts wraps every call
  * in the catch-all that turns a wrong-name TypeError into an original-file upload.
+ *
+ * Every corner is optional (F4 defect fix): getCornerPoints (node_modules/jscanify/src/
+ * jscanify.js:207-259) leaves a corner unassigned -- undefined, not {x,y} -- when no contour
+ * point falls in that corner's quadrant. The four fields were typed as always-present here,
+ * which is what let scan.ts's isUsableQuad throw a TypeError on `undefined.x` instead of
+ * returning false; jscanify's own highlightPaper (lines 111-116) guards for exactly this
+ * before it will draw. extractPaper's optional `points` parameter below is still always
+ * called with a fully-defined value in practice (scan.ts never calls it before MUST-8.13 has
+ * validated every corner), so the loosened type costs that call site nothing.
  */
 export interface JscanifyCorners {
-  topLeftCorner: { x: number; y: number };
-  topRightCorner: { x: number; y: number };
-  bottomLeftCorner: { x: number; y: number };
-  bottomRightCorner: { x: number; y: number };
+  topLeftCorner?: { x: number; y: number };
+  topRightCorner?: { x: number; y: number };
+  bottomLeftCorner?: { x: number; y: number };
+  bottomRightCorner?: { x: number; y: number };
 }
 
 export interface JscanifyLike {

@@ -259,4 +259,20 @@ describe('MUST-8.13: quad validation', () => {
       scanModule.isUsableQuad({ ...quad(), topRight: { x: Number.NaN, y: 10 } }, work.width, work.height),
     ).toBe(false);
   });
+
+  it('F4: returns false, does not throw, when a corner is missing entirely', () => {
+    // node_modules/jscanify/src/jscanify.js:207-259's getCornerPoints leaves a corner
+    // undefined -- never assigned -- when no contour point falls in that quadrant. This is
+    // the exact shape it hands back in that case, not a quad with a NaN or out-of-range
+    // point. Before the F4 fix, `point.x` on this `undefined` threw a TypeError instead of
+    // isUsableQuad returning false.
+    const { topRight: _drop, ...rest } = quad();
+    expect(() => scanModule.isUsableQuad(rest, work.width, work.height)).not.toThrow();
+    expect(scanModule.isUsableQuad(rest, work.width, work.height)).toBe(false);
+  });
+
+  it('F4: rejects a quad missing every corner just as cleanly', () => {
+    expect(() => scanModule.isUsableQuad({}, work.width, work.height)).not.toThrow();
+    expect(scanModule.isUsableQuad({}, work.width, work.height)).toBe(false);
+  });
 });
