@@ -133,7 +133,7 @@ describe('buildPreview', () => {
     expect(preview.truncated).toBe(true);
   });
 
-  describe('dateFormatDetection (PENDING-FIXES #1, option B)', () => {
+  describe('dateFormatDetection', () => {
     it('is unique for a file whose date column only fits one known format', () => {
       // amex.csv's dates are "02 Mar 2026" etc — only 'DD-MMM-YYYY' parses them.
       const { accountId, stagingId } = setup('amex.csv');

@@ -44,8 +44,8 @@ export interface PreviewResult {
   skipped: number;
   truncated: boolean;
   /**
-   * What the date column looks like independent of mapping.dateFormat (PENDING-FIXES #1,
-   * option B) — informational only. mapping.dateFormat, above, is always what actually
+   * What the date column looks like independent of mapping.dateFormat — informational only.
+   * mapping.dateFormat, above, is always what actually
    * parsed `rows`/`errors`; detection never overrides an explicit choice, it only tells the
    * caller whether that choice was the only reasonable one, a safe tie, or genuinely
    * ambiguous so the mapping UI can ask.
@@ -125,8 +125,8 @@ export function buildPreview(input: {
  * parser produced — both `rows` (dateFormat matched) and `errors` (whatever the reason,
  * including 'unparseable date'). Deliberately reads straight off each row's `cells`
  * rather than the already-parsed `date`/`rawDate` fields, so a currently-wrong
- * mapping.dateFormat (the exact bug PENDING-FIXES #1 reports) doesn't hide the column's
- * real values from detection — every error row still carries its own cells verbatim.
+ * mapping.dateFormat doesn't hide the column's real values from detection — every error row
+ * still carries its own cells verbatim.
  */
 function rawDateColumn(parsed: ParseResult, dateCol: number): string[] {
   const combined: Array<{ rowIndex: number; cells: string[] }> = [

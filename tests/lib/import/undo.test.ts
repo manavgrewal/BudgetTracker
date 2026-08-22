@@ -42,7 +42,7 @@ describe('undoImport with no overlap', () => {
   });
 });
 
-describe('undoImport after the import’s profile has been deleted (fix for PENDING-FIXES.md #2 follow-up)', () => {
+describe('undoImport after the import’s profile has been deleted', () => {
   it('still deletes every row, even though imports.profile_id was nulled by deleteProfile', () => {
     const { sqlite, userId, accountId, hashed } = setup();
     const profileId = createProfile({

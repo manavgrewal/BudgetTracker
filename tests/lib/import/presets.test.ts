@@ -129,7 +129,7 @@ describe('setAccountProfile', () => {
   });
 });
 
-describe('deleteProfile (PENDING-FIXES.md #2: a mapping could not be deleted by anyone; clears references instead of refusing)', () => {
+describe('deleteProfile (a mapping could not previously be deleted by anyone; clears references instead of refusing)', () => {
   it('refuses to delete a built-in profile', () => {
     current = createSeededTestDb();
     const builtin = getProfileByName('TD Visa')!;

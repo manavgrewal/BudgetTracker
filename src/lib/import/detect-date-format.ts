@@ -18,9 +18,9 @@ export interface DateFormatDetection {
 const SAMPLE_LIMIT = 25;
 
 /**
- * Pure date-format sniffer for the import preview (PENDING-FIXES #1, option B). Given raw
- * strings sampled from a CSV's date column — BEFORE any dateFormat has been chosen — tries
- * every format in DATE_FORMATS and keeps the ones that parse every sampled non-empty value.
+ * Pure date-format sniffer for the import preview. Given raw strings sampled from a CSV's
+ * date column — BEFORE any dateFormat has been chosen — tries every format in DATE_FORMATS
+ * and keeps the ones that parse every sampled non-empty value.
  *
  * Resolution rules:
  * - 0 survivors -> 'none'. Nothing fits; the caller reports that rather than throwing.

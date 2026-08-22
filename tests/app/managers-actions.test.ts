@@ -77,7 +77,7 @@ describe('deleteRuleAction — missing input validation (finding 2)', () => {
   });
 });
 
-describe('deleteProfileAction (PENDING-FIXES.md #2: a mapping could not be deleted by anyone)', () => {
+describe('deleteProfileAction (a mapping could not previously be deleted by anyone)', () => {
   it('refuses to delete a built-in profile', async () => {
     setup();
     const builtin = getProfileByName('TD Visa')!;
@@ -151,8 +151,8 @@ describe('deleteProfileAction (PENDING-FIXES.md #2: a mapping could not be delet
   });
 });
 
-// PENDING-FIXES.md #3: a new child category left /budgets, /reports, the dashboard and
-// /review looking stale for up to ~30s (Next's client router cache) because the category
+// A new child category left /budgets, /reports, the dashboard and /review looking stale for
+// up to ~30s (Next's client router cache) because the category
 // mutations only ever revalidated /settings/managers (and, for rules, /transactions). Every
 // one of these three tests reads CATEGORY_RENDERING_ROUTES straight from the actions module
 // -- not a copy-pasted literal list -- so a route added to the constant without a matching

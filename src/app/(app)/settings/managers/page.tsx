@@ -10,7 +10,7 @@ export const dynamic = 'force-dynamic';
 export default async function ManagersPage() {
   await requireAdmin();
   const profiles = listProfiles();
-  // Read path for the delete confirm step (PENDING-FIXES.md #2 follow-up): the confirm text
+  // Read path for the delete confirm step: the confirm text
   // must say what a delete will do BEFORE the admin commits to it, so these counts come from
   // getProfileUsage() here, not from whatever deleteProfile() last returned.
   const profileUsage: Record<number, ProfileUsage> = {};

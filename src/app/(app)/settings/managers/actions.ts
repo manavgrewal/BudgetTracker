@@ -19,8 +19,8 @@ export interface ManagerState {
 const CROSS_ORIGIN_ERROR = 'Cross-origin request rejected';
 
 /**
- * PENDING-FIXES.md #3: every route that renders a category's name or the category hierarchy
- * to a user. Found by grepping the app for `listCategories`/`categoryName`/`categoryId`
+ * Every route that renders a category's name or the category hierarchy to a user. Found by
+ * grepping the app for `listCategories`/`categoryName`/`categoryId`
  * rather than trusting the three routes the bug report happened to name:
  *   - /settings/managers  -- this page; the category table itself.
  *   - /transactions       -- the per-row category and the filter list.
@@ -185,7 +185,7 @@ export async function saveProfileMappingAction(_prev: ManagerState, formData: Fo
   return { message: 'Profile updated.' };
 }
 
-/** Admin-only (PENDING-FIXES.md #2). deleteProfile() itself refuses only a built-in profile;
+/** Admin-only. deleteProfile() itself refuses only a built-in profile;
  *  an in-use one is deleted with its references cleared, and the counts it reports are turned
  *  into an honest after-the-fact message here, the same way deleteRuleAction reports how many
  *  transactions a deleted rename rule reverted. */

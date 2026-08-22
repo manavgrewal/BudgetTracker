@@ -16,9 +16,9 @@ export type DateFormat =
   | 'YYYY-MM-DD HH:mm';
 
 /**
- * PENDING-FIXES #1 option B (auto-detect) filters this list in DATE_FORMATS order and keeps
- * every format that parses all sampled values, so this declaration order doubles as the
- * tie-break order when two or more surviving formats agree on every sample (see
+ * Date-format auto-detection filters this list in DATE_FORMATS order and keeps every format
+ * that parses all sampled values, so this declaration order doubles as the tie-break order
+ * when two or more surviving formats agree on every sample (see
  * src/lib/import/detect-date-format.ts) — the ISO/4-digit-year forms are listed ahead of
  * their slash/dash/2-digit-year siblings for that reason. 'D MMM YYYY' / 'DD MMM YYYY' are
  * deliberately absent: 'DD-MMM-YYYY' below already accepts a space separator and a 1-2
@@ -108,8 +108,8 @@ export function parseDateString(raw: string, format: string): string | null {
       if (!month) return null;
       return buildIso(Number(m[3]), month, Number(m[1]));
     }
-    // PENDING-FIXES #1: Excel rewrites a saved "28 May 2026"-style date to this two-digit-
-    // year form ("26-May-26"). Same pivot as MM/DD/YY, see the comment above.
+    // Excel rewrites a saved "28 May 2026"-style date to this two-digit-year form
+    // ("26-May-26"). Same pivot as MM/DD/YY, see the comment above.
     case 'DD-MMM-YY': {
       const m = /^(\d{1,2})[-\s]([A-Za-z]{3,})[-\s](\d{2})$/.exec(text);
       if (!m) return null;
@@ -126,10 +126,10 @@ export function parseDateString(raw: string, format: string): string | null {
       if (!month) return null;
       return buildIso(Number(m[3]), month, Number(m[2]));
     }
-    // PENDING-FIXES #1: some bank exports append a timestamp to an otherwise-ISO date
-    // (e.g. "2026-03-14 09:30"). The time is matched but deliberately discarded — only the
-    // date component feeds buildIso, so an unparseable/garbage time still fails closed
-    // (regex requires HH:mm) while a valid one is silently ignored, never rounding the day.
+    // Some bank exports append a timestamp to an otherwise-ISO date (e.g. "2026-03-14
+    // 09:30"). The time is matched but deliberately discarded — only the date component
+    // feeds buildIso, so an unparseable/garbage time still fails closed (regex requires
+    // HH:mm) while a valid one is silently ignored, never rounding the day.
     case 'YYYY-MM-DD HH:mm': {
       const m = /^(\d{4})-(\d{1,2})-(\d{1,2}) (\d{1,2}):(\d{2})$/.exec(text);
       if (!m) return null;

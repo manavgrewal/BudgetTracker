@@ -39,8 +39,8 @@ describe('parseDateString', () => {
   });
 
   it('parses D/DD MMM YYYY (space-separated) under the existing DD-MMM-YYYY format', () => {
-    // PENDING-FIXES #1, option A: the DD-MMM-YYYY regex already accepts a space as the
-    // separator and 1-2 digit days (src/lib/import/presets.ts documents the same fact for
+    // The DD-MMM-YYYY regex already accepts a space as the separator and 1-2 digit days
+    // (src/lib/import/presets.ts documents the same fact for
     // the Amex Canada preset's real "02 Mar 2026" export), so 'D MMM YYYY' / 'DD MMM YYYY'
     // need no separate format literal — this is that coverage made explicit.
     expect(parseDateString('2 Mar 2026', 'DD-MMM-YYYY')).toBe('2026-03-02');
@@ -48,7 +48,7 @@ describe('parseDateString', () => {
     expect(parseDateString('14 Mar 2026', 'DD-MMM-YYYY')).toBe('2026-03-14');
   });
 
-  it('parses DD-MMM-YY (Excel-rewritten two-digit-year dates, PENDING-FIXES #1)', () => {
+  it('parses DD-MMM-YY (Excel-rewritten two-digit-year dates)', () => {
     expect(parseDateString('26-May-26', 'DD-MMM-YY')).toBe('2026-05-26');
     expect(parseDateString('2-Jan-08', 'DD-MMM-YY')).toBe('2008-01-02');
     expect(parseDateString('14 Mar 26', 'DD-MMM-YY')).toBe('2026-03-14');
@@ -103,7 +103,7 @@ describe('parseDateString', () => {
 
   it('exposes the format list used by the mapping wizard', () => {
     expect(DATE_FORMATS).toContain('MM/DD/YYYY');
-    // PENDING-FIXES #1 option A added 'DD-MMM-YY' and 'YYYY-MM-DD HH:mm' to the original 7.
+    // 'DD-MMM-YY' and 'YYYY-MM-DD HH:mm' were added to the original 7 formats.
     expect(DATE_FORMATS).toHaveLength(9);
     expect(DATE_FORMATS).toContain('DD-MMM-YY');
     expect(DATE_FORMATS).toContain('YYYY-MM-DD HH:mm');

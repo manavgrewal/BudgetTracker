@@ -56,7 +56,7 @@ describe('detectDateFormat', () => {
     expect(result.detected).toBe('DD-MMM-YYYY');
   });
 
-  it('parses the Excel-mangled two-digit-year format on its own (PENDING-FIXES #1)', () => {
+  it('parses the Excel-mangled two-digit-year format on its own', () => {
     const result = detectDateFormat(['26-May-26', '02-Jan-26', '15-Dec-25']);
     expect(result.status).toBe('unique');
     expect(result.detected).toBe('DD-MMM-YY');

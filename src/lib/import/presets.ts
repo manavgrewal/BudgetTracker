@@ -209,8 +209,8 @@ export interface DeleteProfileResult {
 }
 
 /**
- * PENDING-FIXES.md #2: there was no delete path at all, so a profile created for a test
- * stayed forever. The first version of this fix refused the delete whenever any row
+ * There was no delete path at all, so a profile created for a test stayed forever. The
+ * first version of this fix refused the delete whenever any row
  * referenced the profile -- but a mapping created for a test is almost always used to run at
  * least one test import, so imports.profileId would already reference it and the refusal
  * reproduced the exact "stays forever" symptom being fixed. Both FK columns
