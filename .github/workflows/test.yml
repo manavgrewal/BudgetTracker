@@ -1,0 +1,51 @@
+# Runs the test suite and the type check on every push and pull request. Before this
+# workflow existed, release-image.yml's guard job was the only thing CI ever ran -- it
+# vendors and checks the OCR/scanner assets but never invokes vitest, so every gate this
+# project has passed to date (the full suite, tsc, `next build`) was run locally by whoever
+# was doing the release. This closes that gap for the suite and the type check; `next build`
+# stays a release-time step (see docs/superpowers/plans/2026-08-18-ocr-engine-swap.md, Task 13)
+# because it is slow and the release task already runs it before every tag.
+name: Test suite
+
+on:
+  push:
+    branches:
+      - main
+  pull_request: {}
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Typecheck and vitest
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      # public/scanner/ is generated and gitignored, so tests that read it (scanner-assets,
+      # check-ocr-assets, docker, release-image) have nothing to check without this. It is a
+      # pure node_modules -> public/scanner copy, no network involved. The OCR models under
+      # vendor/ocr-models/ are committed to the repo, so they need no equivalent fetch step.
+      - name: Vendor the scanner assets
+        run: node scripts/vendor-scanner-assets.mjs
+
+      # tests/ops/install.test.ts shells out to bash to lint install/*.sh with `bash -n`;
+      # ubuntu-latest has bash on PATH already. --no-file-parallelism avoids a known Vitest
+      # worker-teardown flake that can exit the process nonzero after every test has already
+      # passed -- see the same flag used by the release task's full-gate run.
+      - name: Run the test suite
+        run: npx vitest run --no-file-parallelism
