@@ -1,6 +1,6 @@
 'use client';
 
-import { useActionState, useState } from 'react';
+import { useActionState, useMemo, useState } from 'react';
 import { MappingEditor } from '@/components/MappingEditor';
 import { FormError } from '@/components/FormError';
 import { SubmitButton } from '@/components/SubmitButton';
@@ -10,6 +10,7 @@ import { PageHeader } from '@/components/ui/PageHeader';
 import { TableWrap } from '@/components/ui/Table';
 import { Field, inputClass } from '@/components/ui/form';
 import type { ImportMapping } from '@/lib/import/mapping';
+import { detectDateFormat } from '@/lib/import/detect-date-format';
 import { saveWizardProfileAction, type WizardState } from '../actions';
 
 const initial: WizardState = {};
@@ -43,6 +44,17 @@ export function WizardClient({ starterMapping }: { starterMapping: ImportMapping
     setStagingId(body.stagingId as string);
     setEncoding(body.encoding as string);
   }
+
+  // /api/import/raw-preview hands back every line of the sample untouched — it does not
+  // know yet which rows are headers, since that is exactly what this screen is for
+  // deciding. Skip the same rows parseCsv (src/lib/import/parse.ts) would skip before
+  // sampling the date column, or a literal "Date" header row poisons detection into
+  // reporting 'none' for a perfectly normal file.
+  const dateFormatDetection = useMemo(() => {
+    if (!rows) return null;
+    const skip = mapping.hasHeader ? Math.max(mapping.headerRows, 1) : mapping.headerRows;
+    return detectDateFormat(rows.slice(skip).map((row) => row[mapping.dateCol] ?? ''));
+  }, [rows, mapping.hasHeader, mapping.headerRows, mapping.dateCol]);
 
   return (
     <div className="flex flex-col gap-6">
@@ -92,7 +104,7 @@ export function WizardClient({ starterMapping }: { starterMapping: ImportMapping
           <Card>
             <CardHeader title="Which column is which" description="Column numbers start at 0, matching the headings above." />
             <CardBody>
-              <MappingEditor mapping={mapping} onChange={setMapping} />
+              <MappingEditor mapping={mapping} onChange={setMapping} dateFormatDetection={dateFormatDetection} />
             </CardBody>
           </Card>
 

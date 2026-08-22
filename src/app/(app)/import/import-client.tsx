@@ -312,7 +312,11 @@ export function ImportClient({
             description="Wrong columns? Fix the mapping and the preview re-reads the same file."
           />
           <CardBody className="flex flex-col gap-4">
-            <MappingEditor mapping={mapping} onChange={(next) => void rePreview(next)} />
+            <MappingEditor
+              mapping={mapping}
+              onChange={(next) => void rePreview(next)}
+              dateFormatDetection={preview.dateFormatDetection}
+            />
 
             <TableWrap className="max-h-96 overflow-y-auto">
               <thead>

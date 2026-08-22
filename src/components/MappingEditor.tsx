@@ -1,8 +1,10 @@
 'use client';
 
 import type { ImportMapping } from '@/lib/import/mapping';
+import type { DateFormatDetection } from '@/lib/import/detect-date-format';
 import { DATE_FORMATS } from '@/lib/dates';
 import { Field, inputClass, labelClass, selectClass } from '@/components/ui/form';
+import { Notice } from '@/components/ui/Notice';
 
 /**
  * Which column of the bank's CSV holds what. Shared by the import preview and
@@ -12,12 +14,59 @@ import { Field, inputClass, labelClass, selectClass } from '@/components/ui/form
 export function MappingEditor({
   mapping,
   onChange,
+  dateFormatDetection,
 }: {
   mapping: ImportMapping;
   onChange: (next: ImportMapping) => void;
+  /**
+   * What detectDateFormat() found by sampling the date column itself, independent of
+   * whatever mapping.dateFormat currently says. Optional so a caller that has not been
+   * updated yet still compiles, but every real caller (the preview screen and the
+   * new-bank wizard) now passes it — otherwise a confident detector result never
+   * reaches anyone, and an ambiguous one (day/month could be swapped) stays invisible.
+   */
+  dateFormatDetection?: DateFormatDetection | null;
 }) {
   const set = <K extends keyof ImportMapping>(key: K, value: ImportMapping[K]) => onChange({ ...mapping, [key]: value });
   const numberOrNull = (value: string) => (value.trim() === '' ? null : Number(value));
+
+  let dateFormatNotice: React.ReactNode = null;
+  if (dateFormatDetection?.status === 'ambiguous') {
+    // The real DD/MM vs MM/DD case: two or more formats fit the sample but disagree on
+    // what at least one date actually is. Never auto-pick here — say so loudly (role="alert"
+    // plus the warning tone, not just a quiet hint) so a wrong pick is a choice, not an accident.
+    dateFormatNotice = (
+      <Notice
+        tone="warning"
+        role="alert"
+        title="This date column is ambiguous — day and month could be swapped"
+        className="sm:col-span-2 lg:col-span-3"
+      >
+        More than one format fits the sample rows ({dateFormatDetection.candidates.join(', ')}), and they do not
+        all read the same date out of every row. Picking the wrong one will not fail — it will silently swap the
+        day and the month. Check a real date from this file, then set the correct format above yourself.
+      </Notice>
+    );
+  } else if (dateFormatDetection?.status === 'none') {
+    dateFormatNotice = (
+      <Notice tone="warning" title="Could not recognize this column's date format" className="sm:col-span-2 lg:col-span-3">
+        None of the formats this app knows matched every sampled value. Double check the date column number above,
+        then set the format by hand.
+      </Notice>
+    );
+  } else if (dateFormatDetection?.detected && dateFormatDetection.detected !== mapping.dateFormat) {
+    const detected = dateFormatDetection.detected;
+    dateFormatNotice = (
+      <Notice tone="info" title={`Detected format: ${detected}`} className="sm:col-span-2 lg:col-span-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <p>The format selected above is {mapping.dateFormat}, but every sampled date reads cleanly as {detected} instead.</p>
+          <button type="button" onClick={() => set('dateFormat', detected)} className="btn btn--secondary btn--sm">
+            Use {detected}
+          </button>
+        </div>
+      </Notice>
+    );
+  }
 
   return (
     <div className="grid gap-4 rounded-lg border border-line bg-surface-2/50 p-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -57,6 +106,7 @@ export function MappingEditor({
           ))}
         </select>
       </Field>
+      {dateFormatNotice}
       <Field label="Description columns (comma separated)">
         <input
           value={mapping.descCols.join(',')}
