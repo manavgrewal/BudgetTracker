@@ -21,12 +21,12 @@ import { requireAdmin } from '@/lib/auth/session';
 import { revalidatePath } from 'next/cache';
 import {
   archiveCategoryAction,
-  CATEGORY_RENDERING_ROUTES,
   createCategoryAction,
   deleteProfileAction,
   deleteRuleAction,
   renameCategoryAction,
 } from '@/app/(app)/settings/managers/actions';
+import { CATEGORY_RENDERING_ROUTES } from '@/app/(app)/settings/managers/revalidation-routes';
 import { createProfile, getBuiltinPreset, getProfile, getProfileByName, listProfiles } from '@/lib/import/presets';
 
 let current: TestDb | null = null;
@@ -154,10 +154,11 @@ describe('deleteProfileAction (a mapping could not previously be deleted by anyo
 // A new child category left /budgets, /reports, the dashboard and /review looking stale for
 // up to ~30s (Next's client router cache) because the category
 // mutations only ever revalidated /settings/managers (and, for rules, /transactions). Every
-// one of these three tests reads CATEGORY_RENDERING_ROUTES straight from the actions module
-// -- not a copy-pasted literal list -- so a route added to the constant without a matching
-// revalidatePath call in the action fails here, and a route removed from the constant without
-// updating this test still passes (there is nothing left here to duplicate wrongly).
+// one of these three tests reads CATEGORY_RENDERING_ROUTES straight from the same module the
+// actions import it from -- not a copy-pasted literal list -- so a route added to the constant
+// without a matching revalidatePath call in the action fails here, and a route removed from the
+// constant without updating this test still passes (there is nothing left here to duplicate
+// wrongly).
 describe('category mutations revalidate every route that renders categories (finding 3)', () => {
   it('createCategoryAction revalidates every route that renders categories', async () => {
     setup();

@@ -10,6 +10,7 @@ import { deleteRule, listRules, upsertRuleFromCorrection } from '@/lib/categoriz
 import { deleteRenameRule, upsertRenameRule } from '@/lib/categorize/engine';
 import { createProfile, deleteProfile, getProfile, updateProfileMapping } from '@/lib/import/presets';
 import { importMappingSchema } from '@/lib/import/mapping';
+import { CATEGORY_RENDERING_ROUTES } from './revalidation-routes';
 
 export interface ManagerState {
   error?: string;
@@ -19,32 +20,11 @@ export interface ManagerState {
 const CROSS_ORIGIN_ERROR = 'Cross-origin request rejected';
 
 /**
- * Every route that renders a category's name or the category hierarchy to a user. Found by
- * grepping the app for `listCategories`/`categoryName`/`categoryId`
- * rather than trusting the three routes the bug report happened to name:
- *   - /settings/managers  -- this page; the category table itself.
- *   - /transactions       -- the per-row category and the filter list.
- *   - /reports            -- category breakdown and series.
- *   - /budgets            -- budgetProgress() rows, keyed by category, incl. nested children.
- *   - /dashboard          -- the "this month's budgets" table (budgetProgress() again) and
- *                            the account-setup callout's category-driven copy.
- *   - /review             -- the category picker offered for each queued transaction.
- * A category mutation (create, rename, archive) must revalidate every one of these or Next's
- * client router cache serves the pre-mutation page for up to ~30s. Every category mutation
- * below loops over this SAME constant -- and the test in tests/app/managers-actions.test.ts
- * reads it too -- so a route added here without a matching revalidatePath call fails the
- * test, instead of a future page silently joining the "never revalidated" set the way
- * /budgets, /reports and /dashboard did.
+ * Loops over CATEGORY_RENDERING_ROUTES (src/app/(app)/settings/managers/revalidation-routes.ts)
+ * on every category mutation below. See that module's doc comment for why the route list lives
+ * there and not in this file: this file starts with 'use server', which may export only async
+ * functions, and the route list is an array.
  */
-export const CATEGORY_RENDERING_ROUTES = [
-  '/settings/managers',
-  '/transactions',
-  '/reports',
-  '/budgets',
-  '/dashboard',
-  '/review',
-] as const;
-
 function revalidateCategoryRoutes(): void {
   for (const route of CATEGORY_RENDERING_ROUTES) revalidatePath(route);
 }
