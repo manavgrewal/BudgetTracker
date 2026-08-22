@@ -11,8 +11,19 @@ export type DateFormat =
   | 'YYYY/MM/DD'
   | 'MM/DD/YY'
   | 'DD-MMM-YYYY'
-  | 'MMM DD, YYYY';
+  | 'DD-MMM-YY'
+  | 'MMM DD, YYYY'
+  | 'YYYY-MM-DD HH:mm';
 
+/**
+ * PENDING-FIXES #1 option B (auto-detect) filters this list in DATE_FORMATS order and keeps
+ * every format that parses all sampled values, so this declaration order doubles as the
+ * tie-break order when two or more surviving formats agree on every sample (see
+ * src/lib/import/detect-date-format.ts) — the ISO/4-digit-year forms are listed ahead of
+ * their slash/dash/2-digit-year siblings for that reason. 'D MMM YYYY' / 'DD MMM YYYY' are
+ * deliberately absent: 'DD-MMM-YYYY' below already accepts a space separator and a 1-2
+ * digit day (see its case in parseDateString), so they need no separate entry.
+ */
 export const DATE_FORMATS: readonly DateFormat[] = [
   'MM/DD/YYYY',
   'DD/MM/YYYY',
@@ -20,7 +31,9 @@ export const DATE_FORMATS: readonly DateFormat[] = [
   'YYYY/MM/DD',
   'MM/DD/YY',
   'DD-MMM-YYYY',
+  'DD-MMM-YY',
   'MMM DD, YYYY',
+  'YYYY-MM-DD HH:mm',
 ];
 
 const MONTH_NAMES: Record<string, number> = {
@@ -68,6 +81,10 @@ export function parseDateString(raw: string, format: string): string | null {
       const year = Number(m[3]);
       return format === 'MM/DD/YYYY' ? buildIso(year, a, b) : buildIso(year, b, a);
     }
+    // Two-digit-year pivot (shared by MM/DD/YY and DD-MMM-YY below): 00-69 -> 2000-2069,
+    // 70-99 -> 1900-1999. This is the common spreadsheet/Y2K pivot (Excel and most bank
+    // exports use it too), chosen so a two-digit year near "now" (2026) reads as 2000s
+    // rather than 1900s, while old two-digit years (say a 1970s statement) still round-trip.
     case 'MM/DD/YY': {
       const m = /^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{2})$/.exec(text);
       if (!m) return null;
@@ -81,6 +98,9 @@ export function parseDateString(raw: string, format: string): string | null {
       if (!m) return null;
       return buildIso(Number(m[1]), Number(m[2]), Number(m[3]));
     }
+    // Accepts a dash OR a space between fields, and a 1-2 digit day, so this same case
+    // already covers 'D MMM YYYY' / 'DD MMM YYYY' (see the DATE_FORMATS docblock) —
+    // e.g. Amex Canada's real "02 Mar 2026" export (src/lib/import/presets.ts).
     case 'DD-MMM-YYYY': {
       const m = /^(\d{1,2})[-\s]([A-Za-z]{3,})[-\s](\d{4})$/.exec(text);
       if (!m) return null;
@@ -88,12 +108,32 @@ export function parseDateString(raw: string, format: string): string | null {
       if (!month) return null;
       return buildIso(Number(m[3]), month, Number(m[1]));
     }
+    // PENDING-FIXES #1: Excel rewrites a saved "28 May 2026"-style date to this two-digit-
+    // year form ("26-May-26"). Same pivot as MM/DD/YY, see the comment above.
+    case 'DD-MMM-YY': {
+      const m = /^(\d{1,2})[-\s]([A-Za-z]{3,})[-\s](\d{2})$/.exec(text);
+      if (!m) return null;
+      const month = MONTH_NAMES[m[2].slice(0, 3).toUpperCase()];
+      if (!month) return null;
+      const yy = Number(m[3]);
+      const year = yy >= 70 ? 1900 + yy : 2000 + yy;
+      return buildIso(year, month, Number(m[1]));
+    }
     case 'MMM DD, YYYY': {
       const m = /^([A-Za-z]{3,})\s+(\d{1,2}),?\s+(\d{4})$/.exec(text);
       if (!m) return null;
       const month = MONTH_NAMES[m[1].slice(0, 3).toUpperCase()];
       if (!month) return null;
       return buildIso(Number(m[3]), month, Number(m[2]));
+    }
+    // PENDING-FIXES #1: some bank exports append a timestamp to an otherwise-ISO date
+    // (e.g. "2026-03-14 09:30"). The time is matched but deliberately discarded — only the
+    // date component feeds buildIso, so an unparseable/garbage time still fails closed
+    // (regex requires HH:mm) while a valid one is silently ignored, never rounding the day.
+    case 'YYYY-MM-DD HH:mm': {
+      const m = /^(\d{4})-(\d{1,2})-(\d{1,2}) (\d{1,2}):(\d{2})$/.exec(text);
+      if (!m) return null;
+      return buildIso(Number(m[1]), Number(m[2]), Number(m[3]));
     }
     default:
       return null;

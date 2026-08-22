@@ -34,6 +34,43 @@ describe('parseDateString', () => {
     expect(parseDateString('03/14/26', 'MM/DD/YY')).toBe('2026-03-14');
     expect(parseDateString('14-Mar-2026', 'DD-MMM-YYYY')).toBe('2026-03-14');
     expect(parseDateString('Mar 14, 2026', 'MMM DD, YYYY')).toBe('2026-03-14');
+    expect(parseDateString('26-May-26', 'DD-MMM-YY')).toBe('2026-05-26');
+    expect(parseDateString('2026-03-14 09:30', 'YYYY-MM-DD HH:mm')).toBe('2026-03-14');
+  });
+
+  it('parses D/DD MMM YYYY (space-separated) under the existing DD-MMM-YYYY format', () => {
+    // PENDING-FIXES #1, option A: the DD-MMM-YYYY regex already accepts a space as the
+    // separator and 1-2 digit days (src/lib/import/presets.ts documents the same fact for
+    // the Amex Canada preset's real "02 Mar 2026" export), so 'D MMM YYYY' / 'DD MMM YYYY'
+    // need no separate format literal — this is that coverage made explicit.
+    expect(parseDateString('2 Mar 2026', 'DD-MMM-YYYY')).toBe('2026-03-02');
+    expect(parseDateString('02 Mar 2026', 'DD-MMM-YYYY')).toBe('2026-03-02');
+    expect(parseDateString('14 Mar 2026', 'DD-MMM-YYYY')).toBe('2026-03-14');
+  });
+
+  it('parses DD-MMM-YY (Excel-rewritten two-digit-year dates, PENDING-FIXES #1)', () => {
+    expect(parseDateString('26-May-26', 'DD-MMM-YY')).toBe('2026-05-26');
+    expect(parseDateString('2-Jan-08', 'DD-MMM-YY')).toBe('2008-01-02');
+    expect(parseDateString('14 Mar 26', 'DD-MMM-YY')).toBe('2026-03-14');
+  });
+
+  it('pivots two-digit years the same way for DD-MMM-YY as MM/DD/YY: 00-69 -> 2000-2069, 70-99 -> 1900-1999', () => {
+    // Both two-digit-year formats share one pivot rule (documented next to buildIso's
+    // callers in dates.ts). Test both sides of the 69/70 boundary for each format.
+    expect(parseDateString('01-Jan-69', 'DD-MMM-YY')).toBe('2069-01-01');
+    expect(parseDateString('01-Jan-70', 'DD-MMM-YY')).toBe('1970-01-01');
+    expect(parseDateString('01/01/69', 'MM/DD/YY')).toBe('2069-01-01');
+    expect(parseDateString('01/01/70', 'MM/DD/YY')).toBe('1970-01-01');
+  });
+
+  it('parses YYYY-MM-DD HH:mm by taking the date and ignoring the time (banks emit this)', () => {
+    expect(parseDateString('2026-03-14 09:30', 'YYYY-MM-DD HH:mm')).toBe('2026-03-14');
+    expect(parseDateString('2026-12-31 23:59', 'YYYY-MM-DD HH:mm')).toBe('2026-12-31');
+    expect(parseDateString('2026-03-14 9:05', 'YYYY-MM-DD HH:mm')).toBe('2026-03-14');
+    // Rejects a bare date (no time) and a malformed time under this specific format —
+    // callers who have a bare YYYY-MM-DD column should keep using that format instead.
+    expect(parseDateString('2026-03-14', 'YYYY-MM-DD HH:mm')).toBeNull();
+    expect(parseDateString('2026-03-14 09', 'YYYY-MM-DD HH:mm')).toBeNull();
   });
 
   it('tolerates padding and single-digit components', () => {
@@ -66,8 +103,13 @@ describe('parseDateString', () => {
 
   it('exposes the format list used by the mapping wizard', () => {
     expect(DATE_FORMATS).toContain('MM/DD/YYYY');
-    expect(DATE_FORMATS).toHaveLength(7);
+    // PENDING-FIXES #1 option A added 'DD-MMM-YY' and 'YYYY-MM-DD HH:mm' to the original 7.
+    expect(DATE_FORMATS).toHaveLength(9);
+    expect(DATE_FORMATS).toContain('DD-MMM-YY');
+    expect(DATE_FORMATS).toContain('YYYY-MM-DD HH:mm');
     expect(isDateFormat('MM/DD/YYYY')).toBe(true);
+    expect(isDateFormat('DD-MMM-YY')).toBe(true);
+    expect(isDateFormat('YYYY-MM-DD HH:mm')).toBe(true);
     expect(isDateFormat('MM-DD-YYYY')).toBe(false);
   });
 });

@@ -10,6 +10,7 @@ import { commitImport } from '@/lib/import/commit';
 import { computeRowHashes } from '@/lib/import/dedup';
 import { parseCsv } from '@/lib/import/parse';
 import { upsertRuleFromCorrection } from '@/lib/categorize/rules';
+import type { ImportMapping } from '@/lib/import/mapping';
 
 const fixture = (name: string) => fs.readFileSync(path.join(process.cwd(), 'fixtures', name));
 
@@ -130,5 +131,72 @@ describe('buildPreview', () => {
     expect(preview.rows).toHaveLength(PREVIEW_ROW_LIMIT);
     expect(preview.totalRows).toBe(PREVIEW_ROW_LIMIT + 25);
     expect(preview.truncated).toBe(true);
+  });
+
+  describe('dateFormatDetection (PENDING-FIXES #1, option B)', () => {
+    it('is unique for a file whose date column only fits one known format', () => {
+      // amex.csv's dates are "02 Mar 2026" etc — only 'DD-MMM-YYYY' parses them.
+      const { accountId, stagingId } = setup('amex.csv');
+      const preview = buildPreview({ stagingId, filename: 'amex.csv', accountId, profileId: null, mapping: getBuiltinPreset('Amex Canada') });
+      expect(preview.dateFormatDetection.status).toBe('unique');
+      expect(preview.dateFormatDetection.detected).toBe('DD-MMM-YYYY');
+    });
+
+    it('resolves deterministically when the surviving formats can never disagree', () => {
+      // td-chequing.csv's dates are ISO ("2026-03-02"), which both 'YYYY-MM-DD' and
+      // 'YYYY/MM/DD' parse identically (see dates.ts) — a harmless tie, not a real
+      // ambiguity, so detection still names one winner instead of asking the user.
+      const { accountId, stagingId } = setup();
+      const preview = buildPreview({ stagingId, filename: 'td.csv', accountId, profileId: null, mapping: getBuiltinPreset('TD Chequing/Debit') });
+      expect(preview.dateFormatDetection.status).toBe('resolved');
+      expect(preview.dateFormatDetection.detected).toBe('YYYY-MM-DD');
+      expect(preview.dateFormatDetection.candidates).toContain('YYYY/MM/DD');
+    });
+
+    it('is ambiguous for a real DD/MM vs MM/DD file and still honours the explicitly chosen dateFormat', () => {
+      current = createSeededTestDb();
+      const accountId = insertTestAccount(current.db);
+      const csv = Buffer.from(
+        ['03/04/2026,SHOP A,4.85,,0.00', '05/06/2026,SHOP B,10.00,,0.00'].join('\n'),
+        'utf8',
+      );
+      const stagingId = writeStagedFile(csv);
+      const mapping: ImportMapping = { ...getBuiltinPreset('TD Chequing/Debit'), dateFormat: 'MM/DD/YYYY' };
+
+      const preview = buildPreview({ stagingId, filename: 'ambiguous.csv', accountId, profileId: null, mapping });
+      expect(preview.dateFormatDetection.status).toBe('ambiguous');
+      expect(preview.dateFormatDetection.detected).toBeNull();
+      expect(preview.dateFormatDetection.candidates).toEqual(expect.arrayContaining(['MM/DD/YYYY', 'DD/MM/YYYY']));
+      // The explicit mapping.dateFormat still won — rows parsed as MM/DD/YYYY, not
+      // overridden by detection disagreeing with it.
+      expect(preview.rows[0].date).toBe('2026-03-04');
+      expect(preview.rows[1].date).toBe('2026-05-06');
+    });
+
+    it('reports none, without throwing, when nothing in the date column parses', () => {
+      current = createSeededTestDb();
+      const accountId = insertTestAccount(current.db);
+      const csv = Buffer.from(['N/A,SHOP A,4.85,,0.00', 'N/A,SHOP B,10.00,,0.00'].join('\n'), 'utf8');
+      const stagingId = writeStagedFile(csv);
+
+      const preview = buildPreview({ stagingId, filename: 'none.csv', accountId, profileId: null, mapping: getBuiltinPreset('TD Chequing/Debit') });
+      expect(preview.dateFormatDetection).toEqual({ status: 'none', detected: null, candidates: [] });
+      expect(preview.errorCount).toBe(2);
+    });
+
+    it('samples the raw date column even for rows the current dateFormat fails to parse', () => {
+      // The mapping below is wrong on purpose (ISO expected, file is MM/DD/YYYY), so every
+      // row lands in `errors` with reason 'unparseable date' — detection must still see the
+      // raw column via those error rows' cells, not just successfully parsed rows.
+      current = createSeededTestDb();
+      const accountId = insertTestAccount(current.db);
+      const csv = Buffer.from(['03/14/2026,SHOP A,4.85,,0.00', '01/05/2026,SHOP B,10.00,,0.00'].join('\n'), 'utf8');
+      const stagingId = writeStagedFile(csv);
+
+      const preview = buildPreview({ stagingId, filename: 'wrong-format.csv', accountId, profileId: null, mapping: getBuiltinPreset('TD Chequing/Debit') });
+      expect(preview.errorCount).toBe(2);
+      expect(preview.dateFormatDetection.status).toBe('unique');
+      expect(preview.dateFormatDetection.detected).toBe('MM/DD/YYYY');
+    });
   });
 });
