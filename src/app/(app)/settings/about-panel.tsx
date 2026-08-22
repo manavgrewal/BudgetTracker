@@ -1,7 +1,14 @@
 import { loadChangelog } from '@/lib/changelog';
 import { APP_VERSION } from '@/lib/version';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
+import { Notice } from '@/components/ui/Notice';
 import { renderEmphasis } from '@/components/render-emphasis';
+import type { OcrEngineState } from '@/lib/warranty/ocr/onnx/probe';
+
+/** ISO to "YYYY-MM-DD HH:MM", which is all a household needs from a timestamp. */
+function whenChecked(probedAt: string | null): string {
+  return probedAt === null ? 'an unknown date' : probedAt.slice(0, 16).replace('T', ' ');
+}
 
 /**
  * Server component: the changelog is read from disk on render, so a corrected typo in
@@ -18,8 +25,11 @@ import { renderEmphasis } from '@/components/render-emphasis';
  * card's major-review panel uses on the remote changelog, so the two never drift in
  * appearance (MUST-9.5).
  */
-export function AboutPanel() {
+export function AboutPanel({ ocr }: { ocr: OcrEngineState }) {
   const releases = loadChangelog();
+  // Only when the probe actually fell back AND recorded a reason. Absence of a reason means
+  // absence of a probe, not a silent failure.
+  const fellBack = ocr.engine === 'tesseract' && ocr.detail !== null;
 
   return (
     <Card>
@@ -32,6 +42,22 @@ export function AboutPanel() {
         }
       />
       <CardBody>
+        {fellBack ? (
+          <Notice tone="warning" title="This machine cannot run the new receipt reader." className="mb-4">
+            <p>
+              Budget Tracker checked once, the first time this version read a receipt here, and the check did not
+              survive. It has gone back to the older reader. Receipts still upload and are still read, just less
+              accurately.
+            </p>
+            <p>
+              There is nothing to fix. This is a limitation of the processor in this machine, not a setting, and the
+              check will run again by itself the next time you update.
+            </p>
+            <p>
+              Recorded reason: {ocr.detail}, checked on {whenChecked(ocr.probedAt)}.
+            </p>
+          </Notice>
+        ) : null}
         {releases.length === 0 ? (
           <p className="rounded-md border border-dashed border-line-strong px-4 py-6 text-center text-sm text-muted">
             No changelog is available in this install (CHANGELOG.md was not found).

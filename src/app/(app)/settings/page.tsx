@@ -15,6 +15,7 @@ import {
 } from '@/components/icons';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { PageHeader } from '@/components/ui/PageHeader';
+import { readOcrEngineState } from '@/lib/warranty/ocr/onnx/probe';
 import { AboutPanel } from './about-panel';
 import { ProfileForms } from './profile-forms';
 import { UpdatesCard } from './updates-card';
@@ -125,7 +126,7 @@ export default async function SettingsPage() {
       {user.role === 'admin' ? <UpdatesCard /> : null}
 
       {/* Last: the version and revision log are reference material, not a task. */}
-      <AboutPanel />
+      <AboutPanel ocr={readOcrEngineState()} />
     </div>
   );
 }
