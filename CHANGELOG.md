@@ -21,6 +21,24 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.5.1] - 2026-08-22
+
+### Fixed
+
+- **Settings -> Managers was completely broken by the 1.5.0 update.** The page returned an
+  error instead of loading, for every admin, the moment this app ran on a real server instead
+  of under a test. One file behind that page breaks a rule the real server enforces that
+  neither the test suite nor the build ever check: a file marked this way may only export
+  async functions, and one export there was a plain list of route names instead of a function.
+  The page works again, and a new automated check now reads every file carrying that rule and
+  fails the moment anything besides an async function is exported from one, so this exact
+  mistake cannot ship a second time.
+- **One import mapping that could no longer be read used to take that same page down with it.**
+  Settings -> Managers is also the only screen that can delete a mapping, so the page you
+  needed to fix the problem was the page the problem broke. A mapping like that now still shows
+  up in the list, clearly marked as unreadable, and can still be deleted instead of wrecking the
+  whole page.
+
 ## [1.5.0] - 2026-08-22
 
 ### Changed

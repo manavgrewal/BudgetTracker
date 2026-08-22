@@ -218,15 +218,17 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-14: the 1.5.0 release', () => {
+  it('MUST-14: the 1.5.1 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.5.0');
+    expect(pkg.version).toBe('1.5.1');
     const changelog = read('CHANGELOG.md');
-    expect(changelog).toMatch(/^## \[1\.5\.0\] - 2026-08-22$/m);
+    expect(changelog).toMatch(/^## \[1\.5\.1\] - 2026-08-22$/m);
     // An empty Unreleased section is left in place for the next session.
-    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.5.0]'));
-    const section = changelog.slice(changelog.indexOf('## [1.5.0]'), changelog.indexOf('## [1.4.0]'));
-    expect(section).toContain('Re-run OCR');
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.5.1]'));
+    const section = changelog.slice(changelog.indexOf('## [1.5.1]'), changelog.indexOf('## [1.5.0]'));
+    expect(section).toContain('Settings -> Managers');
+    // Honest about the severity: this was a shipped regression, not a minor tweak.
+    expect(section).toMatch(/completely broken/i);
     expect(section).not.toMatch(/PP-OCR|ONNX|tesseract/i);
   });
 
