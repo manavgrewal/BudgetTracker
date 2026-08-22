@@ -37,9 +37,12 @@ jobs:
         run: npm ci
 
       # Runs before Typecheck on purpose. public/scanner/ is generated and gitignored, so
-      # tests that read it (scanner-assets, check-ocr-assets, docker, release-image) have
-      # nothing to check without this, and it is a pure node_modules -> public/scanner copy,
-      # no network involved. tsc currently passes either order only by accident: nothing
+      # tests/scripts/check-ocr-assets.test.ts -- the only test that actually reads files
+      # under public/scanner -- has nothing to check without this. (scanner-assets.test.ts
+      # only reads the vendoring script's source and .gitignore; docker.test.ts and
+      # release-image.test.ts don't reference public/scanner at all.) It is a pure
+      # node_modules -> public/scanner copy, no network involved. tsc currently passes
+      # either order only by accident: nothing
       # under src/lib/scanner/ imports the vendored files today, load.ts references
       # '/scanner/opencv.js' etc as same-origin URL strings, not module imports. The moment
       # that changes, tsc-before-vendor would fail in CI only, in a way that looks unrelated

@@ -31,8 +31,11 @@ jobs:
   # its steps to keep in sync -- the guard job's own npm ci/vendor stays because it needs
   # different outputs (a verified version, and the stripped-image check-ocr-assets pass)
   # that the test workflow does not produce, so folding them into one job would either lose
-  # that or duplicate it right back. Running as a second job costs no extra wall-clock: it
-  # runs in parallel with guard, and build already waits on guard first.
+  # that or duplicate it right back. This is NOT free: `build` now needs [guard, test], so
+  # it waits on whichever of the two finishes last, and `test` (the whole tsc + vitest
+  # suite) takes longer than `guard` (two node scripts) -- the release path is genuinely
+  # slower than before this job existed. That's the accepted cost of the gate actually
+  # enforcing green-before-release instead of only claiming to.
   test:
     name: Test suite
     uses: ./.github/workflows/test.yml
