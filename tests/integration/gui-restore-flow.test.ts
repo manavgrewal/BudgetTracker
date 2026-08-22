@@ -172,13 +172,18 @@ describe('gui-restore-flow (spec §20.15)', () => {
     stageRestore({ backupName: legacyName, userId, username: 'bob' });
 
     // Pre-existing receipts/, with mtimes well past the 24h orphan grace window.
+    // Anchored to `now`, not the real wall clock: applyStagedRestoreOnBoot's touch-receipts
+    // step stamps mtimes to the injected `now`, so the fixture must be too — otherwise this
+    // assertion silently depends on how much real time has passed since the fixture was
+    // written (it did: see the defect writeup for v1.4.0).
+    const now = new Date('2026-08-16T21:04:53.000Z');
     fs.mkdirSync(path.join(dataDir, 'receipts'), { recursive: true });
     const existingReceipt = '22222222-3333-4444-5555-666666666666.jpg';
     fs.writeFileSync(path.join(dataDir, 'receipts', existingReceipt), JPEG);
-    const wellOverADayAgo = new Date(Date.now() - 72 * 60 * 60 * 1000);
+    const wellOverADayAgo = new Date(now.getTime() - 72 * 60 * 60 * 1000);
     fs.utimesSync(path.join(dataDir, 'receipts', existingReceipt), wellOverADayAgo, wellOverADayAgo);
 
-    applyStagedRestoreOnBoot(new Date('2026-08-16T21:04:53.000Z'));
+    applyStagedRestoreOnBoot(now);
 
     expect(fs.existsSync(stagedDir())).toBe(false);
     expect(fs.existsSync(applyingDir())).toBe(false);
