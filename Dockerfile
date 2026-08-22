@@ -15,7 +15,15 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json* ./
-RUN npm ci
+# onnxruntime-node ships one tarball carrying native binaries for all five supported
+# platforms and npm ci unpacks all of them regardless of target: darwin/arm64 75 MB,
+# win32/arm64 67 MB, win32/x64 62 MB, none of which this container can execute. Stripping
+# here means the builder and the runner both inherit the pruned tree. Both linux binaries
+# stay in both architectures' images; dropping the non-target one needs TARGETARCH plumbing
+# for another 20 to 37 MB and is not worth a new failure mode in this release.
+RUN npm ci \
+    && rm -rf node_modules/onnxruntime-node/bin/napi-v6/darwin \
+              node_modules/onnxruntime-node/bin/napi-v6/win32
 
 ############################################
 # 2. Build
@@ -31,6 +39,8 @@ ENV SECRET_KEY=build-time-placeholder-secret-key-0123456789
 
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
+# public/scanner/ is generated and gitignored, so it must exist before Next collects public/.
+RUN node scripts/vendor-scanner-assets.mjs
 RUN npm run build
 
 ############################################
@@ -86,11 +96,24 @@ COPY --from=builder --chown=node:node /app/node_modules/tesseract.js ./node_modu
 COPY --from=builder --chown=node:node /app/node_modules/tesseract.js-core ./node_modules/tesseract.js-core
 COPY --from=builder --chown=node:node /app/node_modules/pdfjs-dist ./node_modules/pdfjs-dist
 
+# The ONNX runtime, its shared types package and sharp all load native binaries by path,
+# which Next's output tracing cannot know about, same reason as better-sqlite3 above.
+# vendor/ is already copied wholesale, so vendor/ocr-models/ arrives with no new line;
+# public/ is already copied, so public/scanner/ does; scripts/ is already copied, so
+# scripts/ocr-probe.mjs does. tests/ops/docker.test.ts asserts those three rather than
+# assuming them, because "it is already covered" is exactly the belief that produces a
+# missing asset in production.
+COPY --from=builder --chown=node:node /app/node_modules/onnxruntime-node ./node_modules/onnxruntime-node
+COPY --from=builder --chown=node:node /app/node_modules/onnxruntime-common ./node_modules/onnxruntime-common
+COPY --from=builder --chown=node:node /app/node_modules/sharp ./node_modules/sharp
+COPY --from=builder --chown=node:node /app/node_modules/@img ./node_modules/@img
+
 # node-tar backs the .tar.gz backup archive and the restore script (spec §12.1).
 COPY --from=builder --chown=node:node /app/node_modules/tar ./node_modules/tar
 
 # A tracing miss must break `docker build`, not production (MUST-7.9, acceptance A3).
-RUN node scripts/check-ocr-assets.mjs
+# OCR_ASSETS_IN_IMAGE turns on the platform-strip assertion, which is only meaningful here.
+RUN OCR_ASSETS_IN_IMAGE=1 node scripts/check-ocr-assets.mjs
 
 USER node
 EXPOSE 3000

@@ -98,6 +98,10 @@ describe('ReceiptUploader', () => {
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
 
     await vi.advanceTimersByTimeAsync(1500);
+    // The poll's fetch fires inside the advance above, but the setFiles/setNotice
+    // re-render it triggers only commits on the next microtask flush -- one more
+    // (zero-duration) advance lets that pending render land before the assertions below.
+    await vi.advanceTimersByTimeAsync(0);
 
     expect(screen.getByText('Could not read')).toBeTruthy();
     expect(screen.getByText('That receipt could not be read.')).toBeTruthy();

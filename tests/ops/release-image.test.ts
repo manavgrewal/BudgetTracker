@@ -109,6 +109,26 @@ describe('.github/workflows/release-image.yml', () => {
     const buildJob = workflow.slice(workflow.indexOf('\n  build:'));
     expect(buildJob).toMatch(/needs:\s*guard/);
   });
+
+  it('MUST-10.14: the guard vendors the scanner assets before it checks them', () => {
+    const guardJob = workflow.slice(workflow.indexOf('  guard:'), workflow.indexOf('  build:'));
+    expect(guardJob).toContain('node scripts/vendor-scanner-assets.mjs');
+    expect(guardJob.indexOf('vendor-scanner-assets.mjs')).toBeLessThan(
+      guardJob.indexOf('node scripts/check-ocr-assets.mjs'),
+    );
+  });
+
+  it('MUST-10.16: the architecture comment tells the truth about onnxruntime-node', () => {
+    expect(workflow).not.toContain('is architecture-neutral');
+    expect(workflow).toMatch(/architecture-specific native binary/);
+    expect(workflow).toMatch(/darwin and win32 payloads are\s*#?\s*stripped/);
+    expect(workflow).toMatch(/decided at run time/);
+  });
+
+  it('MUST-10.17: still exactly two platforms and no emulated smoke-test job', () => {
+    expect(workflow).toContain('linux/amd64,linux/arm64');
+    expect(workflow).not.toContain('cortex-a53');
+  });
 });
 
 describe('install/synology-compose-pull.yml', () => {

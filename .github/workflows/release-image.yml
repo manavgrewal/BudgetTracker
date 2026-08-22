@@ -43,6 +43,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # public/scanner/ is generated and gitignored, so the asset check below has nothing to
+      # check until this runs.
+      - name: Vendor the scanner assets
+        run: node scripts/vendor-scanner-assets.mjs
+
       # MUST-7.9 / acceptance A3: a tracing miss (better-sqlite3, drizzle/, the OCR/PDF
       # assets) must fail loudly here, not silently degrade to tesseract.js's CDN fallback
       # in someone's LAN-only install. Same guard the Dockerfile itself runs at build time.
@@ -110,9 +115,12 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # better-sqlite3's native addon is compiled inside each target platform's image (the
-      # deps stage already does this on amd64 and arm64 alike), and the tesseract.js OCR
-      # WASM/language data copied into the runtime stage is architecture-neutral — no
-      # Dockerfile changes needed for arm64, only the platform list below.
+      # deps stage already does this on amd64 and arm64 alike). onnxruntime-node is
+      # different: it ships an architecture-specific native binary, and both architectures'
+      # images now carry both linux ORT binaries while the darwin and win32 payloads are
+      # stripped in the deps stage. Whether a given arm64 CPU can actually execute those
+      # kernels is decided at run time by the compatibility probe and cannot be decided
+      # here, which is why there is no emulated smoke test in this workflow.
       - name: Build and push
         uses: docker/build-push-action@v6
         with:

@@ -78,11 +78,68 @@ describe('Dockerfile', () => {
 
   it('fails the BUILD, not production, when an asset is missing (MUST-7.9 / acceptance A3)', () => {
     const runtimeStage = dockerfile.slice(dockerfile.lastIndexOf('FROM node:22-bookworm-slim AS runner'));
-    expect(runtimeStage).toContain('RUN node scripts/check-ocr-assets.mjs');
+    expect(runtimeStage).toContain('RUN OCR_ASSETS_IN_IMAGE=1 node scripts/check-ocr-assets.mjs');
     // The guard must run AFTER the COPY lines it checks, or it proves nothing.
-    expect(runtimeStage.indexOf('RUN node scripts/check-ocr-assets.mjs')).toBeGreaterThan(
+    expect(runtimeStage.indexOf('RUN OCR_ASSETS_IN_IMAGE=1 node scripts/check-ocr-assets.mjs')).toBeGreaterThan(
       runtimeStage.indexOf('node_modules/tesseract.js-core'),
     );
+  });
+
+  it('MUST-10.1 / MUST-10.2: the deps stage strips the darwin and win32 ORT binaries', () => {
+    const depsStage = dockerfile.slice(
+      dockerfile.indexOf('AS deps'),
+      dockerfile.indexOf('AS builder'),
+    );
+    expect(depsStage).toMatch(/rm -rf[\s\S]*onnxruntime-node\/bin\/napi-v6\/darwin/);
+    expect(depsStage).toMatch(/onnxruntime-node\/bin\/napi-v6\/win32/);
+    // linux/x64 and linux/arm64 both stay, in both architectures' images.
+    expect(depsStage).not.toMatch(/napi-v6\/linux/);
+  });
+
+  it('MUST-10.3: the builder vendors the scanner assets before it builds', () => {
+    const builderStage = dockerfile.slice(
+      dockerfile.indexOf('AS builder'),
+      dockerfile.lastIndexOf('FROM node:22-bookworm-slim AS runner'),
+    );
+    expect(builderStage).toContain('scripts/vendor-scanner-assets.mjs');
+    expect(builderStage.indexOf('vendor-scanner-assets.mjs')).toBeLessThan(
+      builderStage.indexOf('npm run build'),
+    );
+  });
+
+  it('MUST-10.4: the runner copies the ONNX runtime and sharp', () => {
+    const runtimeStage = dockerfile.slice(dockerfile.lastIndexOf('FROM node:22-bookworm-slim AS runner'));
+    for (const needle of [
+      'node_modules/onnxruntime-node ',
+      'node_modules/onnxruntime-common ',
+      'node_modules/sharp ',
+      'node_modules/@img ',
+    ]) {
+      expect(runtimeStage).toContain(needle);
+    }
+  });
+
+  it('MUST-10.4: vendor/, public/ and scripts/ are copied wholesale, so the models, the scanner and the probe arrive', () => {
+    const runtimeStage = dockerfile.slice(dockerfile.lastIndexOf('FROM node:22-bookworm-slim AS runner'));
+    expect(runtimeStage).toMatch(/COPY .*\/app\/vendor \.\/vendor/);
+    expect(runtimeStage).toMatch(/COPY .*\/app\/public \.\/public/);
+    expect(runtimeStage).toMatch(/COPY .*\/app\/scripts \.\/scripts/);
+  });
+
+  it('MUST-10.5 / MUST-10.9: the asset guard runs after every COPY it checks, with the strip assertion on', () => {
+    const runtimeStage = dockerfile.slice(dockerfile.lastIndexOf('FROM node:22-bookworm-slim AS runner'));
+    const guard = runtimeStage.indexOf('node scripts/check-ocr-assets.mjs');
+    expect(runtimeStage).toContain('OCR_ASSETS_IN_IMAGE=1 node scripts/check-ocr-assets.mjs');
+    for (const needle of ['node_modules/tesseract.js-core', 'node_modules/onnxruntime-node ', 'node_modules/sharp ']) {
+      expect(runtimeStage.indexOf(needle)).toBeLessThan(guard);
+    }
+  });
+
+  it('MUST-5.14: the tesseract fallback is still in the image', () => {
+    const runtimeStage = dockerfile.slice(dockerfile.lastIndexOf('FROM node:22-bookworm-slim AS runner'));
+    expect(runtimeStage).toContain('node_modules/tesseract.js ');
+    expect(runtimeStage).toContain('node_modules/tesseract.js-core');
+    expect(runtimeStage).toMatch(/COPY .*\/app\/vendor \.\/vendor/);
   });
 
   it('MUST-17.2 / MUST-17.3: the check directive is a parser directive at the top of the file', () => {

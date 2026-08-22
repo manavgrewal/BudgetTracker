@@ -4,6 +4,13 @@ import path from 'node:path';
 import os from 'node:os';
 import { spawnSync } from 'node:child_process';
 import { resolveOcrAssets, TESSDATA_RELATIVE_PATH } from '@/lib/warranty/ocr/assets';
+import {
+  DET_MODEL_SHA256,
+  REC_MODEL_SHA256,
+  CLS_MODEL_SHA256,
+  OCR_DICT_SHA256,
+  resolveOnnxOcrAssets,
+} from '@/lib/warranty/ocr/onnx/models';
 
 const root = process.cwd();
 const script = path.join(root, 'scripts/check-ocr-assets.mjs');
@@ -13,10 +20,11 @@ function run(cwd: string) {
 }
 
 describe('scripts/check-ocr-assets.mjs (MUST-7.9)', () => {
-  it('exits 0 in a healthy checkout and names what it checked', () => {
+  it('exits 0 in a healthy checkout, covering all ten paths', () => {
     const result = run(root);
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain('eng.traineddata.gz');
+    expect(result.stdout).toContain('en_dict.txt');
+    expect(result.stdout).toContain('opencv.js');
   });
 
   it('exits non-zero and names the missing path when an asset is absent', () => {
@@ -30,13 +38,19 @@ describe('scripts/check-ocr-assets.mjs (MUST-7.9)', () => {
     }
   });
 
-  it('checks exactly the four paths the runtime needs, and no URL', () => {
+  it('checks exactly the ten paths the runtime needs, and no URL', () => {
     const source = fs.readFileSync(script, 'utf8');
     for (const needle of [
       'vendor/tessdata/eng.traineddata.gz',
       'node_modules/tesseract.js-core',
       'node_modules/tesseract.js/src/worker-script/node/index.js',
       'node_modules/pdfjs-dist',
+      'vendor/ocr-models/ch_PP-OCRv5_det_mobile.onnx',
+      'vendor/ocr-models/en_PP-OCRv5_rec_mobile.onnx',
+      'vendor/ocr-models/ch_PP-LCNet_x0_25_textline_ori_cls_mobile.onnx',
+      'vendor/ocr-models/en_dict.txt',
+      'node_modules/onnxruntime-node/bin/napi-v6',
+      'scripts/ocr-probe.mjs',
     ]) {
       expect(source).toContain(needle);
     }
@@ -61,5 +75,49 @@ describe('scripts/check-ocr-assets.mjs (MUST-7.9)', () => {
     expect(source).toContain(workerRelative);
     expect(source).toContain(coreRelative);
     expect(source).toContain(TESSDATA_RELATIVE_PATH);
+  });
+
+  it('MUST-10.8: its duplicated model hashes equal the ones models.ts pins (Ruling P10a)', () => {
+    const source = fs.readFileSync(script, 'utf8');
+    for (const hash of [DET_MODEL_SHA256, REC_MODEL_SHA256, CLS_MODEL_SHA256, OCR_DICT_SHA256]) {
+      expect(source).toContain(hash);
+    }
+    const assets = resolveOnnxOcrAssets();
+    for (const value of Object.values(assets)) {
+      expect(source).toContain(path.relative(root, value).split(path.sep).join('/'));
+    }
+  });
+
+  it('MUST-10.9: it asserts the darwin and win32 platform directories are gone', () => {
+    const source = fs.readFileSync(script, 'utf8');
+    expect(source).toContain('node_modules/onnxruntime-node/bin/napi-v6/darwin');
+    expect(source).toContain('node_modules/onnxruntime-node/bin/napi-v6/win32');
+    expect(source).toContain('MUST-10.1');
+  });
+
+  it('MUST-10.10: it checks the scanner assets and the two accepted wasm shapes', () => {
+    const source = fs.readFileSync(script, 'utf8');
+    expect(source).toContain('public/scanner/opencv.js');
+    expect(source).toContain('public/scanner/jscanify.min.js');
+    expect(source).toContain('INLINED_GLUE_MIN_BYTES');
+  });
+
+  it("its inlined-glue threshold equals the vendoring script's, so the two cannot disagree", () => {
+    // Both scripts implement the same two accepted dist shapes, because neither can import
+    // from the other: one runs in the repo before the build, the other inside the runtime
+    // image. Asserting that each contains the identifier proves nothing about the value, so
+    // parse the number out of both and compare it. A build that accepts a 6 MB inlined glue
+    // in one place and rejects it in the other is a build that fails at the worst moment.
+    const threshold = (source: string) => {
+      const match = source.match(/INLINED_GLUE_MIN_BYTES\s*=\s*([\d_]+)/);
+      expect(match, 'INLINED_GLUE_MIN_BYTES is not a plain numeric literal').not.toBeNull();
+      return Number((match as RegExpMatchArray)[1].replace(/_/g, ''));
+    };
+    const guard = threshold(fs.readFileSync(script, 'utf8'));
+    const vendoring = threshold(
+      fs.readFileSync(path.join(root, 'scripts/vendor-scanner-assets.mjs'), 'utf8'),
+    );
+    expect(guard).toBe(vendoring);
+    expect(guard).toBe(8_000_000);
   });
 });
