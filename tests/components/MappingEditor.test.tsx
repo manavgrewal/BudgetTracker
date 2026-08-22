@@ -84,7 +84,7 @@ describe('MappingEditor — date format detection surfaces where the format is c
     expect(screen.queryByRole('button', { name: /use / })).toBeNull();
   });
 
-  it('says so, rather than staying silent, when no known format matches at all', () => {
+  it('says so, rather than staying silent, when no known format matches at all — and release review finding B: names the likely cause instead of only sending the user to the column number', () => {
     render(
       <MappingEditor
         mapping={BASE_MAPPING}
@@ -93,5 +93,15 @@ describe('MappingEditor — date format detection surfaces where the format is c
       />,
     );
     expect(screen.getByText(/Could not recognize this column's date format/i)).toBeTruthy();
+    // 'none' is reachable by feeding a headerless preset's own header row (or an
+    // opening-balance/footer line) into detection, which is usually a "Has header" miss,
+    // not actually a wrong column number — say so before the generic advice. Scoped to the
+    // notice itself (via .textContent, which unlike getByText's own-text-node matching does
+    // include the nested <strong>): the form has its own "Header rows" field label and
+    // "Has header" checkbox label elsewhere on the page that a loose getByText(/.../) would
+    // also match.
+    const notice = screen.getByRole('status');
+    expect(notice.textContent).toMatch(/a header row/i);
+    expect(notice.textContent).toMatch(/Has header/);
   });
 });

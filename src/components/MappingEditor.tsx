@@ -48,10 +48,17 @@ export function MappingEditor({
       </Notice>
     );
   } else if (dateFormatDetection?.status === 'none') {
+    // The sample fed to detection is every raw cell in the date column, INCLUDING error
+    // rows (src/lib/import/preview.ts) — so a headerless preset (TD, Scotiabank) sampling
+    // its own header text, or an opening-balance/footer line, reads as "no format matches"
+    // even though the real transaction rows below it are fine. Name that likely cause
+    // before the generic advice, rather than sending the user hunting the column number.
     dateFormatNotice = (
       <Notice tone="warning" title="Could not recognize this column's date format" className="sm:col-span-2 lg:col-span-3">
-        None of the formats this app knows matched every sampled value. Double check the date column number above,
-        then set the format by hand.
+        None of the formats this app knows matched every sampled value. This often means a header row, an
+        opening-balance line, or a footer note ended up in the sample instead of real transaction rows — if that
+        looks likely, try ticking <strong>Has header</strong> above (or raising header rows) first. Otherwise,
+        double check the date column number above, then set the format by hand.
       </Notice>
     );
   } else if (dateFormatDetection?.detected && dateFormatDetection.detected !== mapping.dateFormat) {
