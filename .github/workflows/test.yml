@@ -12,6 +12,9 @@ on:
     branches:
       - main
   pull_request: {}
+  # Lets release-image.yml invoke this workflow as a reusable one, so the release path
+  # depends on the exact same job instead of a second copy of these steps.
+  workflow_call: {}
 
 permissions:
   contents: read
@@ -33,15 +36,19 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Typecheck
-        run: npx tsc --noEmit
-
-      # public/scanner/ is generated and gitignored, so tests that read it (scanner-assets,
-      # check-ocr-assets, docker, release-image) have nothing to check without this. It is a
-      # pure node_modules -> public/scanner copy, no network involved. The OCR models under
-      # vendor/ocr-models/ are committed to the repo, so they need no equivalent fetch step.
+      # Runs before Typecheck on purpose. public/scanner/ is generated and gitignored, so
+      # tests that read it (scanner-assets, check-ocr-assets, docker, release-image) have
+      # nothing to check without this, and it is a pure node_modules -> public/scanner copy,
+      # no network involved. tsc currently passes either order only by accident: nothing
+      # under src/lib/scanner/ imports the vendored files today, load.ts references
+      # '/scanner/opencv.js' etc as same-origin URL strings, not module imports. The moment
+      # that changes, tsc-before-vendor would fail in CI only, in a way that looks unrelated
+      # to the actual edit -- so vendor runs first here, before that trap can fire.
       - name: Vendor the scanner assets
         run: node scripts/vendor-scanner-assets.mjs
+
+      - name: Typecheck
+        run: npx tsc --noEmit
 
       # tests/ops/install.test.ts shells out to bash to lint install/*.sh with `bash -n`;
       # ubuntu-latest has bash on PATH already. --no-file-parallelism avoids a known Vitest

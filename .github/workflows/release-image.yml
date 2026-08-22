@@ -25,6 +25,18 @@ permissions:
   packages: write
 
 jobs:
+  # "main is green before you tag" was convention, not enforcement: a tag push ran this
+  # guard job but never tsc or vitest. Calling test.yml here (its workflow_call trigger)
+  # makes the release path actually depend on the suite passing, without a second copy of
+  # its steps to keep in sync -- the guard job's own npm ci/vendor stays because it needs
+  # different outputs (a verified version, and the stripped-image check-ocr-assets pass)
+  # that the test workflow does not produce, so folding them into one job would either lose
+  # that or duplicate it right back. Running as a second job costs no extra wall-clock: it
+  # runs in parallel with guard, and build already waits on guard first.
+  test:
+    name: Test suite
+    uses: ./.github/workflows/test.yml
+
   guard:
     name: Guard (version + OCR assets)
     runs-on: ubuntu-latest
@@ -87,7 +99,7 @@ jobs:
 
   build:
     name: Build and push multi-arch image
-    needs: guard
+    needs: [guard, test]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

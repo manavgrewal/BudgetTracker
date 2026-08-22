@@ -56,7 +56,13 @@ describe('.github/workflows/release-image.yml', () => {
   });
 
   it('pins every third-party action to a major version, not a floating branch or SHA-less latest', () => {
-    const usesLines = workflow.match(/uses:\s*\S+/g) ?? [];
+    // The local reusable-workflow call (uses: ./.github/workflows/test.yml) is excluded on
+    // purpose: a same-repo path has no @ref to pin because it always resolves against the
+    // exact commit this workflow is running from -- there is no floating-branch risk to
+    // guard against the way there is for a third-party action.
+    const usesLines = (workflow.match(/uses:\s*\S+/g) ?? []).filter(
+      (line) => !line.includes('./.github/workflows/'),
+    );
     expect(usesLines.length).toBeGreaterThan(0);
     for (const line of usesLines) {
       expect(line, `unpinned or non-major-version action: ${line}`).toMatch(/@v\d+$/);
@@ -71,6 +77,10 @@ describe('.github/workflows/release-image.yml', () => {
     ]) {
       expect(workflow).toContain(action);
     }
+  });
+
+  it('B9: calls the shared test workflow as a local reusable workflow instead of duplicating its steps', () => {
+    expect(workflow).toContain('uses: ./.github/workflows/test.yml');
   });
 
   it('builds both linux/amd64 and linux/arm64', () => {
@@ -107,7 +117,12 @@ describe('.github/workflows/release-image.yml', () => {
 
   it('the build job depends on the guard job, so a bad version never reaches a push', () => {
     const buildJob = workflow.slice(workflow.indexOf('\n  build:'));
-    expect(buildJob).toMatch(/needs:\s*guard/);
+    expect(buildJob).toMatch(/needs:\s*\[[^\]]*\bguard\b[^\]]*\]/);
+  });
+
+  it('B9: the build job ALSO depends on the test workflow, so a failing suite never reaches a push', () => {
+    const buildJob = workflow.slice(workflow.indexOf('\n  build:'));
+    expect(buildJob).toMatch(/needs:\s*\[[^\]]*\btest\b[^\]]*\]/);
   });
 
   it('MUST-10.14: the guard vendors the scanner assets before it checks them', () => {
