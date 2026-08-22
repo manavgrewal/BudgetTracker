@@ -11,6 +11,7 @@ import { raiseRestoreOutcome } from '@/lib/notify/raise';
 import { startScheduler } from '@/lib/scheduler';
 import { reconcileApplyOnBoot } from '@/lib/update/state';
 import { assertOcrAssets, resolveOcrAssets } from '@/lib/warranty/ocr/assets';
+import { reconcileOcrCrashOnBoot } from '@/lib/warranty/ocr/queue';
 
 // MUST-20.26: FIRST, before anything can open the database. This ordering is load-bearing
 // and tests/ops/restore-seams.test.ts pins it: src/db/client.ts builds its singleton lazily
@@ -66,6 +67,18 @@ try {
   reconcileApplyOnBoot();
 } catch (error) {
   console.error('[update] boot reconciliation failed', error);
+}
+
+// Defect fix (v1.5.0): AFTER getDb() (the condemned row/sidecar is written into the restored
+// database) and BEFORE startScheduler() below, whose immediate boot sweep must see the
+// outcome — a receipt this reconciler condemns has to already be 'failed', not 'pending',
+// before that sweep decides what to re-enqueue. reconcileOcrCrashOnBoot is internally guarded
+// (it never throws today); this catch is the same belt-and-braces the two reconcilers above
+// already carry.
+try {
+  reconcileOcrCrashOnBoot();
+} catch (error) {
+  console.error('[ocr] crash reconciliation failed', error);
 }
 
 startScheduler();

@@ -123,3 +123,82 @@ describe('MUST-5.16: the fallback warning', () => {
     ).toBeTruthy();
   });
 });
+
+// Defect fix (v1.5.0): an admin whose ONNX path throws on every receipt previously had no way
+// to see it anywhere — the fallback notice above only ever fires when the PROBE fell back,
+// which a run-time throw never touches. These two describe blocks cover the two new signals.
+describe('defect fix: which engine is live (liveEngine prop)', () => {
+  it('states the new reader when liveEngine is onnx, regardless of the probe detail', () => {
+    render(<AboutPanel ocr={NO_PROBE} liveEngine="onnx" />);
+    expect(screen.getByTestId('ocr-live-engine').textContent).toContain('the new receipt reader');
+  });
+
+  it('states the older reader when liveEngine is tesseract', () => {
+    render(<AboutPanel ocr={NO_PROBE} liveEngine="tesseract" />);
+    expect(screen.getByTestId('ocr-live-engine').textContent).toContain('the older reader');
+  });
+
+  it('says plainly that nothing has been checked yet when liveEngine is null', () => {
+    render(<AboutPanel ocr={NO_PROBE} liveEngine={null} />);
+    const text = screen.getByTestId('ocr-live-engine').textContent ?? '';
+    expect(text).not.toContain('the new receipt reader');
+    expect(text).not.toContain('the older reader');
+    expect(text.length).toBeGreaterThan(0);
+  });
+
+  it('defaults liveEngine to ocr.engine, so every existing caller keeps reporting correctly unchanged', () => {
+    render(<AboutPanel ocr={{ ...NO_PROBE, engine: 'onnx' }} />);
+    expect(screen.getByTestId('ocr-live-engine').textContent).toContain('the new receipt reader');
+  });
+
+  it('an OCR_ENGINE override can report a DIFFERENT live engine than the probe\'s own cached verdict', () => {
+    // This is exactly the case liveEngine exists for: the cached probe still says 'onnx' (it
+    // was never re-probed), but an admin has forced tesseract via the override, and the panel
+    // must say so rather than repeating the stale cached verdict.
+    render(<AboutPanel ocr={{ ...NO_PROBE, engine: 'onnx' }} liveEngine="tesseract" />);
+    expect(screen.getByTestId('ocr-live-engine').textContent).toContain('the older reader');
+  });
+
+  it('names no library, no model and no version number, matching MUST-5.18\'s standard elsewhere on this panel', () => {
+    render(<AboutPanel ocr={NO_PROBE} liveEngine="onnx" />);
+    const text = screen.getByTestId('ocr-live-engine').textContent ?? '';
+    for (const banned of ['PP-OCR', 'ONNX', 'onnx', 'tesseract', 'Tesseract', 'model', 'Model']) {
+      expect(text).not.toContain(banned);
+    }
+  });
+});
+
+describe('defect fix: systemic OCR failure notice', () => {
+  it('does not render when systemic is false (the default)', () => {
+    render(<AboutPanel ocr={NO_PROBE} />);
+    expect(screen.queryByText(/Receipts are not being read right now\./)).toBeNull();
+  });
+
+  it('renders an alert when systemic is true, independent of the fallback notice', () => {
+    render(<AboutPanel ocr={NO_PROBE} systemic />);
+    expect(screen.getByRole('alert')).toBeTruthy();
+    expect(screen.getByText(/Receipts are not being read right now\./)).toBeTruthy();
+  });
+
+  it('can render alongside the fallback notice — they answer different questions', () => {
+    render(<AboutPanel ocr={FELL_BACK} systemic />);
+    expect(screen.getByRole('alert')).toBeTruthy();
+    expect(screen.getByRole('status')).toBeTruthy();
+  });
+
+  it('names no library, no model and no version number', () => {
+    render(<AboutPanel ocr={NO_PROBE} systemic />);
+    const text = screen.getByRole('alert').textContent ?? '';
+    for (const banned of ['PP-OCR', 'ONNX', 'onnx', 'tesseract', 'Tesseract', 'model', 'Model']) {
+      expect(text).not.toContain(banned);
+    }
+  });
+
+  it('sits above the changelog list, same as the fallback notice', () => {
+    const { container } = render(<AboutPanel ocr={NO_PROBE} systemic />);
+    const alert = screen.getByRole('alert');
+    const list = container.querySelector('ol');
+    expect(list).not.toBeNull();
+    expect(alert.compareDocumentPosition(list as Node) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+});

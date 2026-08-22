@@ -14,6 +14,13 @@ import {
   type OcrEngine,
   type OcrResult,
 } from '@/lib/warranty/ocr/engine';
+import {
+  OCR_CRASH_ATTEMPT_LIMIT,
+  clearOcrCrashGuard,
+  markOcrJobInFlight,
+  readOcrCrashGuardState,
+  recordOcrJobCrashSurvived,
+} from '@/lib/warranty/ocr/onnx/probe';
 import { findStagedReceipt, writeSidecar } from '@/lib/warranty/staging';
 
 /**
@@ -22,8 +29,14 @@ import { findStagedReceipt, writeSidecar } from '@/lib/warranty/staging';
  *
  * MUST-7.12: ocr_status has only three values ('pending' | 'done' | 'failed'), so an
  * in-flight job is tracked by this in-memory claimed-id set rather than in the database.
- * A crash therefore leaves rows in 'pending' and the scheduler's ten-minute sweep
- * re-enqueues them — self-healing and idempotent.
+ * A crash therefore leaves rows in 'pending' and the scheduler's ten-minute sweep (and the
+ * immediate one at boot) re-enqueues them — self-healing and idempotent PROVIDED the receipt
+ * itself did not cause the crash. Defect fix (v1.5.0): a receipt that reliably kills the
+ * process (an OOM-kill on a memory-capped NAS, a SIGILL the hardware probe missed) used to be
+ * "self-healed" straight back into the same crash forever, taking the whole app down every
+ * ten minutes. reconcileOcrCrashOnBoot() below closes that loop using a settings-table
+ * poison-pill marker (owned by onnx/probe.ts per MUST-12.2) rather than a new column or table
+ * — AC9 forbids a migration for this release.
  */
 export type OcrJob = { kind: 'staged'; stagingId: string } | { kind: 'receipt'; receiptId: number };
 
@@ -149,9 +162,22 @@ function messageOf(error: unknown): string {
   return error instanceof Error && error.message.length > 0 ? error.message : 'OCR failed.';
 }
 
+/**
+ * Defect fix (v1.5.0): marks `job` in-flight in the settings-table poison-pill before either
+ * variant below touches the engine, and clears it in `finally` regardless of outcome. Both
+ * runStagedJob and runReceiptJob already catch every failure they can observe (an engine
+ * throw, a timeout, a missing file) and record it normally — this wrapper only ever sees the
+ * mark survive past its own `finally` when the process itself died mid-`await`, which is
+ * exactly the case reconcileOcrCrashOnBoot() below is looking for.
+ */
 async function runJob(job: OcrJob): Promise<void> {
-  if (job.kind === 'staged') return runStagedJob(job.stagingId);
-  return runReceiptJob(job.receiptId);
+  markOcrJobInFlight(jobKey(job));
+  try {
+    if (job.kind === 'staged') await runStagedJob(job.stagingId);
+    else await runReceiptJob(job.receiptId);
+  } finally {
+    clearOcrCrashGuard();
+  }
 }
 
 async function runStagedJob(stagingId: string): Promise<void> {
@@ -220,4 +246,65 @@ export function sweepPendingReceipts(): number {
     if (enqueueOcrJob({ kind: 'receipt', receiptId: row.id })) enqueued += 1;
   }
   return enqueued;
+}
+
+/** Shown on the condemned row/sidecar. Exported so the About panel (or a future admin view)
+ *  can recognise this specific outcome without string-matching a free-form error again. */
+export const OCR_CRASH_CONDEMNED_MESSAGE =
+  'OCR crashed this app while reading this receipt, repeatedly, even across a restart. Marked as failed instead of retrying forever.';
+
+/** Reverses jobKey() above. 'r:' and 's:' are fixed-width prefixes, so slicing them off
+ *  recovers the original id verbatim even if a staging UUID somehow contained a colon. */
+function condemnCrashedJob(key: string): void {
+  if (key.startsWith('r:')) {
+    const receiptId = Number(key.slice(2));
+    getDb()
+      .update(warrantyReceipts)
+      .set({ ocrStatus: 'failed', ocrText: null, ocrError: OCR_CRASH_CONDEMNED_MESSAGE })
+      .where(eq(warrantyReceipts.id, receiptId))
+      .run();
+    return;
+  }
+  const stagingId = key.slice(2);
+  writeSidecar(stagingId, { status: 'failed', error: OCR_CRASH_CONDEMNED_MESSAGE });
+}
+
+/**
+ * Defect fix (v1.5.0): the boot-time half of the crash guard, modelled directly on
+ * update/state.ts's reconcileApplyOnBoot — a settings-table marker written before a
+ * process-risking step, reconciled once at the next boot. A still-present in-flight marker IS
+ * the proof that the LAST process died mid-job: runJob()'s own `finally` clears it on every
+ * path that does not kill the process, so nothing else can leave it behind.
+ *
+ * Never throws into the boot path (the same guarantee update/state.ts's reconciler and
+ * notify's raiseRestoreOutcome carry): a database error here must not stop the app booting.
+ * Guarded internally, belt-and-braces with the try/catch src/instrumentation-node.ts also
+ * wraps the call in, the same doubled-up caution that reconcileApplyOnBoot's own call site
+ * already applies.
+ */
+export function reconcileOcrCrashOnBoot(): void {
+  try {
+    const state = readOcrCrashGuardState();
+    const key = state.inFlightJobKey;
+    if (key === null) return; // Nothing was running when the process last stopped.
+
+    // Attempts only carry over when the recorded crash history is for THIS same job — a
+    // different job's leftover count must never attach itself to this one.
+    const priorAttempts = state.crashJobKey === key ? state.crashAttempts : 0;
+    const attempts = priorAttempts + 1;
+
+    if (attempts < OCR_CRASH_ATTEMPT_LIMIT) {
+      recordOcrJobCrashSurvived(key, attempts);
+      console.warn(
+        `[ocr] job ${key} was still marked in-flight at boot (crash ${attempts} of ${OCR_CRASH_ATTEMPT_LIMIT - 1} forgiven) — leaving it pending to retry`,
+      );
+      return;
+    }
+
+    console.error(`[ocr] job ${key} has crashed the app ${attempts} times in a row; marking it failed instead of retrying forever`);
+    condemnCrashedJob(key);
+    clearOcrCrashGuard();
+  } catch (error) {
+    console.error('[ocr] crash reconciliation failed', error);
+  }
 }

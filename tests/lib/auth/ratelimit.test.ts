@@ -185,7 +185,7 @@ describe('layer B — per username, IP-rotation resistant', () => {
 });
 
 describe('clientIpFromHeaders', () => {
-  const base: AppEnv = { secretKey: 'x'.repeat(32), trustProxy: false, tz: 'UTC', port: 3000, dataDir: '/data', watchtowerUrl: null, watchtowerToken: null };
+  const base: AppEnv = { secretKey: 'x'.repeat(32), trustProxy: false, tz: 'UTC', port: 3000, dataDir: '/data', watchtowerUrl: null, watchtowerToken: null, ocrEngineOverride: null };
 
   it('uses the socket IP when TRUST_PROXY is off', () => {
     const headers = new Headers({ 'x-forwarded-for': '1.2.3.4, 5.6.7.8' });

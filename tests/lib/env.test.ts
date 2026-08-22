@@ -50,6 +50,7 @@ describe('readEnv', () => {
       dataDir: DEFAULT_DATA_DIR,
       watchtowerUrl: null,
       watchtowerToken: null,
+      ocrEngineOverride: null,
     });
   });
 
@@ -275,5 +276,29 @@ describe('MUST-7.2: the two optional Watchtower variables', () => {
     expect(env.watchtowerToken).toBe('tok');
     // MUST-8.7: validation happens at the point of use, not here.
     expect(() => readEnv({ ...base, WATCHTOWER_URL: 'not a url', WATCHTOWER_TOKEN: 'tok' })).not.toThrow();
+  });
+});
+
+describe('OCR_ENGINE override (v1.5.0 defect fix)', () => {
+  const base = { SECRET_KEY: 'x'.repeat(40), DATA_DIR: '/tmp/bt-env-test' };
+
+  it('is null when absent or empty, unlike the Watchtower URL this is a hard error, not a defer', () => {
+    expect(readEnv(base).ocrEngineOverride).toBeNull();
+    expect(readEnv({ ...base, OCR_ENGINE: '' }).ocrEngineOverride).toBeNull();
+  });
+
+  it('accepts exactly "tesseract" or "onnx"', () => {
+    expect(readEnv({ ...base, OCR_ENGINE: 'tesseract' }).ocrEngineOverride).toBe('tesseract');
+    expect(readEnv({ ...base, OCR_ENGINE: 'onnx' }).ocrEngineOverride).toBe('onnx');
+  });
+
+  it('trims surrounding whitespace before validating', () => {
+    expect(readEnv({ ...base, OCR_ENGINE: '  onnx  ' }).ocrEngineOverride).toBe('onnx');
+  });
+
+  it('is a hard startup error on anything else, matching SECRET_KEY, unlike the deferred Watchtower URL check above', () => {
+    expect(() => readEnv({ ...base, OCR_ENGINE: 'tesseract-v2' })).toThrowError(/OCR_ENGINE/);
+    expect(() => readEnv({ ...base, OCR_ENGINE: 'ONNX' })).toThrow(); // case-sensitive, not silently normalized
+    expect(() => readEnv({ ...base, OCR_ENGINE: '0' })).toThrow();
   });
 });

@@ -19,6 +19,20 @@ export interface AppEnv {
    */
   watchtowerUrl: string | null;
   watchtowerToken: string | null;
+  /**
+   * v1.5.0 defect fix. Absent by default, in which case the hardware probe (and its cache)
+   * decides — see src/lib/warranty/ocr/onnx/probe.ts. When present it OVERRIDES both of
+   * those: this is the recovery path for an install where the fast reader is armed but throws
+   * on every receipt (a model mismatch, a `sharp` failure, a shape-guard rejection), which has
+   * no Settings control and for which re-probing just answers the same wrong-for-this-purpose
+   * verdict again. Unlike watchtowerUrl above, an invalid value here is a hard boot-time
+   * error rather than something reported later at the point of use — matching SECRET_KEY, not
+   * WATCHTOWER_URL. The difference is what a wrong value costs: a malformed Watchtower URL
+   * only disables a convenience feature and is safe to defer, while this setting decides
+   * which code path every receipt's OCR runs through, and a typo silently ignored here would
+   * be exactly the kind of invisible misconfiguration this fix exists to prevent.
+   */
+  ocrEngineOverride: 'tesseract' | 'onnx' | null;
 }
 
 // Re-exported so every existing importer of DEFAULT_TZ from '@/lib/env' keeps working
@@ -32,6 +46,7 @@ export const GENERATED_SECRET_KEY_BYTES = 48;
 export const SECRET_KEY_FILENAME = 'secret.key';
 
 const TRUTHY = new Set(['1', 'true', 'yes', 'on']);
+const OCR_ENGINE_OVERRIDE_VALUES = new Set(['tesseract', 'onnx']);
 
 /**
  * readEnv() is called as a default-parameter expression all over the request path
@@ -150,6 +165,18 @@ export function readEnv(source: Partial<NodeJS.ProcessEnv> = process.env): AppEn
     port = parsed;
   }
 
+  // Present-but-invalid is a hard error, matching SECRET_KEY and PORT above — never silently
+  // ignored, because a typo here would otherwise mean OCR quietly keeps using whichever engine
+  // the probe cache already picked, with the admin believing the override took effect.
+  const rawOcrEngine = (source.OCR_ENGINE ?? '').trim();
+  let ocrEngineOverride: 'tesseract' | 'onnx' | null = null;
+  if (rawOcrEngine.length > 0) {
+    if (!OCR_ENGINE_OVERRIDE_VALUES.has(rawOcrEngine)) {
+      throw new Error(`OCR_ENGINE must be "tesseract" or "onnx", got "${rawOcrEngine}"`);
+    }
+    ocrEngineOverride = rawOcrEngine as 'tesseract' | 'onnx';
+  }
+
   return {
     secretKey,
     trustProxy: TRUTHY.has((source.TRUST_PROXY ?? '').trim().toLowerCase()),
@@ -158,5 +185,6 @@ export function readEnv(source: Partial<NodeJS.ProcessEnv> = process.env): AppEn
     dataDir,
     watchtowerUrl: (source.WATCHTOWER_URL ?? '').trim().length > 0 ? (source.WATCHTOWER_URL as string).trim() : null,
     watchtowerToken: (source.WATCHTOWER_TOKEN ?? '').trim().length > 0 ? (source.WATCHTOWER_TOKEN as string).trim() : null,
+    ocrEngineOverride,
   };
 }

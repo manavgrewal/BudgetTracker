@@ -28,6 +28,10 @@ services:
       TZ: "America/Toronto"
       PORT: "3000"
       DATA_DIR: /data
+      # Optional escape hatch (v1.5.0) -- see INSTALL.md's OCR section. Uncomment to force one
+      # receipt reader regardless of the hardware probe or its cache. Accepted values are
+      # exactly "tesseract" or "onnx"; restart the project after changing this.
+      # OCR_ENGINE: "tesseract"
     volumes:
       # Relative to this compose file's folder (the Container Manager project
       # path) — works on any volume, /volume1 or otherwise.

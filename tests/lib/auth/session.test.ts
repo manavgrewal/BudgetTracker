@@ -154,7 +154,7 @@ describe('cookie policy', () => {
   });
 
   it('turns Secure on for a direct https request URL, regardless of headers/env', () => {
-    const env = { secretKey: 'x'.repeat(32), trustProxy: false, tz: 'UTC', port: 3000, dataDir: '/data', watchtowerUrl: null, watchtowerToken: null };
+    const env = { secretKey: 'x'.repeat(32), trustProxy: false, tz: 'UTC', port: 3000, dataDir: '/data', watchtowerUrl: null, watchtowerToken: null, ocrEngineOverride: null };
     // https request URL → secure, even with no trust-proxy and no forwarded headers.
     expect(shouldUseSecureCookie('https:', new Headers({}), env)).toBe(true);
     // http URL + trustProxy off → not secure.
@@ -162,7 +162,7 @@ describe('cookie policy', () => {
   });
 
   it('honours X-Forwarded-Proto only when TRUST_PROXY is on', () => {
-    const off = { secretKey: 'x'.repeat(32), trustProxy: false, tz: 'UTC', port: 3000, dataDir: '/data', watchtowerUrl: null, watchtowerToken: null };
+    const off = { secretKey: 'x'.repeat(32), trustProxy: false, tz: 'UTC', port: 3000, dataDir: '/data', watchtowerUrl: null, watchtowerToken: null, ocrEngineOverride: null };
     const on = { ...off, trustProxy: true };
     const headers = new Headers({ 'x-forwarded-proto': 'https' });
     // http URL + trustProxy off → not secure, even with a forwarded https header.

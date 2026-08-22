@@ -90,11 +90,28 @@ egress destination beyond the three named above.
 
 **If you restore a backup onto a different machine, the receipt reader may need to re-check
 itself.** The app records, per processor family, whether the fast OCR engine runs on that
-hardware, keyed to `settings.ocr.engine`. If you restore a backup from one machine onto a
-second machine with a different processor of the same architecture, and receipt reading then
-stops working, delete the row whose key is `ocr.engine` from the `settings` table and upload
-one receipt. The app checks the new machine and records the right answer. This is the one case
-the automatic check cannot see for itself.
+hardware, keyed to `settings.ocr.engine` and `settings.ocr.engine_probed_version` (the exact
+string `<version>/<architecture>` the check was run under, e.g. `1.5.0/arm64`). If you restore
+a backup from one machine onto a second machine with a different processor of the same
+architecture, and receipt reading then stops working, delete **both** rows — `ocr.engine` and
+`ocr.engine_probed_version` — from the `settings` table and upload one receipt; deleting
+`ocr.engine` alone is not enough, because the app only re-checks when EITHER row is missing or
+the recorded version/architecture no longer matches this install, and a `ocr.engine_probed_version`
+left behind from the old machine can still match by coincidence. Once both are gone the app
+checks the new machine fresh and records the right answer. This is the one case the automatic
+check cannot see for itself.
+
+**If receipt reading stopped working WITHOUT a hardware change** — every receipt fails, or
+came back failing right after this version's first receipt — that is a different problem, and
+deleting the two rows above will not fix it: the hardware check would simply reconfirm the same
+engine, because it is testing whether this CPU can run the fast reader at all, not whether that
+reader is working correctly today. Set `OCR_ENGINE=tesseract` (or `onnx`, to force the other
+direction) in `.env` or the compose file's `environment:` block, then restart — see the
+`OCR_ENGINE` note in `.env.example` and the commented line in the compose files. This value
+always wins, whatever the recorded check says and without re-running it, so it is the correct
+fix for "the fast reader is on but nothing is being read", not just for the cross-machine case
+above. There is no Settings page control for this by design — it is meant for an admin editing
+the install's own configuration, not a setting a household member could flip by accident.
 
 ---
 

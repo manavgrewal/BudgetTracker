@@ -3,7 +3,7 @@ import { APP_VERSION } from '@/lib/version';
 import { Card, CardBody, CardHeader } from '@/components/ui/Card';
 import { Notice } from '@/components/ui/Notice';
 import { renderEmphasis } from '@/components/render-emphasis';
-import type { OcrEngineState } from '@/lib/warranty/ocr/onnx/probe';
+import type { OcrEngineKind, OcrEngineState } from '@/lib/warranty/ocr/onnx/probe';
 
 /** ISO to "YYYY-MM-DD HH:MM", which is all a household needs from a timestamp. */
 function whenChecked(probedAt: string | null): string {
@@ -24,8 +24,23 @@ function whenChecked(probedAt: string | null): string {
  * the shared renderEmphasis() (@/components/render-emphasis), the SAME helper the Updates
  * card's major-review panel uses on the remote changelog, so the two never drift in
  * appearance (MUST-9.5).
+ *
+ * Defect fix (v1.5.0): `liveEngine` and `systemic` answer a question the fallback notice below
+ * never could — which reader is ACTUALLY in effect right now (accounting for the OCR_ENGINE
+ * override, which the fallback notice's `ocr` prop knows nothing about), and whether OCR is
+ * failing on every recent receipt regardless of why. `liveEngine` defaults to `ocr.engine` so
+ * every existing caller (and every existing test) keeps working unchanged when there is no
+ * override to report.
  */
-export function AboutPanel({ ocr }: { ocr: OcrEngineState }) {
+export function AboutPanel({
+  ocr,
+  liveEngine = ocr.engine,
+  systemic = false,
+}: {
+  ocr: OcrEngineState;
+  liveEngine?: OcrEngineKind | null;
+  systemic?: boolean;
+}) {
   const releases = loadChangelog();
   // Only when the probe actually fell back AND recorded a reason. Absence of a reason means
   // absence of a probe, not a silent failure.
@@ -42,6 +57,22 @@ export function AboutPanel({ ocr }: { ocr: OcrEngineState }) {
         }
       />
       <CardBody>
+        <p className="mb-4 text-sm text-muted" data-testid="ocr-live-engine">
+          {liveEngine === 'onnx'
+            ? 'Receipts are currently read by the new receipt reader.'
+            : liveEngine === 'tesseract'
+              ? 'Receipts are currently read by the older reader.'
+              : 'This install has not read a receipt yet, so it has not checked which reader it will use.'}
+        </p>
+        {systemic ? (
+          <Notice tone="error" title="Receipts are not being read right now." className="mb-4">
+            <p>
+              The last few receipts all failed to read. That is different from one unreadable photo — something
+              about the reader itself is failing every time, on every receipt.
+            </p>
+            <p>Receipts still upload safely. Only the automatic reading of them is affected.</p>
+          </Notice>
+        ) : null}
         {fellBack ? (
           <Notice tone="warning" title="This machine cannot run the new receipt reader." className="mb-4">
             <p>

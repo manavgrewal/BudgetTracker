@@ -6,12 +6,18 @@ import { getSetting, setSetting } from '@/lib/settings';
 import { APP_VERSION } from '@/lib/version';
 import { OCR_PROBE_DETAIL_MAX_CHARS, OCR_PROBE_OK_LINE } from '@/lib/warranty/ocr/onnx/constants';
 import {
+  OCR_CRASH_ATTEMPT_LIMIT,
   SETTING_OCR_ENGINE,
   SETTING_OCR_ENGINE_PROBED_VERSION,
   SETTING_OCR_ENGINE_PROBE_AT,
   SETTING_OCR_ENGINE_PROBE_DETAIL,
+  clearOcrCrashGuard,
+  markOcrJobInFlight,
   probeCacheKey,
+  readEffectiveOcrEngine,
+  readOcrCrashGuardState,
   readOcrEngineState,
+  recordOcrJobCrashSurvived,
   resetOcrProbeForTests,
   resolveOcrEngineKind,
   setProbeScriptPathForTests,
@@ -20,16 +26,21 @@ import { createSeededTestDb, type TestDb } from '../../../helpers/db';
 
 let current: TestDb | null = null;
 let dir: string;
+let originalOcrEngine: string | undefined;
 
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'budget-ocr-probe-'));
   current = createSeededTestDb();
   resetOcrProbeForTests();
+  originalOcrEngine = process.env.OCR_ENGINE;
+  delete process.env.OCR_ENGINE;
 });
 
 afterEach(() => {
   setProbeScriptPathForTests(null);
   resetOcrProbeForTests();
+  if (originalOcrEngine === undefined) delete process.env.OCR_ENGINE;
+  else process.env.OCR_ENGINE = originalOcrEngine;
   current?.cleanup();
   current = null;
   fs.rmSync(dir, { recursive: true, force: true });
@@ -152,5 +163,90 @@ describe('single flight (MUST-5.6 step 1)', () => {
     expect(a).toBe('onnx');
     expect(b).toBe('onnx');
     expect(fs.readFileSync(marker, 'utf8')).toBe('x');
+  });
+});
+
+describe('defect fix (v1.5.0): the OCR_ENGINE override', () => {
+  it('wins over a cached verdict that disagrees, with no spawn at all', async () => {
+    const marker = path.join(dir, 'never-spawned.txt');
+    fakeScript('never.mjs', `import fs from 'node:fs';\nfs.appendFileSync(${JSON.stringify(marker)}, 'x');\nprocess.exit(1);`);
+    setSetting(SETTING_OCR_ENGINE, 'onnx');
+    setSetting(SETTING_OCR_ENGINE_PROBED_VERSION, probeCacheKey());
+    process.env.OCR_ENGINE = 'tesseract';
+    expect(await resolveOcrEngineKind()).toBe('tesseract');
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  it('wins over running a FRESH probe too — a broken install recovers with no probe attempt at all', async () => {
+    const marker = path.join(dir, 'never-spawned-2.txt');
+    fakeScript('never.mjs', `import fs from 'node:fs';\nfs.appendFileSync(${JSON.stringify(marker)}, 'x');\nprocess.exit(1);`);
+    // No cache at all — resolveOcrEngineKind() would otherwise have to probe.
+    process.env.OCR_ENGINE = 'onnx';
+    expect(await resolveOcrEngineKind()).toBe('onnx');
+    expect(fs.existsSync(marker)).toBe(false);
+  });
+
+  it('does not touch the cached probe verdict — it wins by precedence, not by rewriting the cache', async () => {
+    setSetting(SETTING_OCR_ENGINE, 'onnx');
+    setSetting(SETTING_OCR_ENGINE_PROBED_VERSION, probeCacheKey());
+    process.env.OCR_ENGINE = 'tesseract';
+    await resolveOcrEngineKind();
+    expect(getSetting(SETTING_OCR_ENGINE)).toBe('onnx');
+  });
+
+  it('an invalid value rejects the promise instead of silently falling through to the probe', async () => {
+    fakeScript('ok.mjs', `console.log('${OCR_PROBE_OK_LINE}');`);
+    process.env.OCR_ENGINE = 'not-a-real-engine';
+    await expect(resolveOcrEngineKind()).rejects.toThrowError(/OCR_ENGINE/);
+  });
+});
+
+describe('defect fix (v1.5.0): readEffectiveOcrEngine — a synchronous, no-spawn answer for Settings -> About', () => {
+  it('is null when there is no override and no probe has ever run', () => {
+    expect(readEffectiveOcrEngine()).toBeNull();
+  });
+
+  it('reports the override even when the cache disagrees', () => {
+    setSetting(SETTING_OCR_ENGINE, 'onnx');
+    setSetting(SETTING_OCR_ENGINE_PROBED_VERSION, probeCacheKey());
+    process.env.OCR_ENGINE = 'tesseract';
+    expect(readEffectiveOcrEngine()).toBe('tesseract');
+  });
+
+  it('reports the cached verdict when it matches this version and architecture and there is no override', () => {
+    setSetting(SETTING_OCR_ENGINE, 'onnx');
+    setSetting(SETTING_OCR_ENGINE_PROBED_VERSION, probeCacheKey());
+    expect(readEffectiveOcrEngine()).toBe('onnx');
+  });
+
+  it('is null when the cache is stale (a different version or architecture)', () => {
+    setSetting(SETTING_OCR_ENGINE, 'onnx');
+    setSetting(SETTING_OCR_ENGINE_PROBED_VERSION, '0.0.1/not-this-arch');
+    expect(readEffectiveOcrEngine()).toBeNull();
+  });
+});
+
+describe('defect fix (v1.5.0): the crash-guard settings primitives', () => {
+  it('starts with an empty state', () => {
+    expect(readOcrCrashGuardState()).toEqual({ inFlightJobKey: null, crashJobKey: null, crashAttempts: 0 });
+  });
+
+  it('markOcrJobInFlight sets only the in-flight key, leaving any crash history untouched', () => {
+    recordOcrJobCrashSurvived('r:1', 1);
+    markOcrJobInFlight('r:1');
+    expect(readOcrCrashGuardState()).toEqual({ inFlightJobKey: 'r:1', crashJobKey: 'r:1', crashAttempts: 1 });
+  });
+
+  it('clearOcrCrashGuard wipes all three keys at once', () => {
+    markOcrJobInFlight('r:1');
+    recordOcrJobCrashSurvived('r:1', OCR_CRASH_ATTEMPT_LIMIT - 1);
+    clearOcrCrashGuard();
+    expect(readOcrCrashGuardState()).toEqual({ inFlightJobKey: null, crashJobKey: null, crashAttempts: 0 });
+  });
+
+  it('recordOcrJobCrashSurvived records the job and count, and clears the in-flight mark', () => {
+    markOcrJobInFlight('r:7');
+    recordOcrJobCrashSurvived('r:7', 2);
+    expect(readOcrCrashGuardState()).toEqual({ inFlightJobKey: null, crashJobKey: 'r:7', crashAttempts: 2 });
   });
 });
