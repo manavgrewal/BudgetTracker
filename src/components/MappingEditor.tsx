@@ -15,6 +15,7 @@ export function MappingEditor({
   mapping,
   onChange,
   dateFormatDetection,
+  busy,
 }: {
   mapping: ImportMapping;
   onChange: (next: ImportMapping) => void;
@@ -26,6 +27,16 @@ export function MappingEditor({
    * reaches anyone, and an ambiguous one (day/month could be swapped) stays invisible.
    */
   dateFormatDetection?: DateFormatDetection | null;
+  /**
+   * Whether the caller already has a preview/save request in flight for this mapping.
+   * Only gates the one-click "Use X" date-format button below — the button re-fetches
+   * on click the same way every other field here re-fetches on change, so it needs the
+   * same double-fire guard the caller's other buttons already have (release-review
+   * finding C). Every other control in this form is a plain onChange and is left alone.
+   * Optional and defaults to not-busy so a caller with nothing to gate (the new-bank
+   * wizard, which only ever updates local state) can skip it.
+   */
+  busy?: boolean;
 }) {
   const set = <K extends keyof ImportMapping>(key: K, value: ImportMapping[K]) => onChange({ ...mapping, [key]: value });
   const numberOrNull = (value: string) => (value.trim() === '' ? null : Number(value));
@@ -61,15 +72,52 @@ export function MappingEditor({
         double check the date column number above, then set the format by hand.
       </Notice>
     );
-  } else if (dateFormatDetection?.detected && dateFormatDetection.detected !== mapping.dateFormat) {
+  } else if (
+    dateFormatDetection?.detected &&
+    // mapping.dateFormat is a bare `string` (ImportMapping, src/lib/import/mapping.ts) since
+    // it round-trips through zod/JSON, not the narrower DateFormat union `candidates` is
+    // typed as — widen the array's type for the membership check rather than asserting the
+    // value itself is a DateFormat, the same pattern dates.ts's isDateFormat() uses.
+    !(dateFormatDetection.candidates as readonly string[]).includes(mapping.dateFormat)
+  ) {
+    // Guard: if the currently-selected format is itself one of the candidates that parsed
+    // every sampled value, it already reads the sample identically to `detected` (that is
+    // what "candidate" means), so offering a switch is at best noise and at worst — for
+    // 'resolved', where two formats merely happen to agree on this sample, e.g. MM/DD/YYYY
+    // and DD/MM/YYYY whenever every sampled day equals its month — a one-click way to swap
+    // day and month for every row outside the sample. Only a mismatch against the full
+    // candidate set is ever worth surfacing (release review finding A).
     const detected = dateFormatDetection.detected;
+    // Further restrict the auto-apply BUTTON to 'unique': a lone candidate that parses
+    // everything and isn't the current pick is unambiguously better. 'resolved' means
+    // multiple *different* formats coincidentally agreed on this small sample — real
+    // signal that the current pick is wrong, but not proof the tie-break winner
+    // (candidates[0]) is the right replacement, so it's surfaced as text only, never as a
+    // single click.
+    const canAutoApply = dateFormatDetection.status === 'unique';
     dateFormatNotice = (
       <Notice tone="info" title={`Detected format: ${detected}`} className="sm:col-span-2 lg:col-span-3">
         <div className="flex flex-wrap items-center gap-3">
-          <p>The format selected above is {mapping.dateFormat}, but every sampled date reads cleanly as {detected} instead.</p>
-          <button type="button" onClick={() => set('dateFormat', detected)} className="btn btn--secondary btn--sm">
-            Use {detected}
-          </button>
+          {canAutoApply ? (
+            <p>The format selected above is {mapping.dateFormat}, but every sampled date reads cleanly as {detected} instead.</p>
+          ) : (
+            <p>
+              The format selected above is {mapping.dateFormat}, which does not fit every sampled date. {dateFormatDetection.candidates.length}{' '}
+              other formats do ({dateFormatDetection.candidates.join(', ')}), and they happen to agree with each other on this sample —
+              that agreement does not prove either is correct for a row this sample didn&rsquo;t cover. Check a real date from this file, then
+              set the format by hand if one of them looks right.
+            </p>
+          )}
+          {canAutoApply ? (
+            <button
+              type="button"
+              onClick={() => set('dateFormat', detected)}
+              disabled={busy}
+              className="btn btn--secondary btn--sm"
+            >
+              Use {detected}
+            </button>
+          ) : null}
         </div>
       </Notice>
     );

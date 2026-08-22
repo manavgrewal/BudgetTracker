@@ -275,6 +275,90 @@ describe('ImportClient — the Preview and Import buttons are busy-guarded', () 
   });
 });
 
+describe('ImportClient — release review finding C: a failed re-preview must not leave commit() pointed at an unproven mapping', () => {
+  it('rolls the mapping back to the last successfully previewed one when re-preview fails', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        // first call: the initial upload/preview, succeeds with TD_CHEQUING (hasHeader: false)
+        .mockImplementationOnce(async () => ({ ok: true, json: async () => previewBody({ totalRows: 4 }) }))
+        // second call: the re-preview fired by toggling "Has header" below, fails
+        .mockImplementationOnce(async () => ({ ok: false, json: async () => ({ error: 'preview exploded' }) })),
+    );
+
+    const { container, getByLabelText, getByText } = render(
+      <ImportClient
+        accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
+        profiles={PROFILES}
+        history={[]}
+        simplefinManaged={[]}
+      />,
+    );
+    fireEvent.submit(container.querySelector('form')!);
+    await waitFor(() => expect(container.textContent).toContain('Preview —'));
+
+    const hasHeader = getByLabelText(/Has header/i) as HTMLInputElement;
+    expect(hasHeader.checked).toBe(false); // TD Chequing/Debit's mapping.hasHeader is false
+
+    fireEvent.click(hasHeader); // flips to true and fires the failing re-preview
+    await waitFor(() => expect(getByText(/preview exploded/i)).toBeTruthy());
+
+    // Rolled back: the checkbox reflects the mapping that last actually previewed
+    // successfully, not the one the failed request was for — so a subsequent commit()
+    // (which posts this same `mapping` state) cannot use a mapping this file was never
+    // shown to parse against.
+    expect(hasHeader.checked).toBe(false);
+  });
+
+  it('disables the date-format one-click button while an unrelated field\'s re-preview is in flight, so it cannot fire a second overlapping request', async () => {
+    // The button itself always vanishes the instant it is clicked (the optimistic mapping
+    // update makes mapping.dateFormat one of the detector's candidates, which is exactly
+    // the "nothing left to suggest" state) — so the double-fire this guards against is not
+    // a second click on itself, it's a click on this button while busy is already true for
+    // some OTHER field's in-flight re-preview.
+    const pending: { release?: (value: unknown) => void } = {};
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockImplementationOnce(async () => ({
+          ok: true,
+          json: async () => previewBody({
+            totalRows: 4,
+            dateFormatDetection: { status: 'unique', detected: 'MM/DD/YYYY', candidates: ['MM/DD/YYYY'] },
+          }),
+        }))
+        .mockImplementationOnce(
+          () =>
+            new Promise((resolve) => {
+              pending.release = resolve;
+            }),
+        ),
+    );
+
+    const { container, getByRole, getByLabelText } = render(
+      <ImportClient
+        accounts={[{ id: 10, name: 'Joint Chequing', importProfileId: 1 }]}
+        profiles={PROFILES}
+        history={[]}
+        simplefinManaged={[]}
+      />,
+    );
+    fireEvent.submit(container.querySelector('form')!);
+    await waitFor(() => expect(container.textContent).toContain('Preview —'));
+
+    const useButton = () => getByRole('button', { name: /use mm\/dd\/yyyy/i }) as HTMLButtonElement;
+    expect(useButton().disabled).toBe(false);
+
+    fireEvent.click(getByLabelText(/Has header/i)); // an unrelated field, fires its own re-preview
+    await waitFor(() => expect(useButton().disabled).toBe(true));
+
+    pending.release?.({ ok: false, json: async () => ({ error: 'nope' }) });
+    await waitFor(() => expect(useButton().disabled).toBe(false));
+  });
+});
+
 describe('ImportClient — NEW-5 fix-round: loanMatchFailed gets the same honest note as engineFailed', () => {
   it('appends a loan-matching note to the summary without hiding the row counts', async () => {
     vi.stubGlobal(

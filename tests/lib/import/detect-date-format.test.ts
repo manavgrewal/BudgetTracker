@@ -38,6 +38,20 @@ describe('detectDateFormat', () => {
     expect(result.detected).toBeNull();
   });
 
+  it('resolves (not ambiguous) when every sample happens to have day == month — the coincidence that lets MM/DD and DD/MM agree without either being proven right', () => {
+    // Unlike the disagreeing case above, MM/DD/YYYY and DD/MM/YYYY produce the SAME iso
+    // date for every sample here purely because day equals month in each one, so this
+    // status-quo-correct function reports 'resolved', not 'ambiguous' — nothing here is a
+    // bug in detectDateFormat. The danger lives entirely downstream: MappingEditor must
+    // not treat this 'resolved' as license to offer a one-click switch, because the
+    // agreement proves nothing about a row this small sample didn't cover (release review
+    // finding A). This is the exact fixture that risk description is about.
+    const result = detectDateFormat(['01/01/2026', '02/02/2026', '03/03/2026']);
+    expect(result.status).toBe('resolved');
+    expect(result.candidates).toEqual(['MM/DD/YYYY', 'DD/MM/YYYY']);
+    expect(result.detected).toBe('MM/DD/YYYY');
+  });
+
   it('reports none when no known format parses every sample, without throwing', () => {
     const result = detectDateFormat(['not a date', 'also nonsense']);
     expect(result.status).toBe('none');

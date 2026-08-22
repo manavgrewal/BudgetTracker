@@ -89,8 +89,14 @@ export function ImportClient({
     setMapping((body as PreviewResult).mapping);
   }
 
+  // Optimistically applies `next` so the form reflects what the user just changed while the
+  // request is in flight, but a failed re-preview MUST roll `mapping` back to whatever was
+  // last actually previewed — otherwise commit() (which posts `mapping`, not whatever
+  // preview.mapping says) can fire against a mapping that was never confirmed to parse this
+  // file at all (release review finding C).
   async function rePreview(next: ImportMapping) {
     if (!preview) return;
+    const previous = mapping;
     setMapping(next);
     setBusy(true);
     try {
@@ -102,6 +108,7 @@ export function ImportClient({
       const body = await response.json();
       if (!response.ok) {
         setError(body.error ?? 'Preview failed');
+        setMapping(previous);
         return;
       }
       setPreview(body as PreviewResult);
@@ -316,6 +323,7 @@ export function ImportClient({
               mapping={mapping}
               onChange={(next) => void rePreview(next)}
               dateFormatDetection={preview.dateFormatDetection}
+              busy={busy}
             />
 
             <TableWrap className="max-h-96 overflow-y-auto">

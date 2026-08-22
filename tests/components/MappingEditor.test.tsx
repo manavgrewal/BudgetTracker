@@ -51,15 +51,39 @@ describe('MappingEditor — date format detection surfaces where the format is c
     expect(onChange).toHaveBeenCalledWith({ ...BASE_MAPPING, dateFormat: 'DD/MM/YYYY' });
   });
 
-  it('treats a "resolved" (tied but agreeing) detection the same as "unique" for the mismatch hint', () => {
+  it('says nothing for a "resolved" detection whose candidates already include the selected format — that is just two formats agreeing with the user\'s own pick, not a mismatch', () => {
+    // Reachable fixture: 'YYYY-MM-DD' and 'YYYY/MM/DD' parse identically in dates.ts, so an
+    // ISO-shaped sample makes both survive and resolves to candidates[0] = 'YYYY-MM-DD'.
+    // BASE_MAPPING's dateFormat is 'YYYY-MM-DD', which is itself one of the two candidates,
+    // so there is nothing here to warn about.
     render(
       <MappingEditor
         mapping={BASE_MAPPING}
         onChange={vi.fn()}
-        dateFormatDetection={detection({ status: 'resolved', detected: 'YYYY/MM/DD', candidates: ['YYYY-MM-DD', 'YYYY/MM/DD'] })}
+        dateFormatDetection={detection({ status: 'resolved', detected: 'YYYY-MM-DD', candidates: ['YYYY-MM-DD', 'YYYY/MM/DD'] })}
       />,
     );
-    expect(screen.getByText(/Detected format: YYYY\/MM\/DD/i)).toBeTruthy();
+    expect(screen.queryByText(/Detected format/i)).toBeNull();
+  });
+
+  it('release review finding A: never offers a one-click switch for "resolved" when the selected format is not among the candidates — the agreement is coincidental, not proof', () => {
+    // Reachable fixture for the real corruption case the finding describes: every sampled
+    // date happened to have day == month, so MM/DD/YYYY and DD/MM/YYYY both parse the whole
+    // sample AND agree with each other on it (see the matching detectDateFormat test), even
+    // though nothing here proves which one is right for a row the sample didn't cover.
+    // BASE_MAPPING's 'YYYY-MM-DD' is not one of the two candidates, so the mismatch is real
+    // and worth surfacing — but only as information, never as a single click that could
+    // silently swap day and month for the rest of the file.
+    render(
+      <MappingEditor
+        mapping={BASE_MAPPING}
+        onChange={vi.fn()}
+        dateFormatDetection={detection({ status: 'resolved', detected: 'MM/DD/YYYY', candidates: ['MM/DD/YYYY', 'DD/MM/YYYY'] })}
+      />,
+    );
+    expect(screen.getByText(/Detected format: MM\/DD\/YYYY/i)).toBeTruthy();
+    expect(screen.getByText(/happen to agree with each other on this sample/i)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /use / })).toBeNull();
   });
 
   it('surfaces an unmissable, unaccepted warning when detection is ambiguous — the silent day/month swap case', () => {
@@ -103,5 +127,17 @@ describe('MappingEditor — date format detection surfaces where the format is c
     const notice = screen.getByRole('status');
     expect(notice.textContent).toMatch(/a header row/i);
     expect(notice.textContent).toMatch(/Has header/);
+  });
+
+  it('release review finding C: disables the one-click switch button while the caller has a request in flight, so it cannot double-fire', () => {
+    render(
+      <MappingEditor
+        mapping={BASE_MAPPING}
+        onChange={vi.fn()}
+        dateFormatDetection={detection({ status: 'unique', detected: 'DD/MM/YYYY', candidates: ['DD/MM/YYYY'] })}
+        busy
+      />,
+    );
+    expect((screen.getByRole('button', { name: /use dd\/mm\/yyyy/i }) as HTMLButtonElement).disabled).toBe(true);
   });
 });
