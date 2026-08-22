@@ -19,8 +19,12 @@ function buildCsp(nonce?: string): string {
     "default-src 'self'",
     scriptSrc,
     "style-src 'self' 'unsafe-inline'",
-    // data: is required for the TOTP QR PNG rendered at enrollment.
-    "img-src 'self' data:",
+    // data: is required for the TOTP QR PNG rendered at enrollment. blob: is required for the
+    // receipt scanner's before/after preview: both images are object URLs
+    // (URL.createObjectURL) from scan.ts and ReceiptUploader.tsx, and Chromium matches 'self'
+    // by scheme, so it refuses a blob: URL without this token even though the blob itself was
+    // created same-origin.
+    "img-src 'self' data: blob:",
     "font-src 'self'",
     "connect-src 'self'",
     "form-action 'self'",

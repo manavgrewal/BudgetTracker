@@ -34,7 +34,10 @@ describe("MUST-8.9 / AC11: script-src gains 'wasm-unsafe-eval' and nothing else"
     for (const directive of [
       "default-src 'self'",
       "style-src 'self' 'unsafe-inline'",
-      "img-src 'self' data:",
+      // img-src deliberately gained blob: (B6): the scanner's before/after preview renders
+      // both images from URL.createObjectURL, and Chromium matches 'self' by scheme, so it
+      // blocks blob: URLs without this token even though 'self' data: is otherwise unchanged.
+      "img-src 'self' data: blob:",
       "font-src 'self'",
       "connect-src 'self'",
       "form-action 'self'",
