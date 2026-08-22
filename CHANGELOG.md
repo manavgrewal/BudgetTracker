@@ -41,7 +41,10 @@ All notable changes to Budget Tracker are recorded here.
   already do and the browser finds the paper, squares it up and crops the counter out. It
   shows you the before and after for four seconds and then sends the straightened one; a
   button sends the original instead. If any of that fails, the original uploads and you are
-  not told about it, because there is nothing you would do differently.
+  not told about it, because there is nothing you would do differently. This has been proven
+  against a stand-in for the browser's own image-processing step, not yet against a real
+  phone in a real browser, so keep an eye on the first few receipts you scan after this
+  update.
 - **The image is larger.** It now carries the recognition models inside it, so an install
   with no internet works exactly the same as one with it, plus the scanner your browser
   downloads once and caches.
@@ -50,11 +53,12 @@ All notable changes to Budget Tracker are recorded here.
 
 - The release workflow no longer claims the OCR assets are the same on every processor. They
   were, and now one of them is not.
-- **CSV import accepts the date formats Excel writes.** A file re-saved on Windows, where
-  `28 May 2026` became `26-May-26`, used to fail outright. The preview step now tries every
-  known format (including `DD-MMM-YY` and `YYYY-MM-DD HH:mm`) against the column itself and
-  keeps the one that actually parses it, instead of requiring the right format to already be
-  chosen.
+- **CSV import figures out the date format for you, and says so when it cannot be sure.**
+  A file re-saved on Windows, where `28 May 2026` became `26-May-26`, used to fail outright.
+  The mapping screen now samples the date column itself and offers a one-click switch when it
+  recognizes a different format than the one selected. When the same text could honestly
+  mean two different dates depending on which side is the day, it warns you plainly instead
+  of quietly picking one, on both the regular import screen and the new-bank setup wizard.
 - **An import mapping can finally be deleted.** The built-in bank presets stay protected.
   Deleting any other mapping clears its references first: an account loses only a remembered
   default and a past import loses only the record of which mapping it used. Neither the
@@ -62,6 +66,20 @@ All notable changes to Budget Tracker are recorded here.
 - **A new or renamed category shows up everywhere, not just on the managers page.** The
   dashboard, budgets, reports, transactions and review pages now all refresh when a category
   changes, so a new child category appears right away instead of after the page cache expires.
+- **The new engine can be switched off by hand if it misbehaves.** One line in the
+  container's environment settings and a restart send every receipt back through the older
+  engine immediately, without waiting for the automatic check to run again.
+- **A receipt that crashes the app no longer restarts it forever.** After a few failed
+  attempts across restarts, that one receipt is marked unreadable instead of taking the
+  whole app down every ten minutes.
+- **Settings -> About now names the engine currently reading your receipts**, and says so
+  plainly if receipts have stopped being read altogether rather than one failure at a time.
+- **The scanner's before/after preview, and the plain receipt thumbnail next to it, now
+  actually show a picture.** Both were silently blocked by this app's own browser security
+  rules; receipts still uploaded and were still read, the image just never appeared. The
+  thumbnail has been broken this way since the warranty feature first shipped, unnoticed
+  because the rule that blocks it does not apply under the test tooling this app's suite
+  runs in.
 
 ## [1.4.0] - 2026-08-19
 
