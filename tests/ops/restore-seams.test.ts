@@ -175,3 +175,29 @@ describe('MUST-7.6 / MUST-7.7: the update reconciler sits between getDb and star
     expect(source.indexOf('applyStagedRestoreOnBoot()')).toBeLessThan(source.indexOf('getDb();'));
   });
 });
+
+describe('F2 defect fix: a signalled shutdown is not counted as an OCR crash', () => {
+  const source = readCode('src/instrumentation-node.ts');
+
+  it('registers both a SIGTERM and a SIGINT handler', () => {
+    expect(source).toMatch(/process\.on\(\s*['"]SIGTERM['"]/);
+    expect(source).toMatch(/process\.on\(\s*['"]SIGINT['"]/);
+  });
+
+  it('both SIGTERM and SIGINT route through the same handler, which clears the marker before exiting', () => {
+    expect(source).toMatch(/process\.on\(\s*['"]SIGTERM['"]\s*,\s*\(\)\s*=>\s*handleShutdownSignal/);
+    expect(source).toMatch(/process\.on\(\s*['"]SIGINT['"]\s*,\s*\(\)\s*=>\s*handleShutdownSignal/);
+    const clearAt = source.indexOf('clearOcrInFlightMarkerOnShutdown()');
+    const exitAt = source.indexOf('process.exit(0)');
+    // There is no "after" for a call that ends the process -- the clear has to run before it.
+    expect(clearAt).toBeGreaterThan(-1);
+    expect(exitAt).toBeGreaterThan(clearAt);
+  });
+
+  it('imports clearOcrInFlightMarkerOnShutdown from the crash-guard module, not queue.ts', () => {
+    // The in-flight marker is owned by onnx/probe.ts (MUST-12.2's settings-key ownership) --
+    // a shutdown handler reaching into queue.ts's crash-history clearer instead would risk
+    // wiping a different, unrelated job's crash count (the exact F1 defect) on every restart.
+    expect(source).toMatch(/import\s*\{[^}]*clearOcrInFlightMarkerOnShutdown[^}]*\}\s*from\s*['"]@\/lib\/warranty\/ocr\/onnx\/probe['"]/);
+  });
+});

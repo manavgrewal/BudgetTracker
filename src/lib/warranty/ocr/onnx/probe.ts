@@ -274,6 +274,27 @@ export function clearOcrCrashGuard(jobKey: string): void {
   }
 }
 
+/**
+ * Defect fix (v1.5.0, F2): called only by the process-level SIGTERM/SIGINT handler
+ * (src/instrumentation-node.ts) when the process is going down on a signal rather than
+ * crashing. `docker compose restart` (and `stop`) sends SIGTERM; a foregrounded
+ * `docker compose up` stopped with Ctrl-C sends SIGINT. Neither is a crash, but until this
+ * existed the in-flight marker left behind was byte-for-byte identical to one a real crash
+ * leaves, and reconcileOcrCrashOnBoot() (queue.ts) could not tell them apart — so an admin
+ * restarting three times with a pending backlog (exactly what setting OCR_ENGINE, see
+ * src/lib/env.ts, requires) could condemn a perfectly innocent receipt.
+ *
+ * Deliberately clears ONLY the in-flight mark, never the crash history: that history belongs
+ * to whichever job actually crashed the process on some earlier, unrelated boot, and a clean
+ * shutdown of a DIFFERENT job right now must not touch it (the same one-job-at-a-time
+ * reasoning as clearOcrCrashGuard above). With the mark gone, the next boot's
+ * reconcileOcrCrashOnBoot() sees nothing at all for this job — the receipt is simply still
+ * 'pending' and the sweep retries it like any other, carrying no crash count.
+ */
+export function clearOcrInFlightMarkerOnShutdown(): void {
+  deleteSetting(SETTING_OCR_INFLIGHT_JOB);
+}
+
 /** Called only by the boot crash reconciler's "forgive" branch (queue.ts). */
 export function recordOcrJobCrashSurvived(jobKey: string, attempts: number): void {
   setSetting(SETTING_OCR_CRASH_JOB, jobKey);

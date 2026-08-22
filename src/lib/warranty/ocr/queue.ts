@@ -252,10 +252,21 @@ export function sweepPendingReceipts(): number {
   return enqueued;
 }
 
-/** Shown on the condemned row/sidecar. Exported so the About panel (or a future admin view)
- *  can recognise this specific outcome without string-matching a free-form error again. */
+/**
+ * Shown on the condemned row/sidecar. Exported so the About panel (or a future admin view)
+ * can recognise this specific outcome without string-matching a free-form error again.
+ *
+ * Defect fix (v1.5.0, F2): reworded to state only what the marker actually proves — the
+ * process went down while this receipt's OCR was running, that many times in a row — rather
+ * than asserting the receipt caused it. Before src/instrumentation-node.ts learned to clear
+ * the marker on SIGTERM/SIGINT, a `docker compose restart` landing mid-job left identical
+ * evidence to a real crash, so "OCR crashed this app... repeatedly" claimed more certainty
+ * than the evidence supported even after that fix: a still-possible kill -9, an OOM-kill
+ * with no signal at all, or three unrelated restarts that all happened to land mid-job are
+ * indistinguishable from this receipt actually being the cause.
+ */
 export const OCR_CRASH_CONDEMNED_MESSAGE =
-  'OCR crashed this app while reading this receipt, repeatedly, even across a restart. Marked as failed instead of retrying forever.';
+  `This app's process stopped while OCR was reading this receipt, ${OCR_CRASH_ATTEMPT_LIMIT} times in a row across restarts. Marked as failed instead of retrying forever, since a receipt that keeps doing this would otherwise take the whole app down repeatedly. Re-run OCR to try again.`;
 
 /** Reverses jobKey() above. 'r:' and 's:' are fixed-width prefixes, so slicing them off
  *  recovers the original id verbatim even if a staging UUID somehow contained a colon. */

@@ -10,6 +10,7 @@ import { RESTART_EXIT_CODE, applyStagedRestoreOnBoot } from '@/lib/backup/restor
 import { raiseRestoreOutcome } from '@/lib/notify/raise';
 import { startScheduler } from '@/lib/scheduler';
 import { reconcileApplyOnBoot } from '@/lib/update/state';
+import { clearOcrInFlightMarkerOnShutdown } from '@/lib/warranty/ocr/onnx/probe';
 import { assertOcrAssets, resolveOcrAssets } from '@/lib/warranty/ocr/assets';
 import { reconcileOcrCrashOnBoot } from '@/lib/warranty/ocr/queue';
 
@@ -82,3 +83,24 @@ try {
 }
 
 startScheduler();
+
+// Defect fix (v1.5.0, F2): `docker compose restart`/`stop` sends SIGTERM, and a foregrounded
+// `docker compose up` stopped with Ctrl-C sends SIGINT — neither is a crash, but Node's
+// default action for both is an immediate, silent exit with no chance to run this line, and
+// once ANY handler is registered for a signal that default is replaced, so this handler is
+// also on the hook for actually terminating the process afterwards. Without this, an admin
+// restarting the container mid-job (exactly what setting OCR_ENGINE, see src/lib/env.ts,
+// requires) leaves the same ocr.inflight_job marker a real crash leaves, and
+// reconcileOcrCrashOnBoot() (queue.ts) cannot tell a clean restart from a crash.
+function handleShutdownSignal(signal: NodeJS.Signals): void {
+  try {
+    clearOcrInFlightMarkerOnShutdown();
+  } catch (error) {
+    console.error('[shutdown] failed to clear the OCR in-flight marker', error);
+  }
+  console.log(`[shutdown] received ${signal}, exiting`);
+  process.exit(0);
+}
+
+process.on('SIGTERM', () => handleShutdownSignal('SIGTERM'));
+process.on('SIGINT', () => handleShutdownSignal('SIGINT'));
