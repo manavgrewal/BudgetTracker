@@ -296,9 +296,14 @@ describe('OCR_ENGINE override (v1.5.0 defect fix)', () => {
     expect(readEnv({ ...base, OCR_ENGINE: '  onnx  ' }).ocrEngineOverride).toBe('onnx');
   });
 
+  it('F6 defect fix: lower-cases before validating, matching TRUST_PROXY, so a differently-cased value still boots', () => {
+    expect(readEnv({ ...base, OCR_ENGINE: 'ONNX' }).ocrEngineOverride).toBe('onnx');
+    expect(readEnv({ ...base, OCR_ENGINE: 'Tesseract' }).ocrEngineOverride).toBe('tesseract');
+    expect(readEnv({ ...base, OCR_ENGINE: '  OnNx  ' }).ocrEngineOverride).toBe('onnx');
+  });
+
   it('is a hard startup error on anything else, matching SECRET_KEY, unlike the deferred Watchtower URL check above', () => {
     expect(() => readEnv({ ...base, OCR_ENGINE: 'tesseract-v2' })).toThrowError(/OCR_ENGINE/);
-    expect(() => readEnv({ ...base, OCR_ENGINE: 'ONNX' })).toThrow(); // case-sensitive, not silently normalized
     expect(() => readEnv({ ...base, OCR_ENGINE: '0' })).toThrow();
   });
 });

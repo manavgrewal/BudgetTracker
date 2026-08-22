@@ -168,7 +168,9 @@ export function readEnv(source: Partial<NodeJS.ProcessEnv> = process.env): AppEn
   // Present-but-invalid is a hard error, matching SECRET_KEY and PORT above — never silently
   // ignored, because a typo here would otherwise mean OCR quietly keeps using whichever engine
   // the probe cache already picked, with the admin believing the override took effect.
-  const rawOcrEngine = (source.OCR_ENGINE ?? '').trim();
+  // F6 defect fix: lower-cased before validating, matching TRUST_PROXY's handling below —
+  // OCR_ENGINE=ONNX used to refuse the boot instead of being accepted like TRUST_PROXY=TRUE is.
+  const rawOcrEngine = (source.OCR_ENGINE ?? '').trim().toLowerCase();
   let ocrEngineOverride: 'tesseract' | 'onnx' | null = null;
   if (rawOcrEngine.length > 0) {
     if (!OCR_ENGINE_OVERRIDE_VALUES.has(rawOcrEngine)) {
