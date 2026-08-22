@@ -14,5 +14,6 @@ next-env.d.ts
 *.tsbuildinfo
 /.next/
 /out/
+/public/scanner/
 
 .vscode/
