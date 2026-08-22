@@ -69,6 +69,14 @@ export async function POST(request: Request): Promise<Response> {
   if (!account) return Response.json({ error: 'Unknown account' }, { status: 404 });
   const profile = getProfile(parsed.data.profileId);
   if (!profile) return Response.json({ error: 'Unknown import profile' }, { status: 404 });
+  const mapping = parsed.data.mapping ?? profile.mapping;
+  if (!mapping) {
+    // profile.mapping is only null when the stored row is unreadable (see
+    // ProfileRecord.mappingError) — the import page never offers a profile like that, so this
+    // is a stale/direct-API-call edge case, not the normal flow. Fail the request cleanly
+    // instead of handing buildPreview a null mapping.
+    return Response.json({ error: "This profile's mapping could not be read. Choose a different profile." }, { status: 400 });
+  }
 
   try {
     const preview = buildPreview({
@@ -76,7 +84,7 @@ export async function POST(request: Request): Promise<Response> {
       filename: parsed.data.filename,
       accountId: parsed.data.accountId,
       profileId: parsed.data.profileId,
-      mapping: parsed.data.mapping ?? profile.mapping,
+      mapping,
     });
     return Response.json(preview);
   } catch (error) {

@@ -121,17 +121,50 @@ export interface ProfileRecord {
   name: string;
   institution: string;
   isBuiltin: boolean;
-  mapping: ImportMapping;
+  /**
+   * null when the stored JSON for this row does not satisfy importMappingSchema (hand-edited
+   * row, a schema tightened after the row was written, DB corruption, ...). listProfiles() and
+   * getProfile() used to let parseImportMapping's throw propagate, which meant ONE bad row took
+   * down every caller that lists profiles -- including the managers page, which is the only UI
+   * that can delete a profile. A row like that is now still returned, with mapping: null and
+   * mappingError set, so it stays visible and deletable instead of taking the page down. It is
+   * never silently replaced with a default mapping, which would risk that default getting
+   * saved back over the real (recoverable, if the DB is inspected by hand) stored value.
+   */
+  mapping: ImportMapping | null;
+  mappingError: string | null;
+}
+
+/**
+ * Type guard for the common case: most callers (the import picker, the pack exporter) need an
+ * actually-usable mapping and have no business offering a row that has none. Filtering with
+ * this instead of `p.mapping !== null` also narrows the array element type, so the mapping
+ * field downstream is ImportMapping, not ImportMapping | null.
+ */
+export function hasReadableMapping(profile: ProfileRecord): profile is ProfileRecord & { mapping: ImportMapping } {
+  return profile.mapping !== null;
 }
 
 function toRecord(row: { id: number; name: string; institution: string; isBuiltin: boolean; mapping: string }): ProfileRecord {
-  return {
-    id: row.id,
-    name: row.name,
-    institution: row.institution,
-    isBuiltin: row.isBuiltin,
-    mapping: parseImportMapping(row.mapping),
-  };
+  try {
+    return {
+      id: row.id,
+      name: row.name,
+      institution: row.institution,
+      isBuiltin: row.isBuiltin,
+      mapping: parseImportMapping(row.mapping),
+      mappingError: null,
+    };
+  } catch (error) {
+    return {
+      id: row.id,
+      name: row.name,
+      institution: row.institution,
+      isBuiltin: row.isBuiltin,
+      mapping: null,
+      mappingError: error instanceof Error ? error.message : 'This mapping could not be read.',
+    };
+  }
 }
 
 export function listProfiles(): ProfileRecord[] {
@@ -255,7 +288,11 @@ export function mappingsEqual(a: ImportMapping, b: ImportMapping): boolean {
 export function forkProfileIfBuiltin(input: { profileId: number; accountName: string; mapping: ImportMapping }): number {
   const existing = getProfile(input.profileId);
   if (!existing) throw new Error(`No import profile ${input.profileId}`);
-  if (mappingsEqual(existing.mapping, input.mapping)) return existing.id;
+  // existing.mapping is only null for a row whose stored JSON is unreadable (see
+  // ProfileRecord's doc comment) — the profile picker never offers one of those, so this is
+  // a defensive fallthrough, not the normal path: treat it the same as "different mapping"
+  // rather than crashing on a null comparison.
+  if (existing.mapping !== null && mappingsEqual(existing.mapping, input.mapping)) return existing.id;
 
   if (!existing.isBuiltin) {
     updateProfileMapping(existing.id, input.mapping);

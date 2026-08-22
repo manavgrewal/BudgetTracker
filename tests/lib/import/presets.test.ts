@@ -27,7 +27,7 @@ describe('profile store', () => {
     const profiles = listProfiles();
     expect(profiles).toHaveLength(4);
     expect(profiles.every((p) => p.isBuiltin)).toBe(true);
-    expect(profiles[0].mapping.amountMode).toBe('debit_credit');
+    expect(profiles[0].mapping!.amountMode).toBe('debit_credit');
   });
 
   it('creates and reads back a custom profile', () => {
@@ -39,7 +39,7 @@ describe('profile store', () => {
     });
     const profile = getProfile(id);
     expect(profile).toMatchObject({ id, name: 'Tangerine Chequing', isBuiltin: false });
-    expect(profile?.mapping.dateFormat).toBe('YYYY-MM-DD');
+    expect(profile?.mapping?.dateFormat).toBe('YYYY-MM-DD');
     expect(getProfileByName('Tangerine Chequing')?.id).toBe(id);
   });
 
@@ -55,16 +55,16 @@ describe('copy-on-write built-ins', () => {
   it('never mutates a built-in in place', () => {
     current = createSeededTestDb();
     const builtin = getProfileByName('TD Visa')!;
-    expect(() => updateProfileMapping(builtin.id, { ...builtin.mapping, dateFormat: 'YYYY-MM-DD' })).toThrowError(
+    expect(() => updateProfileMapping(builtin.id, { ...builtin.mapping!, dateFormat: 'YYYY-MM-DD' })).toThrowError(
       /built-in/i,
     );
-    expect(getProfile(builtin.id)?.mapping.dateFormat).toBe('MM/DD/YYYY');
+    expect(getProfile(builtin.id)?.mapping?.dateFormat).toBe('MM/DD/YYYY');
   });
 
   it('returns the same profile id when the mapping is unchanged', () => {
     current = createSeededTestDb();
     const builtin = getProfileByName('TD Visa')!;
-    const id = forkProfileIfBuiltin({ profileId: builtin.id, accountName: 'Joint Visa', mapping: builtin.mapping });
+    const id = forkProfileIfBuiltin({ profileId: builtin.id, accountName: 'Joint Visa', mapping: builtin.mapping! });
     expect(id).toBe(builtin.id);
     expect(listProfiles()).toHaveLength(4);
   });
@@ -72,25 +72,25 @@ describe('copy-on-write built-ins', () => {
   it('forks into a new named profile when the mapping is edited', () => {
     current = createSeededTestDb();
     const builtin = getProfileByName('TD Visa')!;
-    const edited = { ...builtin.mapping, dateFormat: 'YYYY-MM-DD' };
+    const edited = { ...builtin.mapping!, dateFormat: 'YYYY-MM-DD' };
     const forkedId = forkProfileIfBuiltin({ profileId: builtin.id, accountName: 'Joint Visa', mapping: edited });
     expect(forkedId).not.toBe(builtin.id);
 
     const forked = getProfile(forkedId)!;
     expect(forked.isBuiltin).toBe(false);
     expect(forked.name).toBe('TD Visa (Joint Visa)');
-    expect(forked.mapping.dateFormat).toBe('YYYY-MM-DD');
+    expect(forked.mapping!.dateFormat).toBe('YYYY-MM-DD');
 
     // built-in untouched
-    expect(getProfile(builtin.id)?.mapping.dateFormat).toBe('MM/DD/YYYY');
+    expect(getProfile(builtin.id)?.mapping?.dateFormat).toBe('MM/DD/YYYY');
     expect(listProfiles()).toHaveLength(5);
   });
 
   it('does not collide when two accounts fork the same built-in', () => {
     current = createSeededTestDb();
     const builtin = getProfileByName('TD Visa')!;
-    const a = forkProfileIfBuiltin({ profileId: builtin.id, accountName: 'Joint Visa', mapping: { ...builtin.mapping, dateFormat: 'YYYY-MM-DD' } });
-    const b = forkProfileIfBuiltin({ profileId: builtin.id, accountName: 'Joint Visa', mapping: { ...builtin.mapping, dateFormat: 'DD/MM/YYYY' } });
+    const a = forkProfileIfBuiltin({ profileId: builtin.id, accountName: 'Joint Visa', mapping: { ...builtin.mapping!, dateFormat: 'YYYY-MM-DD' } });
+    const b = forkProfileIfBuiltin({ profileId: builtin.id, accountName: 'Joint Visa', mapping: { ...builtin.mapping!, dateFormat: 'DD/MM/YYYY' } });
     expect(a).not.toBe(b);
     expect(getProfile(b)?.name).toBe('TD Visa (Joint Visa) 2');
   });
@@ -98,10 +98,10 @@ describe('copy-on-write built-ins', () => {
   it('edits a non-built-in fork in place instead of forking again', () => {
     current = createSeededTestDb();
     const builtin = getProfileByName('TD Visa')!;
-    const forkedId = forkProfileIfBuiltin({ profileId: builtin.id, accountName: 'Joint Visa', mapping: { ...builtin.mapping, dateFormat: 'YYYY-MM-DD' } });
-    const again = forkProfileIfBuiltin({ profileId: forkedId, accountName: 'Joint Visa', mapping: { ...builtin.mapping, dateFormat: 'DD/MM/YYYY' } });
+    const forkedId = forkProfileIfBuiltin({ profileId: builtin.id, accountName: 'Joint Visa', mapping: { ...builtin.mapping!, dateFormat: 'YYYY-MM-DD' } });
+    const again = forkProfileIfBuiltin({ profileId: forkedId, accountName: 'Joint Visa', mapping: { ...builtin.mapping!, dateFormat: 'DD/MM/YYYY' } });
     expect(again).toBe(forkedId);
-    expect(getProfile(forkedId)?.mapping.dateFormat).toBe('DD/MM/YYYY');
+    expect(getProfile(forkedId)?.mapping?.dateFormat).toBe('DD/MM/YYYY');
     expect(listProfiles()).toHaveLength(5);
   });
 });
@@ -214,6 +214,75 @@ describe('deleteProfile (a mapping could not previously be deleted by anyone; cl
   it('throws for an unknown profile id', () => {
     current = createSeededTestDb();
     expect(() => deleteProfile(999999)).toThrowError(/no import profile/i);
+  });
+});
+
+describe('a profile row whose stored mapping does not parse (settings/managers 500, defect fixed in 1.5.1)', () => {
+  /**
+   * One row with malformed JSON in its `mapping` column used to make listProfiles() (and
+   * therefore the settings/managers page, the only UI with a delete button for a profile)
+   * throw for every profile, not just the bad one. The fix: toRecord() catches the parse
+   * failure per row and returns mapping: null + mappingError instead of letting it propagate.
+   */
+  function insertUnparseableProfile(db: TestDb, rawMapping: string): number {
+    const inserted = db.sqlite
+      .prepare(`insert into import_profiles (name, institution, is_builtin, mapping, created_at) values (?, ?, 0, ?, ?)`)
+      .run('Corrupted Bank', 'Some Bank', rawMapping, nowIso());
+    return Number(inserted.lastInsertRowid);
+  }
+
+  it('listProfiles() returns the row marked unreadable instead of throwing for everyone', () => {
+    current = createSeededTestDb();
+    const id = insertUnparseableProfile(current, '{"amountMode": "not a real mode"}');
+
+    const profiles = listProfiles();
+    expect(profiles).toHaveLength(5);
+    const broken = profiles.find((p) => p.id === id)!;
+    expect(broken.mapping).toBeNull();
+    expect(broken.mappingError).toBeTruthy();
+    // The other four (valid) rows are completely unaffected by the one bad row.
+    expect(profiles.filter((p) => p.mapping !== null)).toHaveLength(4);
+  });
+
+  it('also survives mapping text that is not even valid JSON', () => {
+    current = createSeededTestDb();
+    const id = insertUnparseableProfile(current, 'not json at all {{{');
+
+    const broken = getProfile(id)!;
+    expect(broken.mapping).toBeNull();
+    expect(broken.mappingError).toBeTruthy();
+  });
+
+  it('getProfile() returns the row marked unreadable instead of throwing', () => {
+    current = createSeededTestDb();
+    const id = insertUnparseableProfile(current, '{"hasHeader": "yes"}');
+
+    const profile = getProfile(id);
+    expect(profile).not.toBeNull();
+    expect(profile!.mapping).toBeNull();
+    expect(profile!.mappingError).toBeTruthy();
+    expect(profile!.name).toBe('Corrupted Bank');
+  });
+
+  it('is still deletable — the row that broke the page is the one you need to be able to remove', () => {
+    current = createSeededTestDb();
+    const id = insertUnparseableProfile(current, '{"amountMode": "not a real mode"}');
+
+    expect(deleteProfile(id)).toEqual({ accountsCleared: 0, importsCleared: 0 });
+    expect(getProfile(id)).toBeNull();
+    expect(listProfiles()).toHaveLength(4);
+  });
+
+  it('a broken row referenced by an account still clears the reference on delete, same as a valid row', () => {
+    current = createSeededTestDb();
+    const id = insertUnparseableProfile(current, '{"amountMode": "not a real mode"}');
+    const accountId = insertTestAccount(current.db, { name: 'Joint Chequing', importProfileId: id });
+
+    expect(deleteProfile(id)).toEqual({ accountsCleared: 1, importsCleared: 0 });
+    const row = current.sqlite.prepare('select import_profile_id from accounts where id = ?').get(accountId) as {
+      import_profile_id: number | null;
+    };
+    expect(row.import_profile_id).toBeNull();
   });
 });
 

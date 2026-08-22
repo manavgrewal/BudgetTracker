@@ -7,7 +7,7 @@ import { todayIso } from '@/lib/dates';
 import { categoryLabel, createCategory, listCategories, type CategoryRecord } from '@/lib/categories';
 import { listRules, upsertRuleFromCorrection, type MatchType, type MerchantRuleRecord, type RuleKind } from '@/lib/categorize/rules';
 import { importMappingSchema, type ImportMapping } from '@/lib/import/mapping';
-import { createProfile, getProfileByName, listProfiles } from '@/lib/import/presets';
+import { createProfile, getProfileByName, hasReadableMapping, listProfiles } from '@/lib/import/presets';
 
 export const RULES_PACK_FORMAT = 'budget-tracker-rules';
 export const PROFILES_PACK_FORMAT = 'budget-tracker-profiles';
@@ -508,17 +508,23 @@ export interface ProfilesExportRow {
 }
 
 export function previewProfilesPackExport(): ProfilesExportRow[] {
-  return listProfiles().map((profile) => ({
-    profileId: profile.id,
-    name: profile.name,
-    institution: profile.institution,
-    isBuiltin: profile.isBuiltin,
-  }));
+  // A profile whose stored mapping cannot be parsed (see ProfileRecord.mappingError) has
+  // nothing portable to offer — it is excluded here rather than listed and then failing when
+  // exportProfilesPack actually tries to serialize it.
+  return listProfiles()
+    .filter(hasReadableMapping)
+    .map((profile) => ({
+      profileId: profile.id,
+      name: profile.name,
+      institution: profile.institution,
+      isBuiltin: profile.isBuiltin,
+    }));
 }
 
 export function exportProfilesPack(opts: { profileIds?: number[]; at?: Date } = {}): ProfilesPack {
   const wanted = opts.profileIds ? new Set(opts.profileIds) : null;
   const profiles = listProfiles()
+    .filter(hasReadableMapping)
     .filter((profile) => (wanted ? wanted.has(profile.id) : true))
     // name, institution and mapping only — pure column-layout knowledge.
     .map((profile) => ({ name: profile.name, institution: profile.institution, mapping: profile.mapping }));

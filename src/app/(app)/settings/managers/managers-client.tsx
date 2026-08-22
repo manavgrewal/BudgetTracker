@@ -268,16 +268,19 @@ export function ManagersClient({
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span>
                   <span className="font-medium text-ink">{profile.name}</span>{' '}
-                  <span className="text-xs text-subtle">{profile.institution}{profile.isBuiltin ? ' · built-in' : ''}</span>
+                  <span className="text-xs text-subtle">{profile.institution}{profile.isBuiltin ? ' · built-in' : ''}</span>{' '}
+                  {profile.mapping === null ? <span className="badge badge--red">unreadable mapping</span> : null}
                 </span>
                 <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setEditing(editing?.id === profile.id ? null : { id: profile.id, mapping: profile.mapping })}
-                    className="btn btn--ghost btn--sm text-xs"
-                  >
-                    {editing?.id === profile.id ? 'close' : 'edit mapping'}
-                  </button>
+                  {profile.mapping === null ? null : (
+                    <button
+                      type="button"
+                      onClick={() => setEditing(editing?.id === profile.id ? null : { id: profile.id, mapping: profile.mapping! })}
+                      className="btn btn--ghost btn--sm text-xs"
+                    >
+                      {editing?.id === profile.id ? 'close' : 'edit mapping'}
+                    </button>
+                  )}
                   {profile.isBuiltin ? null : (
                     <button
                       type="button"
@@ -289,6 +292,12 @@ export function ManagersClient({
                   )}
                 </div>
               </div>
+              {profile.mapping === null ? (
+                <p className="mt-2 text-xs text-negative-soft-fg">
+                  Its stored column layout could not be read ({profile.mappingError}), so it cannot be shown or edited. Delete it
+                  and set up the bank again to replace it.
+                </p>
+              ) : null}
               {deletingProfileId === profile.id ? (
                 <div className="mt-3 flex flex-col gap-3 rounded-md border border-negative-soft p-3">
                   <p className="text-sm text-ink">

@@ -145,7 +145,7 @@ describe('profiles pack round trip onto a fresh database', () => {
 
     const tangerine = getProfileByName('Tangerine Chequing')!;
     expect(tangerine.isBuiltin).toBe(false);
-    expect(tangerine.mapping.dateFormat).toBe('YYYY-MM-DD');
+    expect(tangerine.mapping!.dateFormat).toBe('YYYY-MM-DD');
     expect(getProfileByName('TD Visa')?.isBuiltin).toBe(true);
     expect(getProfileByName('TD Visa (2)')?.isBuiltin).toBe(false);
   });

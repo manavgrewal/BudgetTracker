@@ -77,7 +77,7 @@ describe('upload → preview → commit', () => {
     const account = sqlite.prepare('select import_profile_id from accounts where id = ?').get(accountId) as { import_profile_id: number };
     expect(account.import_profile_id).toBe(result.profileId);
     // The shared built-in is untouched.
-    expect(getProfileByName('TD Chequing/Debit')!.mapping.encoding).toBe('auto');
+    expect(getProfileByName('TD Chequing/Debit')!.mapping!.encoding).toBe('auto');
   });
 });
 
