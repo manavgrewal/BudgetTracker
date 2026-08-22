@@ -18,6 +18,37 @@ export interface ManagerState {
 
 const CROSS_ORIGIN_ERROR = 'Cross-origin request rejected';
 
+/**
+ * PENDING-FIXES.md #3: every route that renders a category's name or the category hierarchy
+ * to a user. Found by grepping the app for `listCategories`/`categoryName`/`categoryId`
+ * rather than trusting the three routes the bug report happened to name:
+ *   - /settings/managers  -- this page; the category table itself.
+ *   - /transactions       -- the per-row category and the filter list.
+ *   - /reports            -- category breakdown and series.
+ *   - /budgets            -- budgetProgress() rows, keyed by category, incl. nested children.
+ *   - /dashboard          -- the "this month's budgets" table (budgetProgress() again) and
+ *                            the account-setup callout's category-driven copy.
+ *   - /review             -- the category picker offered for each queued transaction.
+ * A category mutation (create, rename, archive) must revalidate every one of these or Next's
+ * client router cache serves the pre-mutation page for up to ~30s. Every category mutation
+ * below loops over this SAME constant -- and the test in tests/app/managers-actions.test.ts
+ * reads it too -- so a route added here without a matching revalidatePath call fails the
+ * test, instead of a future page silently joining the "never revalidated" set the way
+ * /budgets, /reports and /dashboard did.
+ */
+export const CATEGORY_RENDERING_ROUTES = [
+  '/settings/managers',
+  '/transactions',
+  '/reports',
+  '/budgets',
+  '/dashboard',
+  '/review',
+] as const;
+
+function revalidateCategoryRoutes(): void {
+  for (const route of CATEGORY_RENDERING_ROUTES) revalidatePath(route);
+}
+
 export async function createCategoryAction(_prev: ManagerState, formData: FormData): Promise<ManagerState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
 
@@ -31,7 +62,7 @@ export async function createCategoryAction(_prev: ManagerState, formData: FormDa
   } catch (error) {
     return { error: error instanceof Error ? error.message : 'Could not create the category.' };
   }
-  revalidatePath('/settings/managers');
+  revalidateCategoryRoutes();
   return { message: 'Category created.' };
 }
 
@@ -43,7 +74,7 @@ export async function renameCategoryAction(_prev: ManagerState, formData: FormDa
   const name = String(formData.get('name') ?? '').trim();
   if (!Number.isInteger(id) || id <= 0 || name.length === 0) return { error: 'Invalid request.' };
   renameCategory(id, name);
-  revalidatePath('/settings/managers');
+  revalidateCategoryRoutes();
   return { message: 'Category renamed.' };
 }
 
@@ -56,7 +87,7 @@ export async function archiveCategoryAction(_prev: ManagerState, formData: FormD
   const archived = formData.get('archived') === '1';
   if (!Number.isInteger(id) || id <= 0) return { error: 'Invalid request.' };
   archiveCategory(id, archived);
-  revalidatePath('/settings/managers');
+  revalidateCategoryRoutes();
   return { message: archived ? 'Category archived.' : 'Category restored.' };
 }
 

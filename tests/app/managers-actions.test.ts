@@ -18,7 +18,14 @@ vi.mock('next/cache', () => ({
 
 import { requireAdmin } from '@/lib/auth/session';
 import { revalidatePath } from 'next/cache';
-import { deleteProfileAction, deleteRuleAction } from '@/app/(app)/settings/managers/actions';
+import {
+  archiveCategoryAction,
+  CATEGORY_RENDERING_ROUTES,
+  createCategoryAction,
+  deleteProfileAction,
+  deleteRuleAction,
+  renameCategoryAction,
+} from '@/app/(app)/settings/managers/actions';
 import { createProfile, getBuiltinPreset, getProfile, getProfileByName, listProfiles } from '@/lib/import/presets';
 
 let current: TestDb | null = null;
@@ -115,5 +122,43 @@ describe('deleteProfileAction (PENDING-FIXES.md #2: a mapping could not be delet
     vi.mocked(requireAdmin).mockRejectedValueOnce(new Error('not admin'));
     await expect(deleteProfileAction({}, formData({ profileId: String(id) }))).rejects.toThrow(/not admin/);
     expect(getProfile(id)).not.toBeNull();
+  });
+});
+
+// PENDING-FIXES.md #3: a new child category left /budgets, /reports, the dashboard and
+// /review looking stale for up to ~30s (Next's client router cache) because the category
+// mutations only ever revalidated /settings/managers (and, for rules, /transactions). Every
+// one of these three tests reads CATEGORY_RENDERING_ROUTES straight from the actions module
+// -- not a copy-pasted literal list -- so a route added to the constant without a matching
+// revalidatePath call in the action fails here, and a route removed from the constant without
+// updating this test still passes (there is nothing left here to duplicate wrongly).
+describe('category mutations revalidate every route that renders categories (finding 3)', () => {
+  it('createCategoryAction revalidates every route that renders categories', async () => {
+    setup();
+    vi.mocked(revalidatePath).mockClear();
+    const result = await createCategoryAction({}, formData({ name: 'Education', parentId: '' }));
+    expect(result.message).toBeTruthy();
+    const calls = vi.mocked(revalidatePath).mock.calls.map((call) => call[0]);
+    for (const route of CATEGORY_RENDERING_ROUTES) expect(calls).toContain(route);
+  });
+
+  it('renameCategoryAction revalidates every route that renders categories', async () => {
+    const { db } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    vi.mocked(revalidatePath).mockClear();
+    const result = await renameCategoryAction({}, formData({ categoryId: String(coffee), name: 'Coffee Shops' }));
+    expect(result.message).toBeTruthy();
+    const calls = vi.mocked(revalidatePath).mock.calls.map((call) => call[0]);
+    for (const route of CATEGORY_RENDERING_ROUTES) expect(calls).toContain(route);
+  });
+
+  it('archiveCategoryAction revalidates every route that renders categories', async () => {
+    const { db } = setup();
+    const coffee = categoryIdByName(db, 'Coffee');
+    vi.mocked(revalidatePath).mockClear();
+    const result = await archiveCategoryAction({}, formData({ categoryId: String(coffee), archived: '1' }));
+    expect(result.message).toBeTruthy();
+    const calls = vi.mocked(revalidatePath).mock.calls.map((call) => call[0]);
+    for (const route of CATEGORY_RENDERING_ROUTES) expect(calls).toContain(route);
   });
 });
