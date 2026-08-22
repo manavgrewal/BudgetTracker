@@ -2,6 +2,9 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Notice } from '@/components/ui/Notice';
+import { ReceiptScanPreview } from '@/components/warranty/ReceiptScanPreview';
+import { scanReceiptFile, type ScanQuad } from '@/lib/scanner/scan';
+import { SCANNER_AUTO_ACCEPT_MS } from '@/lib/warranty/ocr/onnx/constants';
 
 /**
  * The only file control in the feature. MUST-6.1 fixes its exact shape; MUST-10.2 fixes its
@@ -42,6 +45,18 @@ interface PollResponse {
   error?: string;
 }
 
+interface Pending {
+  original: File;
+  corrected: File;
+  originalUrl: string;
+  correctedUrl: string;
+  quad: ScanQuad;
+  sourceWidth: number;
+  sourceHeight: number;
+}
+
+const COUNTDOWN_TICK_MS = 1000;
+
 export function ReceiptUploader({
   onStagedChange,
   onSuggestions,
@@ -55,12 +70,19 @@ export function ReceiptUploader({
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [scanning, setScanning] = useState(false);
+  const [pending, setPending] = useState<Pending | null>(null);
+  const [secondsLeft, setSecondsLeft] = useState(0);
   const timers = useRef<ReturnType<typeof setInterval>[]>([]);
   // IMPORTANT 4: mirrors `files` so the unmount-cleanup effect below (which must run only
   // once, with empty deps, to avoid re-registering on every render) can still revoke
   // whatever object URLs exist AT UNMOUNT TIME rather than the ones captured in its stale
   // closure over the first render's (empty) `files` array.
   const filesRef = useRef<StagedFile[]>([]);
+  // IMPORTANT 4's stale-closure reason applies here too: the unmount effect runs once with
+  // empty deps, so it needs a ref to see whatever preview URLs exist AT UNMOUNT TIME.
+  const previewUrlsRef = useRef<string[]>([]);
+  const resolvePendingRef = useRef<((file: File) => void) | null>(null);
 
   useEffect(() => {
     filesRef.current = files;
@@ -71,11 +93,24 @@ export function ReceiptUploader({
     () => () => {
       for (const timer of timers.current) clearInterval(timer);
       for (const file of filesRef.current) if (file.previewUrl) URL.revokeObjectURL(file.previewUrl);
+      for (const url of previewUrlsRef.current) URL.revokeObjectURL(url);
+      resolvePendingRef.current = null;
     },
     // Cleanup on unmount only.
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [],
   );
+
+  useEffect(() => {
+    if (pending === null) return;
+    setSecondsLeft(Math.ceil(SCANNER_AUTO_ACCEPT_MS / COUNTDOWN_TICK_MS));
+    const tick = setInterval(() => setSecondsLeft((left) => Math.max(0, left - 1)), COUNTDOWN_TICK_MS);
+    const accept = setTimeout(() => resolvePendingRef.current?.(pending.corrected), SCANNER_AUTO_ACCEPT_MS);
+    return () => {
+      clearInterval(tick);
+      clearTimeout(accept);
+    };
+  }, [pending]);
 
   const poll = useCallback(
     (stagingId: string) => {
@@ -158,6 +193,58 @@ export function ReceiptUploader({
     }
   }
 
+  function releasePreview(entry: Pending): void {
+    for (const url of [entry.originalUrl, entry.correctedUrl]) {
+      URL.revokeObjectURL(url);
+      previewUrlsRef.current = previewUrlsRef.current.filter((value) => value !== url);
+    }
+  }
+
+  async function decide(original: File): Promise<File> {
+    if (!original.type.startsWith('image/')) return original;
+    setScanning(true);
+    let result;
+    try {
+      result = await scanReceiptFile(original);
+    } catch {
+      // scanReceiptFile is documented never to reject, and this is the belt for that brace:
+      // an upload is never blocked by the scanner.
+      return original;
+    } finally {
+      setScanning(false);
+    }
+    if (result.corrected === undefined) return result.file;
+
+    const originalUrl = URL.createObjectURL(original);
+    previewUrlsRef.current = [...previewUrlsRef.current, originalUrl, result.corrected.url];
+    const entry: Pending = {
+      original,
+      corrected: result.file,
+      originalUrl,
+      correctedUrl: result.corrected.url,
+      quad: result.corrected.quad,
+      sourceWidth: result.corrected.sourceWidth,
+      sourceHeight: result.corrected.sourceHeight,
+    };
+    const chosen = await new Promise<File>((resolve) => {
+      resolvePendingRef.current = resolve;
+      setPending(entry);
+    });
+    resolvePendingRef.current = null;
+    setPending(null);
+    releasePreview(entry);
+    return chosen;
+  }
+
+  async function handlePicked(chosen: File[]): Promise<void> {
+    // Sequentially, never in parallel: three simultaneous warps is how a mid-range Android
+    // tab crashes.
+    for (const original of chosen) {
+      const file = await decide(original);
+      await upload([file]);
+    }
+  }
+
   function remove(stagingId: string): void {
     setFiles((prev) => {
       const target = prev.find((file) => file.stagingId === stagingId);
@@ -171,7 +258,9 @@ export function ReceiptUploader({
       <label className="flex flex-col gap-1.5">
         <span className="field-label">{label}</span>
         {/* MUST-6.1, exactly: capture="environment" opens a phone's rear camera directly and
-            is ignored by a desktop browser. No native app, no getUserMedia, no canvas. */}
+            is ignored by a desktop browser. There is no native app and no live camera stream
+            requested from the page -- the still image the camera app hands back is then
+            straightened with an in-browser canvas crop, never a live viewfinder. */}
         <input
           type="file"
           name="file"
@@ -187,7 +276,7 @@ export function ReceiptUploader({
             // await, which is exactly what silently dropped every image receipt before.
             const list = event.target.files;
             const chosen = list ? Array.from(list) : [];
-            if (chosen.length > 0) void upload(chosen);
+            if (chosen.length > 0) void handlePicked(chosen);
             event.target.value = '';
           }}
           className="text-sm text-muted file:mr-3 file:rounded-md file:border-0 file:bg-accent-soft file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-accent-soft-fg"
@@ -196,6 +285,24 @@ export function ReceiptUploader({
 
       {error ? <Notice tone="error">{error}</Notice> : null}
       {notice ? <p className="text-sm text-muted">{notice}</p> : null}
+
+      {scanning ? (
+        <p className="text-sm text-muted" role="status">
+          Finding the receipt…
+        </p>
+      ) : null}
+      {pending !== null ? (
+        <ReceiptScanPreview
+          originalUrl={pending.originalUrl}
+          correctedUrl={pending.correctedUrl}
+          quad={pending.quad}
+          sourceWidth={pending.sourceWidth}
+          sourceHeight={pending.sourceHeight}
+          secondsLeft={secondsLeft}
+          onUseThis={() => resolvePendingRef.current?.(pending.corrected)}
+          onUseOriginal={() => resolvePendingRef.current?.(pending.original)}
+        />
+      ) : null}
 
       {files.length > 0 ? (
         <ul className="flex flex-wrap gap-3">

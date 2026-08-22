@@ -15,14 +15,11 @@ function walk(dir: string): string[] {
 }
 
 describe('MUST-8.1 / MUST-8.3 / AC11 / risk R14: there is no viewfinder', () => {
-  // SKIPPED, not deleted: src/components/warranty/ReceiptUploader.tsx already carries a
-  // pre-existing doc comment ("No native app, no getUserMedia, no canvas.") that predates
-  // this task and this guard. It documents the ABSENCE of getUserMedia, but the substring
-  // scan below cannot tell that apart from a real call, so it trips on wording alone. That
-  // file is Task 11's ("the uploader state machine"), not Task 10's -- Task 11 also makes
-  // "no canvas" untrue by wiring in jscanify's canvas crop, so the comment needs rewording
-  // there regardless. Re-enable this assertion once that reword lands.
-  it.skip('getUserMedia and mediaDevices appear nowhere under src/', () => {
+  // Re-enabled by Task 11: the doc comment in src/components/warranty/ReceiptUploader.tsx
+  // that used to read "No native app, no getUserMedia, no canvas." was reworded once that
+  // task wired in jscanify's canvas crop (making "no canvas" untrue) and no longer contains
+  // either banned substring, so the scan below now passes for real rather than vacuously.
+  it('getUserMedia and mediaDevices appear nowhere under src/', () => {
     const offenders = walk('src').filter((file) => {
       const source = fs.readFileSync(path.join(ROOT, file), 'utf8');
       return source.includes('getUserMedia') || source.includes('mediaDevices');
