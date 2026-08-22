@@ -102,6 +102,44 @@ describe('scripts/check-ocr-assets.mjs (MUST-7.9)', () => {
     expect(source).toContain('INLINED_GLUE_MIN_BYTES');
   });
 
+  // B8: the two vendored scanner assets used to get only a shape check (size/existence)
+  // while the four OCR models got a SHA256 pin -- inconsistent for ~9 MB of third-party code
+  // that runs in every household member's browser. These two tests are the scanner-asset
+  // equivalent of the MUST-10.8 model-hash test above and the missing-path test further up.
+  it('B8: pins a SHA256 hash for both vendored scanner assets, the same treatment as the OCR models', () => {
+    const source = fs.readFileSync(script, 'utf8');
+    expect(source).toContain('SCANNER_HASHES');
+    expect(source).toMatch(/'public\/scanner\/opencv\.js':\s*'[0-9a-f]{64}'/);
+    expect(source).toMatch(/'public\/scanner\/jscanify\.min\.js':\s*'[0-9a-f]{64}'/);
+  });
+
+  it('B8: fails with an actionable re-vendor/re-pin message on a scanner hash mismatch, without touching the real vendored files', () => {
+    const source = fs.readFileSync(script, 'utf8');
+    const match = source.match(/'public\/scanner\/opencv\.js':\s*'([0-9a-f]{64})'/);
+    expect(match, 'expected SCANNER_HASHES to pin public/scanner/opencv.js').not.toBeNull();
+    const realHash = (match as RegExpMatchArray)[1];
+    // Flip the last hex digit so the pin is wrong but well-formed -- a copy of the script,
+    // never the real file on disk, so the healthy checkout this suite depends on stays intact.
+    const bogusHash = realHash.slice(0, -1) + (realHash.endsWith('0') ? '1' : '0');
+    const tamperedScript = source.replace(`'${realHash}'`, `'${bogusHash}'`);
+
+    const tmpScript = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ocr-guard-tamper-')), 'check-ocr-assets.mjs');
+    fs.writeFileSync(tmpScript, tamperedScript);
+    try {
+      const result = spawnSync(process.execPath, [tmpScript], { cwd: root, encoding: 'utf8' });
+      expect(result.status).not.toBe(0);
+      const output = `${result.stdout}${result.stderr}`;
+      expect(output).toContain('sha256 mismatch');
+      expect(output).toContain('opencv-js 4.7.0-release.1');
+      expect(output).toContain('jscanify 1.4.3');
+      expect(output).toMatch(/corrupted or tampered/);
+      expect(output).toContain('npm run vendor-scanner-assets');
+      expect(output).toContain('SCANNER_HASHES');
+    } finally {
+      fs.rmSync(path.dirname(tmpScript), { recursive: true, force: true });
+    }
+  });
+
   it("its inlined-glue threshold equals the vendoring script's, so the two cannot disagree", () => {
     // Both scripts implement the same two accepted dist shapes, because neither can import
     // from the other: one runs in the repo before the build, the other inside the runtime

@@ -59,6 +59,19 @@ const SCANNER_GLUE = 'public/scanner/opencv.js';
 const SCANNER_JSCANIFY = 'public/scanner/jscanify.min.js';
 const INLINED_GLUE_MIN_BYTES = 8_000_000;
 
+// B8: the two vendored scanner assets got only a shape check (size/existence) while the four
+// OCR models above got a SHA256 pin -- an inconsistent standard for ~9 MB of third-party code
+// that executes in every household member's browser. These hashes were measured directly off
+// node_modules/@techstark/opencv-js/dist/opencv.js and node_modules/jscanify/src/jscanify.js
+// right after `npm ci`, i.e. exactly the bytes scripts/vendor-scanner-assets.mjs copies, with
+// package.json pinning those packages to 4.7.0-release.1 and 1.4.3 respectively. A mismatch
+// therefore means one of two things: a corrupted/tampered vendor copy, or a real version bump
+// that nobody re-pinned yet -- see the error message below for which to assume.
+const SCANNER_HASHES = {
+  'public/scanner/opencv.js': '694a3dc0c753fd0b71f3cdcdaab38e6d5fa03517d3ea11ba3d9624bc48dc4090',
+  'public/scanner/jscanify.min.js': 'a09dadd36ad4103e693523677f1aba3740d06f2dcdeb3ed87c66022e6ac0d13d',
+};
+
 // A local `npm ci` leaves the darwin and win32 directories in place, so the strip assertion
 // is an image-build check only. The Dockerfile and the release workflow set this; a
 // developer running `npm run check-ocr-assets` still gets the other three phases.
@@ -164,6 +177,33 @@ if (wasmFiles.length === 1) {
     `\npublic/scanner/ is not in either accepted shape: found ${wasmFiles.length} .wasm file(s) ` +
       `and an opencv.js of ${glueBytes} bytes (need >= ${INLINED_GLUE_MIN_BYTES} if no .wasm sits ` +
       'alongside it).\nCheck scripts/vendor-scanner-assets.mjs and the Dockerfile builder stage.',
+  );
+  process.exit(1);
+}
+
+// Phase 5 (B8): SHA256 verification of the two vendored scanner assets, the same treatment
+// the four OCR models get above (see SCANNER_HASHES for what these are pinned against).
+const scannerHashMismatches = [];
+for (const [relative, expected] of Object.entries(SCANNER_HASHES)) {
+  const absolute = path.join(process.cwd(), relative);
+  const actual = createHash('sha256').update(fs.readFileSync(absolute)).digest('hex');
+  if (actual === expected) {
+    console.log(`ok   ${relative} sha256`);
+  } else {
+    scannerHashMismatches.push(`${relative}: expected ${expected}, got ${actual}`);
+    console.error(`MISS ${relative} sha256 mismatch: expected ${expected}, got ${actual}`);
+  }
+}
+
+if (scannerHashMismatches.length > 0) {
+  console.error(
+    `\n${scannerHashMismatches.length} scanner asset(s) failed SHA256 verification in ${process.cwd()}.\n` +
+      scannerHashMismatches.join('\n') +
+      '\nSCANNER_HASHES is pinned to opencv-js 4.7.0-release.1 and jscanify 1.4.3 exactly (see package.json).' +
+      ' If those dependency versions have NOT changed, treat this as a corrupted or tampered vendor copy:' +
+      ' re-run npm run vendor-scanner-assets and re-check.\nIf you intentionally bumped either package, this' +
+      ' failure is expected -- re-run npm run vendor-scanner-assets to regenerate public/scanner/, then' +
+      " update SCANNER_HASHES in scripts/check-ocr-assets.mjs with the new build's sha256 before shipping.",
   );
   process.exit(1);
 }
