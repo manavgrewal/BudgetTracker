@@ -81,6 +81,10 @@ describe('.github/workflows/release-image.yml', () => {
 
   it('B9: calls the shared test workflow as a local reusable workflow instead of duplicating its steps', () => {
     expect(workflow).toContain('uses: ./.github/workflows/test.yml');
+    // The line above is a string match against this file's text; it stays green even if
+    // the referenced workflow is renamed or deleted, and only fails on GitHub, at the
+    // worst possible time (a release push). Assert the referenced path actually exists.
+    expect(fs.existsSync(path.join(root, '.github/workflows/test.yml'))).toBe(true);
   });
 
   it('builds both linux/amd64 and linux/arm64', () => {
