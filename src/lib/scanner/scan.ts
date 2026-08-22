@@ -87,7 +87,7 @@ async function run(file: File): Promise<ScanResult> {
   // of thing an old or unusual one might lack, and there is no point loading opencv.js only
   // to fail on the next line.
   if (typeof createImageBitmap !== 'function') return { file };
-  const { scanner } = await loadScanner();
+  const { cv, scanner } = await loadScanner();
 
   const bitmap = await createImageBitmap(file);
   try {
@@ -97,15 +97,29 @@ async function run(file: File): Promise<ScanResult> {
     const work = canvasOf(workWidth, workHeight);
     work.getContext('2d')?.drawImage(bitmap, 0, 0, workWidth, workHeight);
 
-    const contour = scanner.findPaperContour(work);
-    if (contour === null || contour === undefined) return { file };
-    const points = scanner.getCornerPoints(contour);
-    const workQuad: ScanQuad = {
-      topLeft: points.topLeftCorner,
-      topRight: points.topRightCorner,
-      bottomRight: points.bottomRightCorner,
-      bottomLeft: points.bottomLeftCorner,
-    };
+    // jscanify requires a cv.Mat, not a canvas (jscanify.js:28 "@param img ... cv.Mat";
+    // jscanify's own highlightPaper converts with cv.imread before calling this). Passing a
+    // canvas directly throws a BindingError on every call. Both the Mat and the contour Mat
+    // findPaperContour hands back are ours to free -- the wasm heap does not garbage-collect.
+    const workMat = cv.imread(work);
+    let workQuad: ScanQuad;
+    try {
+      const contour = scanner.findPaperContour(workMat) as { delete(): void } | null | undefined;
+      if (contour === null || contour === undefined) return { file };
+      try {
+        const points = scanner.getCornerPoints(contour);
+        workQuad = {
+          topLeft: points.topLeftCorner,
+          topRight: points.topRightCorner,
+          bottomRight: points.bottomRightCorner,
+          bottomLeft: points.bottomLeftCorner,
+        };
+      } finally {
+        contour.delete();
+      }
+    } finally {
+      workMat.delete();
+    }
     if (!isUsableQuad(workQuad, workWidth, workHeight)) return { file };
 
     const back = (point: { x: number; y: number }) => ({ x: point.x / workScale, y: point.y / workScale });
@@ -124,7 +138,16 @@ async function run(file: File): Promise<ScanResult> {
 
     const full = canvasOf(bitmap.width, bitmap.height);
     full.getContext('2d')?.drawImage(bitmap, 0, 0);
-    const extracted = scanner.extractPaper(full, outWidth, outHeight);
+    // Hand jscanify the quad MUST-8.13 already validated, instead of letting it silently
+    // re-detect on the full-resolution bitmap (jscanify.js:147:
+    // `cornerPoints ? null : this.findPaperContour(img)`), which both makes isUsableQuad
+    // decorative and defeats the SCANNER_WORK_MAX_PX downscale cap.
+    const extracted = scanner.extractPaper(full, outWidth, outHeight, {
+      topLeftCorner: fullQuad.topLeft,
+      topRightCorner: fullQuad.topRight,
+      bottomLeftCorner: fullQuad.bottomLeft,
+      bottomRightCorner: fullQuad.bottomRight,
+    });
     const blob = await toBlob(extracted);
     if (blob === null) return { file };
     // A crop that fails the size limit is not a crop, it is a rejected upload.
