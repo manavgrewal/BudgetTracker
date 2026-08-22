@@ -48,6 +48,10 @@ All notable changes to Budget Tracker are recorded here.
 - **The image is larger.** It now carries the recognition models inside it, so an install
   with no internet works exactly the same as one with it, plus the scanner your browser
   downloads once and caches.
+- **Every change now runs the full test suite before it can be released.** A push or a pull
+  request runs the whole suite and the typechecker, and a release tag can no longer publish
+  an image unless that suite passes. Until this release, every check this project had ever
+  passed was one run by hand on one machine.
 
 ### Fixed
 
@@ -80,6 +84,12 @@ All notable changes to Budget Tracker are recorded here.
   thumbnail has been broken this way since the warranty feature first shipped, unnoticed
   because the rule that blocks it does not apply under the test tooling this app's suite
   runs in.
+
+### Security
+
+- **The two scanner files your browser downloads are now pinned by checksum**, the same
+  integrity check the recognition models already had. A tampered or truncated copy fails the
+  build instead of being served to every browser in the house.
 
 ## [1.4.0] - 2026-08-19
 
