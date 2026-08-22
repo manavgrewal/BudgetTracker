@@ -45,9 +45,14 @@ describe('B5: loadScanner waits for the wasm runtime, not a synthetic gate', () 
   it('blocks on jscanify.min.js, and on resolving, until the cv thenable actually fires', async () => {
     const { loadScanner } = await import('@/lib/scanner/load');
 
-    let runtimeReady: (() => void) | undefined;
+    // BLOCKER fix: the real bundle's `then` invokes its callback WITH the module object
+    // itself (`func(Module)`), never with no argument -- a fake that calls `onfulfilled()`
+    // conforms to the type load.ts used to declare (no `value` parameter) rather than to the
+    // real contract, and that mismatch is exactly what hid the `await cv` hang: this fake
+    // must hand back `fakeCv` itself, the same self-referential shape the real bundle does.
+    let runtimeReady: ((value: unknown) => void) | undefined;
     const fakeCv = {
-      then: vi.fn((onfulfilled: () => void) => {
+      then: vi.fn((onfulfilled: (value: unknown) => void) => {
         runtimeReady = onfulfilled;
       }),
     };
@@ -63,7 +68,8 @@ describe('B5: loadScanner waits for the wasm runtime, not a synthetic gate', () 
     (window as unknown as { cv: unknown }).cv = fakeCv;
     scripts[0].onload?.(new Event('load'));
 
-    // Let load() resume past `await injectScript(...)` and reach `await cv`.
+    // Let load() resume past `await injectScript(...)` and reach the point where it calls
+    // `cv.then(...)` (never `await cv` directly -- see the BLOCKER fix in load.ts).
     await vi.waitFor(() => expect(fakeCv.then).toHaveBeenCalledTimes(1));
     // The OLD gate never called `.then` at all: it resolved as soon as it read
     // `typeof cv.onRuntimeInitialized`, which is always 'undefined'. Reaching this line at
@@ -79,8 +85,10 @@ describe('B5: loadScanner waits for the wasm runtime, not a synthetic gate', () 
     ]);
     expect(settledEarly).toBe('pending');
 
-    // Now let the runtime "finish initialising".
-    runtimeReady?.();
+    // Now let the runtime "finish initialising" -- handed `fakeCv` itself, exactly as the
+    // real bundle's `func(Module)` would, proving the fix does not hang on a self-referential
+    // resolution value.
+    runtimeReady?.(fakeCv);
     await vi.waitFor(() => expect(scripts).toHaveLength(2));
     expect(scripts[1].src).toContain('/scanner/jscanify.min.js');
 
@@ -95,7 +103,11 @@ describe('B5: loadScanner waits for the wasm runtime, not a synthetic gate', () 
   it('resolves promptly when the runtime is already initialised (the fast path)', async () => {
     const { loadScanner } = await import('@/lib/scanner/load');
 
-    const fakeCv = { then: vi.fn((onfulfilled: () => void) => onfulfilled()) };
+    // Same fix as above: the real bundle's fast path (`calledRun` already true) calls
+    // `func(Module)` synchronously and immediately -- with the module itself, not nothing.
+    const fakeCv: { then: (onfulfilled: (value: unknown) => void) => void } = {
+      then: vi.fn((onfulfilled: (value: unknown) => void) => onfulfilled(fakeCv)),
+    };
     class FakeJscanify {}
 
     const resultPromise = loadScanner();
@@ -109,5 +121,48 @@ describe('B5: loadScanner waits for the wasm runtime, not a synthetic gate', () 
     const result = await resultPromise;
     expect(result.cv).toBe(fakeCv);
     expect(result.scanner).toBeInstanceOf(FakeJscanify);
+  });
+});
+
+describe('BLOCKER: `await cv` adopts the self-referential thenable and hangs forever', () => {
+  it('consults the cv thenable exactly once, never re-adopting the value it resolves with', async () => {
+    const { loadScanner } = await import('@/lib/scanner/load');
+
+    // A bounded stand-in for the real bug: the shipping bundle's `then` always resolves with
+    // `Module` itself (a faithful replication of it, driven the same way as here, produced
+    // 2,000,000+ recursive `then()` calls with no bound at all -- see the scratchpad
+    // reproduction this test's bound is modelled on). This fake caps that at BOUND turns so
+    // a regression can never hang this suite: past the bound it resolves with `undefined`
+    // instead, which is the one thing a genuinely infinite chain would never do on its own.
+    // The assertion below does not depend on the bound being generous -- `await cv` fails it
+    // by recursing at all (more than once), and the fix passes it by construction (exactly
+    // once), regardless of where the bound is set.
+    const BOUND = 5;
+    let thenCalls = 0;
+    const fakeCv: { then: (onfulfilled: (value: unknown) => void) => void } = {
+      then: vi.fn((onfulfilled: (value: unknown) => void) => {
+        thenCalls += 1;
+        onfulfilled(thenCalls <= BOUND ? fakeCv : undefined);
+      }),
+    };
+    class FakeJscanify {}
+
+    const resultPromise = loadScanner();
+    (window as unknown as { cv: unknown }).cv = fakeCv;
+    scripts[0].onload?.(new Event('load'));
+
+    await vi.waitFor(() => expect(scripts).toHaveLength(2));
+    (window as unknown as { jscanify: unknown }).jscanify = FakeJscanify;
+    scripts[1].onload?.(new Event('load'));
+
+    await resultPromise;
+
+    // The fix (`cv.then(() => resolve())`) never hands the value `cv.then` resolves with to
+    // anything the JS engine would re-check for thenability, so nothing re-adopts `fakeCv`
+    // and `.then` is consulted exactly once. `await cv` directly would instead let the
+    // engine's own PromiseResolveThenableJob machinery keep unwrapping the self-referential
+    // value on every one of the BOUND turns above before this fake gave up -- this is what
+    // fails against `await cv` and passes only against the fix.
+    expect(thenCalls).toBe(1);
   });
 });
