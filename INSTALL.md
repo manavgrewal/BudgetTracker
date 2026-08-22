@@ -88,6 +88,14 @@ request instead of Watchtower polling on its own timer. The Watchtower endpoint 
 compose project's private network and is never published to the host, so it is not a fourth
 egress destination beyond the three named above.
 
+**If you restore a backup onto a different machine, the receipt reader may need to re-check
+itself.** The app records, per processor family, whether the fast OCR engine runs on that
+hardware, keyed to `settings.ocr.engine`. If you restore a backup from one machine onto a
+second machine with a different processor of the same architecture, and receipt reading then
+stops working, delete the row whose key is `ocr.engine` from the `settings` table and upload
+one receipt. The app checks the new machine and records the right answer. This is the one case
+the automatic check cannot see for itself.
+
 ---
 
 ## Quick start — Linux

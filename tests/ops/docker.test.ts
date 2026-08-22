@@ -218,17 +218,28 @@ describe('version and changelog', () => {
     expect(section).toContain('Warranty');
   });
 
-  it('MUST-18.1 / MUST-18.3: the 1.4.0 release', () => {
+  it('MUST-14: the 1.5.0 release', () => {
     const pkg = JSON.parse(read('package.json')) as { version: string };
-    expect(pkg.version).toBe('1.4.0');
+    expect(pkg.version).toBe('1.5.0');
     const changelog = read('CHANGELOG.md');
-    expect(changelog).toMatch(/^## \[1\.4\.0\] - 2026-08-19$/m);
+    expect(changelog).toMatch(/^## \[1\.5\.0\] - 2026-08-22$/m);
     // An empty Unreleased section is left in place for the next session.
-    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.4.0]'));
-    // This release carries no unattended-install warning the way 1.3.1 did, so the section
-    // keeps the plain Added, then Changed, then Fixed order instead of leading with Changed.
-    const section = changelog.slice(changelog.indexOf('## [1.4.0]'), changelog.indexOf('## [1.3.1]'));
-    expect(section.indexOf('### Added')).toBeLessThan(section.indexOf('### Changed'));
+    expect(changelog.indexOf('## Unreleased')).toBeLessThan(changelog.indexOf('## [1.5.0]'));
+    const section = changelog.slice(changelog.indexOf('## [1.5.0]'), changelog.indexOf('## [1.4.0]'));
+    expect(section).toContain('Re-run OCR');
+    expect(section).not.toMatch(/PP-OCR|ONNX|tesseract/i);
+  });
+
+  it('MUST-3.14: README names the model provenance and no fourth egress destination', () => {
+    const readme = read('README.md');
+    for (const needle of ['PP-OCRv5', 'RapidOCR', 'PaddleOCR', 'Baidu', 'Apache-2.0']) {
+      expect(readme).toContain(needle);
+    }
+    expect(readme).not.toContain('modelscope');
+  });
+
+  it('risk R10: INSTALL documents the one recovery the automatic check cannot do', () => {
+    expect(read('INSTALL.md')).toContain('ocr.engine');
   });
 
   it('MUST-8.3 / MUST-18.5: the docs name the third egress exception and the two new variables', () => {

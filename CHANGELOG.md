@@ -21,6 +21,48 @@ All notable changes to Budget Tracker are recorded here.
 
 ## Unreleased
 
+## [1.5.0] - 2026-08-22
+
+### Changed
+
+- **Receipts are read by a new engine.** Photographs of receipts, which is what most
+  receipts are, come back with far more of the text intact: the vendor, the date and the
+  total are found where they were being missed before. Nothing about uploading changes and
+  nothing you have already saved is touched. If you want an old receipt read again, the
+  Re-run OCR button on its item does exactly that.
+- **A few machines cannot run the new engine.** Budget Tracker checks once, the first time
+  it reads a receipt after this update, and goes back to the older engine if the check does
+  not survive. Receipts still upload and are still read. Settings -> About says so, with the
+  reason, when that happens. There is nothing to configure either way.
+
+### Added
+
+- **Your phone straightens the receipt before it uploads.** Take the photo the way you
+  already do and the browser finds the paper, squares it up and crops the counter out. It
+  shows you the before and after for four seconds and then sends the straightened one; a
+  button sends the original instead. If any of that fails, the original uploads and you are
+  not told about it, because there is nothing you would do differently.
+- **The image is larger.** It now carries the recognition models inside it, so an install
+  with no internet works exactly the same as one with it, plus the scanner your browser
+  downloads once and caches.
+
+### Fixed
+
+- The release workflow no longer claims the OCR assets are the same on every processor. They
+  were, and now one of them is not.
+- **CSV import accepts the date formats Excel writes.** A file re-saved on Windows, where
+  `28 May 2026` became `26-May-26`, used to fail outright. The preview step now tries every
+  known format (including `DD-MMM-YY` and `YYYY-MM-DD HH:mm`) against the column itself and
+  keeps the one that actually parses it, instead of requiring the right format to already be
+  chosen.
+- **An import mapping can finally be deleted.** The built-in bank presets stay protected.
+  Deleting any other mapping clears its references first: an account loses only a remembered
+  default and a past import loses only the record of which mapping it used. Neither the
+  account nor the import itself is touched, and the delete is no longer refused.
+- **A new or renamed category shows up everywhere, not just on the managers page.** The
+  dashboard, budgets, reports, transactions and review pages now all refresh when a category
+  changes, so a new child category appears right away instead of after the page cache expires.
+
 ## [1.4.0] - 2026-08-19
 
 This release adds no migration, no table and no column, and it makes no outbound connection it

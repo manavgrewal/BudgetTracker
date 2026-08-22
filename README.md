@@ -11,7 +11,10 @@ opt-in exceptions: the optional SimpleFIN bank sync, notifications, which stays 
 configure a channel and then reaches only `api.telegram.org` and the SMTP relay you typed in, and
 update checks (2026-08-17 spec), dormant until an admin enables them and then reaching only
 `api.github.com`, one host and two endpoints, with no authentication and nothing about the install
-in the request. No telemetry, no cloud account, no mandatory bank API.
+in the request. No telemetry, no cloud account, no mandatory bank API. The receipt scanner and
+the new OCR engine (2026-08-22) add no fourth exception: the recognition models ship inside the
+image, the scanner is served from the container under `/scanner/`, and nothing is fetched at
+run time to read a receipt.
 
 > **Installing?** Go to **[INSTALL.md](INSTALL.md)** — prerequisites, one command per platform
 > (Linux, Windows, macOS, Raspberry Pi), a no-SSH Synology walkthrough, and update, uninstall,
@@ -26,8 +29,12 @@ in the request. No telemetry, no cloud account, no mandatory bank API.
 - **Savings goals** — log money set aside and see a pace projection.
 - **Warranties** — record what you bought and how long it is covered, attach the receipt as a
   photo or a PDF, and search every word printed on it. Receipts are read by an OCR engine
-  that runs entirely on the server: the language data ships inside the image, so this works
-  on a LAN-only install with no internet connection at all.
+  that runs entirely on the server: the recognition models ship inside the image, so this
+  works on a LAN-only install with no internet connection at all. The models are PP-OCRv5,
+  converted to ONNX by the RapidOCR project from PaddleOCR weights published by Baidu, all
+  under the Apache-2.0 licence; see `vendor/ocr-models/NOTICE` for the exact files and hashes.
+  A phone photographing a receipt gets it straightened and cropped in the browser first, using
+  a self-hosted OpenCV.js and jscanify, before it uploads.
 - **SimpleFIN (optional)** — link accounts for automatic balance/transaction sync if you want it;
   CSV import always works without it.
 - **Sharing packs** — export a redacted slice of your data to share with someone (an accountant,
