@@ -136,17 +136,32 @@ async function run(file: File): Promise<ScanResult> {
     const outWidth = Math.max(1, Math.round(meanWidth * outScale));
     const outHeight = Math.max(1, Math.round(meanHeight * outScale));
 
-    const full = canvasOf(bitmap.width, bitmap.height);
-    full.getContext('2d')?.drawImage(bitmap, 0, 0);
+    // F3 defect fix: jscanify's extractPaper (jscanify.js:144) does its own `cv.imread(image)`
+    // internally, producing an RGBA Mat at the FULL resolution of whatever canvas is handed
+    // to it -- and warpPerspective only ever asks that Mat for outWidth x outHeight pixels
+    // out, so drawing at the untouched bitmap resolution buys nothing. It also costs a lot: a
+    // 12 MP photo is ~48 MB as RGBA, sitting in a wasm heap that cannot shrink, and if
+    // warpPerspective or imshow throws before jscanify's own `img.delete()` runs, that Mat
+    // leaks. `outScale` above is exactly the factor that already caps meanWidth/meanHeight
+    // down to outWidth/outHeight, so applying that SAME scale to the whole bitmap bounds the
+    // extract source to no more resolution than the capped output can use, and applying it to
+    // fullQuad's corners keeps them pointing at the same physical spot on the shrunk canvas --
+    // the quad mapping has to stay consistent with the source it is measured against, which is
+    // the whole point of handing jscanify a validated quad instead of letting it re-detect.
+    const extractWidth = Math.max(1, Math.round(bitmap.width * outScale));
+    const extractHeight = Math.max(1, Math.round(bitmap.height * outScale));
+    const extractSource = canvasOf(extractWidth, extractHeight);
+    extractSource.getContext('2d')?.drawImage(bitmap, 0, 0, extractWidth, extractHeight);
+    const toExtractSource = (point: { x: number; y: number }) => ({ x: point.x * outScale, y: point.y * outScale });
     // Hand jscanify the quad MUST-8.13 already validated, instead of letting it silently
-    // re-detect on the full-resolution bitmap (jscanify.js:147:
+    // re-detect on the extract source (jscanify.js:147:
     // `cornerPoints ? null : this.findPaperContour(img)`), which both makes isUsableQuad
     // decorative and defeats the SCANNER_WORK_MAX_PX downscale cap.
-    const extracted = scanner.extractPaper(full, outWidth, outHeight, {
-      topLeftCorner: fullQuad.topLeft,
-      topRightCorner: fullQuad.topRight,
-      bottomLeftCorner: fullQuad.bottomLeft,
-      bottomRightCorner: fullQuad.bottomRight,
+    const extracted = scanner.extractPaper(extractSource, outWidth, outHeight, {
+      topLeftCorner: toExtractSource(fullQuad.topLeft),
+      topRightCorner: toExtractSource(fullQuad.topRight),
+      bottomLeftCorner: toExtractSource(fullQuad.bottomLeft),
+      bottomRightCorner: toExtractSource(fullQuad.bottomRight),
     });
     const blob = await toBlob(extracted);
     if (blob === null) return { file };

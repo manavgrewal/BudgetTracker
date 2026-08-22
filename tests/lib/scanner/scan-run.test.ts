@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CvLike, CvMatLike, JscanifyCorners, JscanifyLike } from '@/lib/scanner/load';
 import * as loadModule from '@/lib/scanner/load';
 import { scanReceiptFile } from '@/lib/scanner/scan';
+import { SCANNER_OUTPUT_MAX_PX } from '@/lib/warranty/ocr/onnx/constants';
 
 // Deliberately the same quad already proven usable by MUST-8.13's own suite
 // (tests/app/receipt-scanner.test.tsx `quad()`), against a 100x100 working frame -- so
@@ -215,5 +216,78 @@ describe('B2: the validated quad is handed to extractPaper instead of being disc
     // re-detection when this argument is truthy. An undefined 4th argument (the pre-fix
     // behaviour) would silently re-run detection on the untouched full-resolution bitmap.
     expect(pointsArg).toBeDefined();
+  });
+});
+
+describe('F3: the extract source is bounded to the capped output, and the quad is scaled to match', () => {
+  it('shrinks the canvas handed to extractPaper, and scales the quad by the exact same factor, once the source exceeds SCANNER_OUTPUT_MAX_PX', async () => {
+    const rig = buildRig();
+    // A big, square working frame (bigger than SCANNER_WORK_MAX_PX = 1600, so workScale < 1)
+    // with a quad that fills nearly all of it -- comfortably passes every MUST-8.13 check.
+    const workSide = 1600;
+    rig.scanner.getCornerPoints = vi.fn(() => ({
+      topLeftCorner: { x: 100, y: 100 },
+      topRightCorner: { x: 1500, y: 100 },
+      bottomRightCorner: { x: 1500, y: 1500 },
+      bottomLeftCorner: { x: 100, y: 1500 },
+    }));
+    vi.spyOn(loadModule, 'loadScanner').mockResolvedValue({ cv: rig.cv, scanner: rig.scanner });
+    // A big bitmap: workScale = 1600 / 8000 = 0.2, so the quad scales back up (fullQuad) to a
+    // 7000x7000 square -- well past SCANNER_OUTPUT_MAX_PX (2400), which is what makes outScale
+    // (and therefore F3's bound on the extract source) less than 1 in this test.
+    const bitmapSide = 8000;
+    vi.stubGlobal('createImageBitmap', vi.fn(async () => fakeBitmap(bitmapSide, bitmapSide)));
+
+    await scanReceiptFile(new File(['jpeg-bytes'], 'receipt.jpg', { type: 'image/jpeg' }));
+
+    expect(rig.extractPaperArgs).toHaveLength(1);
+    const [canvasArg, outWidth, outHeight, pointsArg] = rig.extractPaperArgs[0];
+
+    // The math scan.ts itself does, replicated here rather than re-imported, so this test
+    // fails if that math ever silently changes: workScale = 1600/8000 = 0.2, so the quad
+    // above (already a 1400x1400 square in work coordinates) becomes a 7000x7000 square in
+    // full/original-bitmap coordinates; outScale is what caps THAT down to
+    // SCANNER_OUTPUT_MAX_PX.
+    const workScale = workSide / bitmapSide;
+    const fullQuadSide = 1400 / workScale;
+    const outScale = Math.min(1, SCANNER_OUTPUT_MAX_PX / fullQuadSide);
+    expect(outScale).toBeLessThan(1); // otherwise this test is not exercising F3 at all
+
+    // F3: the canvas handed to extractPaper is bounded by outScale, NOT the untouched
+    // 8000x8000 bitmap -- this is the whole leak/memory fix.
+    expect(canvasArg).toBeInstanceOf(HTMLCanvasElement);
+    const canvas = canvasArg as HTMLCanvasElement;
+    expect(canvas.width).toBe(Math.max(1, Math.round(bitmapSide * outScale)));
+    expect(canvas.height).toBe(Math.max(1, Math.round(bitmapSide * outScale)));
+    expect(canvas.width).toBeLessThan(bitmapSide);
+
+    // The output size passed alongside it is unaffected -- still capped at
+    // SCANNER_OUTPUT_MAX_PX, independent of how the source was bounded.
+    expect(Math.max(outWidth, outHeight)).toBeLessThanOrEqual(SCANNER_OUTPUT_MAX_PX);
+
+    // The quad handed to extractPaper must be scaled by the exact same outScale that bounded
+    // the canvas -- not left in full-bitmap coordinates -- or the crop would warp the wrong
+    // region of a canvas that no longer matches the bitmap's original scale.
+    const fullQuadTopLeft = { x: 100 / workScale, y: 100 / workScale };
+    expect(pointsArg?.topLeftCorner?.x).toBeCloseTo(fullQuadTopLeft.x * outScale, 6);
+    expect(pointsArg?.topLeftCorner?.y).toBeCloseTo(fullQuadTopLeft.y * outScale, 6);
+    const fullQuadBottomRight = { x: 1500 / workScale, y: 1500 / workScale };
+    expect(pointsArg?.bottomRightCorner?.x).toBeCloseTo(fullQuadBottomRight.x * outScale, 6);
+    expect(pointsArg?.bottomRightCorner?.y).toBeCloseTo(fullQuadBottomRight.y * outScale, 6);
+  });
+
+  it('leaves the extract source at full bitmap resolution when the quad is already within the cap (no regression)', async () => {
+    const rig = buildRig();
+    vi.spyOn(loadModule, 'loadScanner').mockResolvedValue({ cv: rig.cv, scanner: rig.scanner });
+    vi.stubGlobal('createImageBitmap', vi.fn(async () => fakeBitmap(100, 100)));
+
+    await scanReceiptFile(new File(['jpeg-bytes'], 'receipt.jpg', { type: 'image/jpeg' }));
+
+    const [canvasArg] = rig.extractPaperArgs[0];
+    const canvas = canvasArg as HTMLCanvasElement;
+    // outScale is 1 here (the 100x100 frame is nowhere near SCANNER_OUTPUT_MAX_PX), so F3's
+    // bound is a no-op and the extract source is exactly the untouched bitmap, same as before.
+    expect(canvas.width).toBe(100);
+    expect(canvas.height).toBe(100);
   });
 });
