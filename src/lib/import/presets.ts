@@ -176,22 +176,18 @@ export function updateProfileMapping(profileId: number, mapping: ImportMapping):
     .run();
 }
 
-/**
- * PENDING-FIXES.md #2: there was no delete path at all, so a profile created for a test
- * stayed forever. Built-ins are refused (they are shared rows, same guard as
- * updateProfileMapping above). A profile still referenced by an account's importProfileId or
- * a past import's profileId is refused too, rather than left to fail on the FOREIGN KEY
- * constraint (both columns are ON DELETE NO ACTION, and foreign_keys is ON for every
- * connection -- src/db/client.ts) or, worse, silently orphaning that reference. The caller
- * (deleteProfileAction) surfaces this message straight to the admin.
- */
-export function deleteProfile(profileId: number): void {
-  const existing = getProfile(profileId);
-  if (!existing) throw new Error(`No import profile ${profileId}`);
-  if (existing.isBuiltin) {
-    throw new Error('Built-in profiles are shared and cannot be deleted');
-  }
+export interface ProfileUsage {
+  accounts: number;
+  imports: number;
+}
 
+/**
+ * Read path for the delete confirm step: how many rows currently point at this profile.
+ * Deliberately separate from deleteProfile's return value below -- the confirm text has to be
+ * honest about what will happen BEFORE the admin commits to the delete, so it is computed by
+ * its own read here rather than reused from a previous delete's result.
+ */
+export function getProfileUsage(profileId: number): ProfileUsage {
   const accountsUsing =
     getDb()
       .select({ c: sql<number>`count(*)` })
@@ -204,15 +200,47 @@ export function deleteProfile(profileId: number): void {
       .from(imports)
       .where(eq(imports.profileId, profileId))
       .get()?.c ?? 0;
+  return { accounts: accountsUsing, imports: importsUsing };
+}
 
-  if (accountsUsing > 0 || importsUsing > 0) {
-    const parts: string[] = [];
-    if (accountsUsing > 0) parts.push(`${accountsUsing} account${accountsUsing === 1 ? '' : 's'}`);
-    if (importsUsing > 0) parts.push(`${importsUsing} past import${importsUsing === 1 ? '' : 's'}`);
-    throw new Error(`${parts.join(' and ')} still reference this profile — it cannot be deleted`);
+export interface DeleteProfileResult {
+  accountsCleared: number;
+  importsCleared: number;
+}
+
+/**
+ * PENDING-FIXES.md #2: there was no delete path at all, so a profile created for a test
+ * stayed forever. The first version of this fix refused the delete whenever any row
+ * referenced the profile -- but a mapping created for a test is almost always used to run at
+ * least one test import, so imports.profileId would already reference it and the refusal
+ * reproduced the exact "stays forever" symptom being fixed. Both FK columns
+ * (accounts.importProfileId, imports.profileId) are nullable, so instead of refusing this
+ * clears them and deletes, all in one transaction (same idiom as
+ * src/lib/warranty/types.ts's setItemTypeKind) so a crash mid-way never leaves a row nulled
+ * out without the profile actually being gone, or vice versa. Built-ins are still refused --
+ * they are shared rows, same guard as updateProfileMapping above.
+ */
+export function deleteProfile(profileId: number): DeleteProfileResult {
+  const existing = getProfile(profileId);
+  if (!existing) throw new Error(`No import profile ${profileId}`);
+  if (existing.isBuiltin) {
+    throw new Error('Built-in profiles are shared and cannot be deleted');
   }
 
-  getDb().delete(importProfiles).where(eq(importProfiles.id, profileId)).run();
+  return getDb().transaction((tx) => {
+    const accountsCleared = tx
+      .update(accounts)
+      .set({ importProfileId: null })
+      .where(eq(accounts.importProfileId, profileId))
+      .run().changes;
+    const importsCleared = tx
+      .update(imports)
+      .set({ profileId: null })
+      .where(eq(imports.profileId, profileId))
+      .run().changes;
+    tx.delete(importProfiles).where(eq(importProfiles.id, profileId)).run();
+    return { accountsCleared, importsCleared };
+  });
 }
 
 export function mappingsEqual(a: ImportMapping, b: ImportMapping): boolean {

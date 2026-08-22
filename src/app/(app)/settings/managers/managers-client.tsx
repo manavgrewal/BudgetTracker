@@ -11,7 +11,7 @@ import { TableWrap } from '@/components/ui/Table';
 import { Field, inputClass, selectClass } from '@/components/ui/form';
 import type { CategoryRecord } from '@/lib/categories';
 import type { MerchantRuleRecord } from '@/lib/categorize/rules';
-import type { ProfileRecord } from '@/lib/import/presets';
+import type { ProfileRecord, ProfileUsage } from '@/lib/import/presets';
 import type { ImportMapping } from '@/lib/import/mapping';
 import type { ProfilesExportRow, RulesExportRow } from '@/lib/packs';
 import { RulesPackPanel } from './rules-pack-panel';
@@ -31,16 +31,36 @@ const initial: ManagerState = {};
 
 const rowInput = 'field-control w-auto px-2 py-1 text-xs';
 
+/** How the delete confirm step describes what a delete will do, computed from a read path
+ * (getProfileUsage, via the server page) rather than from deleteProfile's own return value --
+ * the admin needs the truth BEFORE committing to the delete, not after. */
+function describeProfileUsage(usage: ProfileUsage): string {
+  const parts: string[] = [];
+  if (usage.accounts > 0) {
+    parts.push(
+      `${usage.accounts} account${usage.accounts === 1 ? '' : 's'} will lose ${usage.accounts === 1 ? 'its' : 'their'} remembered mapping`,
+    );
+  }
+  if (usage.imports > 0) {
+    parts.push(
+      `${usage.imports} past import${usage.imports === 1 ? '' : 's'} will lose the record of which mapping was used`,
+    );
+  }
+  return parts.length > 0 ? `${parts.join(' and ')}.` : 'Nothing currently references it.';
+}
+
 export function ManagersClient({
   categories,
   rules,
   profiles,
+  profileUsage,
   rulesPackRows,
   profilePackRows,
 }: {
   categories: CategoryRecord[];
   rules: MerchantRuleRecord[];
   profiles: ProfileRecord[];
+  profileUsage: Record<number, ProfileUsage>;
   rulesPackRows: RulesExportRow[];
   profilePackRows: ProfilesExportRow[];
 }) {
@@ -241,7 +261,9 @@ export function ManagersClient({
           description="Built-in profiles are shared. Editing one saves a copy instead of changing the original."
         />
         <ul className="border-t border-line text-sm">
-          {profiles.map((profile) => (
+          {profiles.map((profile) => {
+            const usage = profileUsage[profile.id] ?? { accounts: 0, imports: 0 };
+            return (
             <li key={profile.id} className="border-b border-line px-5 py-3 last:border-b-0 sm:px-6">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <span>
@@ -270,8 +292,8 @@ export function ManagersClient({
               {deletingProfileId === profile.id ? (
                 <div className="mt-3 flex flex-col gap-3 rounded-md border border-negative-soft p-3">
                   <p className="text-sm text-ink">
-                    Delete <strong className="font-semibold">{profile.name}</strong>? This cannot be undone. A
-                    profile still used by an account or a past import cannot be deleted.
+                    Delete <strong className="font-semibold">{profile.name}</strong>? This cannot be undone.{' '}
+                    {describeProfileUsage(usage)}
                   </p>
                   <form action={removeProfile} className="flex gap-2">
                     <input type="hidden" name="profileId" value={profile.id} />
@@ -291,7 +313,8 @@ export function ManagersClient({
                 </form>
               ) : null}
             </li>
-          ))}
+            );
+          })}
         </ul>
         <CardBody className="pt-4">
           <ProfilesPackPanel rows={profilePackRows} />

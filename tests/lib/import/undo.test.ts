@@ -6,7 +6,7 @@ import { createSeededTestDb, categoryIdByName, insertTestAccount, insertTestUser
 import { commitImport, previewUndoImport, undoImport } from '@/lib/import/commit';
 import { computeRowHashes } from '@/lib/import/dedup';
 import { parseCsv } from '@/lib/import/parse';
-import { getBuiltinPreset } from '@/lib/import/presets';
+import { createProfile, deleteProfile, getBuiltinPreset } from '@/lib/import/presets';
 import { resetImportHooks, setImportHooks } from '@/lib/import/hooks';
 
 const fixture = (name: string) => fs.readFileSync(path.join(process.cwd(), 'fixtures', name));
@@ -32,6 +32,30 @@ describe('undoImport with no overlap', () => {
   it('deletes every row the import created', () => {
     const { sqlite, userId, accountId, hashed } = setup();
     const result = commitImport({ accountId, profileId: null, filename: 'td.csv', importedBy: userId, rows: hashed, errors: [] });
+
+    expect(previewUndoImport(result.importId)).toEqual({ importId: result.importId, willDelete: 9, willKeep: 0 });
+    expect(undoImport(result.importId)).toEqual({ deleted: 9, kept: 0, loanLinksReversed: 0 });
+
+    expect((sqlite.prepare('select count(*) as c from transactions').get() as { c: number }).c).toBe(0);
+    expect((sqlite.prepare('select count(*) as c from imports').get() as { c: number }).c).toBe(0);
+    expect((sqlite.prepare('select count(*) as c from transaction_imports').get() as { c: number }).c).toBe(0);
+  });
+});
+
+describe('undoImport after the import’s profile has been deleted (fix for PENDING-FIXES.md #2 follow-up)', () => {
+  it('still deletes every row, even though imports.profile_id was nulled by deleteProfile', () => {
+    const { sqlite, userId, accountId, hashed } = setup();
+    const profileId = createProfile({
+      name: 'Custom TD',
+      institution: 'TD Canada Trust',
+      mapping: getBuiltinPreset('TD Chequing/Debit'),
+    });
+    const result = commitImport({ accountId, profileId, filename: 'td.csv', importedBy: userId, rows: hashed, errors: [] });
+
+    // undoImport keys off transaction_imports / imports.id, never imports.profile_id —
+    // deleting the profile that created an import must not strand its undo button.
+    deleteProfile(profileId);
+    expect((sqlite.prepare('select profile_id from imports where id = ?').get(result.importId) as { profile_id: number | null }).profile_id).toBeNull();
 
     expect(previewUndoImport(result.importId)).toEqual({ importId: result.importId, willDelete: 9, willKeep: 0 });
     expect(undoImport(result.importId)).toEqual({ deleted: 9, kept: 0, loanLinksReversed: 0 });

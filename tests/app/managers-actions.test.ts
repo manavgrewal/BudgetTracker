@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { createSeededTestDb, insertTestAccount, categoryIdByName, insertTestUser, type TestDb } from '../helpers/db';
+import { nowIso } from '@/lib/clock';
 import { listRules, upsertRuleFromCorrection } from '@/lib/categorize/rules';
 
 let currentUser = { id: 1, name: 'Admin', username: 'admin', role: 'admin' as const };
@@ -99,17 +100,42 @@ describe('deleteProfileAction (PENDING-FIXES.md #2: a mapping could not be delet
     expect(vi.mocked(revalidatePath).mock.calls.map((call) => call[0])).toContain('/settings/managers');
   });
 
-  it('refuses to delete a profile an account still uses', async () => {
+  it('deletes a profile an account still uses, clearing the reference and reporting it in the message', async () => {
     const { db } = setup();
     const id = createProfile({
       name: 'Tangerine Chequing',
       institution: 'Tangerine',
       mapping: getBuiltinPreset('Scotiabank Chequing/Debit'),
     });
-    insertTestAccount(db, { name: 'Joint Chequing', importProfileId: id });
+    const accountId = insertTestAccount(db, { name: 'Joint Chequing', importProfileId: id });
     const result = await deleteProfileAction({}, formData({ profileId: String(id) }));
-    expect(result.error).toMatch(/account/i);
-    expect(getProfile(id)).not.toBeNull();
+    expect(result.error).toBeUndefined();
+    expect(result.message).toMatch(/account/i);
+    expect(getProfile(id)).toBeNull();
+    const row = current!.sqlite.prepare('select import_profile_id from accounts where id = ?').get(accountId) as {
+      import_profile_id: number | null;
+    };
+    expect(row.import_profile_id).toBeNull();
+  });
+
+  it('deletes a profile a past import still references, clearing the reference and reporting it in the message', async () => {
+    const { db, userId } = setup();
+    const accountId = insertTestAccount(db, { name: 'Old Account' });
+    const id = createProfile({
+      name: 'Tangerine Chequing',
+      institution: 'Tangerine',
+      mapping: getBuiltinPreset('Scotiabank Chequing/Debit'),
+    });
+    current!.sqlite
+      .prepare(
+        `insert into imports (account_id, profile_id, filename, imported_by, created_at) values (?, ?, ?, ?, ?)`,
+      )
+      .run(accountId, id, 'old.csv', userId, nowIso());
+
+    const result = await deleteProfileAction({}, formData({ profileId: String(id) }));
+    expect(result.error).toBeUndefined();
+    expect(result.message).toMatch(/import/i);
+    expect(getProfile(id)).toBeNull();
   });
 
   it('refuses a non-admin caller', async () => {

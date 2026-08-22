@@ -185,19 +185,34 @@ export async function saveProfileMappingAction(_prev: ManagerState, formData: Fo
   return { message: 'Profile updated.' };
 }
 
-/** Admin-only (PENDING-FIXES.md #2). deleteProfile() itself refuses a built-in or an
- *  in-use profile; this just turns that refusal into a form message like its siblings. */
+/** Admin-only (PENDING-FIXES.md #2). deleteProfile() itself refuses only a built-in profile;
+ *  an in-use one is deleted with its references cleared, and the counts it reports are turned
+ *  into an honest after-the-fact message here, the same way deleteRuleAction reports how many
+ *  transactions a deleted rename rule reverted. */
 export async function deleteProfileAction(_prev: ManagerState, formData: FormData): Promise<ManagerState> {
   if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
 
   await requireAdmin();
   const profileId = Number(formData.get('profileId'));
   if (!Number.isInteger(profileId) || profileId <= 0) return { error: 'Invalid request.' };
+  let result;
   try {
-    deleteProfile(profileId);
+    result = deleteProfile(profileId);
   } catch (error) {
     return { error: error instanceof Error ? error.message : 'Could not delete that profile.' };
   }
   revalidatePath('/settings/managers');
-  return { message: 'Profile deleted.' };
+
+  const parts: string[] = [];
+  if (result.accountsCleared > 0) {
+    parts.push(
+      `${result.accountsCleared} account${result.accountsCleared === 1 ? '' : 's'} lost ${result.accountsCleared === 1 ? 'its' : 'their'} remembered mapping`,
+    );
+  }
+  if (result.importsCleared > 0) {
+    parts.push(
+      `${result.importsCleared} past import${result.importsCleared === 1 ? '' : 's'} lost the record of which mapping was used`,
+    );
+  }
+  return { message: parts.length > 0 ? `Profile deleted; ${parts.join(' and ')}.` : 'Profile deleted.' };
 }

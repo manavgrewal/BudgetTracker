@@ -8,6 +8,7 @@ import {
   getBuiltinPreset,
   getProfile,
   getProfileByName,
+  getProfileUsage,
   listProfiles,
   mappingsEqual,
   setAccountProfile,
@@ -128,7 +129,7 @@ describe('setAccountProfile', () => {
   });
 });
 
-describe('deleteProfile (PENDING-FIXES.md #2: a mapping could not be deleted by anyone)', () => {
+describe('deleteProfile (PENDING-FIXES.md #2: a mapping could not be deleted by anyone; clears references instead of refusing)', () => {
   it('refuses to delete a built-in profile', () => {
     current = createSeededTestDb();
     const builtin = getProfileByName('TD Visa')!;
@@ -136,31 +137,37 @@ describe('deleteProfile (PENDING-FIXES.md #2: a mapping could not be deleted by 
     expect(listProfiles()).toHaveLength(4);
   });
 
-  it('deletes an unused custom profile', () => {
+  it('deletes an unused custom profile, reporting nothing cleared', () => {
     current = createSeededTestDb();
     const id = createProfile({
       name: 'Tangerine Chequing',
       institution: 'Tangerine',
       mapping: getBuiltinPreset('Scotiabank Chequing/Debit'),
     });
-    deleteProfile(id);
+    expect(deleteProfile(id)).toEqual({ accountsCleared: 0, importsCleared: 0 });
     expect(getProfile(id)).toBeNull();
     expect(listProfiles()).toHaveLength(4);
   });
 
-  it('refuses to delete a profile an account still uses, leaving it intact', () => {
+  it('deletes a profile an account still uses, nulling the account reference instead of refusing', () => {
     current = createSeededTestDb();
     const id = createProfile({
       name: 'Tangerine Chequing',
       institution: 'Tangerine',
       mapping: getBuiltinPreset('Scotiabank Chequing/Debit'),
     });
-    insertTestAccount(current.db, { name: 'Joint Chequing', importProfileId: id });
-    expect(() => deleteProfile(id)).toThrowError(/account/i);
-    expect(getProfile(id)).not.toBeNull();
+    const accountId = insertTestAccount(current.db, { name: 'Joint Chequing', importProfileId: id });
+
+    expect(deleteProfile(id)).toEqual({ accountsCleared: 1, importsCleared: 0 });
+
+    expect(getProfile(id)).toBeNull();
+    const row = current.sqlite.prepare('select import_profile_id from accounts where id = ?').get(accountId) as {
+      import_profile_id: number | null;
+    };
+    expect(row.import_profile_id).toBeNull();
   });
 
-  it('refuses to delete a profile a past import still references, leaving it intact', () => {
+  it('deletes a profile a past import still references, nulling the import reference instead of refusing', () => {
     current = createSeededTestDb();
     const userId = insertTestUser(current.db, { name: 'Admin', username: 'admin' });
     const accountId = insertTestAccount(current.db, { name: 'Old Account' });
@@ -169,17 +176,74 @@ describe('deleteProfile (PENDING-FIXES.md #2: a mapping could not be deleted by 
       institution: 'Tangerine',
       mapping: getBuiltinPreset('Scotiabank Chequing/Debit'),
     });
+    const inserted = current.sqlite
+      .prepare(
+        `insert into imports (account_id, profile_id, filename, imported_by, created_at) values (?, ?, ?, ?, ?)`,
+      )
+      .run(accountId, id, 'old.csv', userId, nowIso());
+    const importId = Number(inserted.lastInsertRowid);
+
+    expect(deleteProfile(id)).toEqual({ accountsCleared: 0, importsCleared: 1 });
+
+    expect(getProfile(id)).toBeNull();
+    const row = current.sqlite.prepare('select profile_id from imports where id = ?').get(importId) as {
+      profile_id: number | null;
+    };
+    expect(row.profile_id).toBeNull();
+  });
+
+  it('clears both an account and a past import in one call', () => {
+    current = createSeededTestDb();
+    const userId = insertTestUser(current.db, { name: 'Admin', username: 'admin' });
+    const id = createProfile({
+      name: 'Tangerine Chequing',
+      institution: 'Tangerine',
+      mapping: getBuiltinPreset('Scotiabank Chequing/Debit'),
+    });
+    const accountId = insertTestAccount(current.db, { name: 'Joint Chequing', importProfileId: id });
     current.sqlite
       .prepare(
         `insert into imports (account_id, profile_id, filename, imported_by, created_at) values (?, ?, ?, ?, ?)`,
       )
       .run(accountId, id, 'old.csv', userId, nowIso());
-    expect(() => deleteProfile(id)).toThrowError(/import/i);
-    expect(getProfile(id)).not.toBeNull();
+
+    expect(deleteProfile(id)).toEqual({ accountsCleared: 1, importsCleared: 1 });
+    expect(getProfile(id)).toBeNull();
   });
 
   it('throws for an unknown profile id', () => {
     current = createSeededTestDb();
     expect(() => deleteProfile(999999)).toThrowError(/no import profile/i);
+  });
+});
+
+describe('getProfileUsage (read path for the delete confirm step)', () => {
+  it('reports zero for a profile nothing references', () => {
+    current = createSeededTestDb();
+    const id = createProfile({
+      name: 'Tangerine Chequing',
+      institution: 'Tangerine',
+      mapping: getBuiltinPreset('Scotiabank Chequing/Debit'),
+    });
+    expect(getProfileUsage(id)).toEqual({ accounts: 0, imports: 0 });
+  });
+
+  it('counts accounts and past imports that reference the profile, without deleting anything', () => {
+    current = createSeededTestDb();
+    const userId = insertTestUser(current.db, { name: 'Admin', username: 'admin' });
+    const id = createProfile({
+      name: 'Tangerine Chequing',
+      institution: 'Tangerine',
+      mapping: getBuiltinPreset('Scotiabank Chequing/Debit'),
+    });
+    const accountId = insertTestAccount(current.db, { name: 'Joint Chequing', importProfileId: id });
+    current.sqlite
+      .prepare(
+        `insert into imports (account_id, profile_id, filename, imported_by, created_at) values (?, ?, ?, ?, ?)`,
+      )
+      .run(accountId, id, 'old.csv', userId, nowIso());
+
+    expect(getProfileUsage(id)).toEqual({ accounts: 1, imports: 1 });
+    expect(getProfile(id)).not.toBeNull();
   });
 });
