@@ -8,7 +8,7 @@ import { requireAdmin } from '@/lib/auth/session';
 import { archiveCategory, createCategory, renameCategory } from '@/lib/categories';
 import { deleteRule, listRules, upsertRuleFromCorrection } from '@/lib/categorize/rules';
 import { deleteRenameRule, upsertRenameRule } from '@/lib/categorize/engine';
-import { createProfile, getProfile, updateProfileMapping } from '@/lib/import/presets';
+import { createProfile, deleteProfile, getProfile, updateProfileMapping } from '@/lib/import/presets';
 import { importMappingSchema } from '@/lib/import/mapping';
 
 export interface ManagerState {
@@ -152,4 +152,21 @@ export async function saveProfileMappingAction(_prev: ManagerState, formData: Fo
   updateProfileMapping(profileId, mapping.data);
   revalidatePath('/settings/managers');
   return { message: 'Profile updated.' };
+}
+
+/** Admin-only (PENDING-FIXES.md #2). deleteProfile() itself refuses a built-in or an
+ *  in-use profile; this just turns that refusal into a form message like its siblings. */
+export async function deleteProfileAction(_prev: ManagerState, formData: FormData): Promise<ManagerState> {
+  if (!isSameOrigin(await headers())) return { error: CROSS_ORIGIN_ERROR };
+
+  await requireAdmin();
+  const profileId = Number(formData.get('profileId'));
+  if (!Number.isInteger(profileId) || profileId <= 0) return { error: 'Invalid request.' };
+  try {
+    deleteProfile(profileId);
+  } catch (error) {
+    return { error: error instanceof Error ? error.message : 'Could not delete that profile.' };
+  }
+  revalidatePath('/settings/managers');
+  return { message: 'Profile deleted.' };
 }

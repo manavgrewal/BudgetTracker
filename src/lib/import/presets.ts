@@ -1,6 +1,6 @@
-import { eq } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { getDb } from '@/db/client';
-import { accounts, importProfiles } from '@/db/schema';
+import { accounts, importProfiles, imports } from '@/db/schema';
 import { nowIso } from '@/lib/clock';
 import { parseImportMapping, serializeImportMapping, type ImportMapping } from './mapping';
 
@@ -174,6 +174,45 @@ export function updateProfileMapping(profileId: number, mapping: ImportMapping):
     .set({ mapping: serializeImportMapping(mapping) })
     .where(eq(importProfiles.id, profileId))
     .run();
+}
+
+/**
+ * PENDING-FIXES.md #2: there was no delete path at all, so a profile created for a test
+ * stayed forever. Built-ins are refused (they are shared rows, same guard as
+ * updateProfileMapping above). A profile still referenced by an account's importProfileId or
+ * a past import's profileId is refused too, rather than left to fail on the FOREIGN KEY
+ * constraint (both columns are ON DELETE NO ACTION, and foreign_keys is ON for every
+ * connection -- src/db/client.ts) or, worse, silently orphaning that reference. The caller
+ * (deleteProfileAction) surfaces this message straight to the admin.
+ */
+export function deleteProfile(profileId: number): void {
+  const existing = getProfile(profileId);
+  if (!existing) throw new Error(`No import profile ${profileId}`);
+  if (existing.isBuiltin) {
+    throw new Error('Built-in profiles are shared and cannot be deleted');
+  }
+
+  const accountsUsing =
+    getDb()
+      .select({ c: sql<number>`count(*)` })
+      .from(accounts)
+      .where(eq(accounts.importProfileId, profileId))
+      .get()?.c ?? 0;
+  const importsUsing =
+    getDb()
+      .select({ c: sql<number>`count(*)` })
+      .from(imports)
+      .where(eq(imports.profileId, profileId))
+      .get()?.c ?? 0;
+
+  if (accountsUsing > 0 || importsUsing > 0) {
+    const parts: string[] = [];
+    if (accountsUsing > 0) parts.push(`${accountsUsing} account${accountsUsing === 1 ? '' : 's'}`);
+    if (importsUsing > 0) parts.push(`${importsUsing} past import${importsUsing === 1 ? '' : 's'}`);
+    throw new Error(`${parts.join(' and ')} still reference this profile — it cannot be deleted`);
+  }
+
+  getDb().delete(importProfiles).where(eq(importProfiles.id, profileId)).run();
 }
 
 export function mappingsEqual(a: ImportMapping, b: ImportMapping): boolean {

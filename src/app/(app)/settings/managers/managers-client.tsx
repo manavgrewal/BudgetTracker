@@ -19,6 +19,7 @@ import { ProfilesPackPanel } from './profiles-pack-panel';
 import {
   archiveCategoryAction,
   createCategoryAction,
+  deleteProfileAction,
   deleteRuleAction,
   renameCategoryAction,
   saveProfileMappingAction,
@@ -49,7 +50,9 @@ export function ManagersClient({
   const [ruleState, saveRule] = useActionState(updateRuleAction, initial);
   const [deleteState, removeRule] = useActionState(deleteRuleAction, initial);
   const [profileState, saveProfile] = useActionState(saveProfileMappingAction, initial);
+  const [deleteProfileState, removeProfile] = useActionState(deleteProfileAction, initial);
   const [editing, setEditing] = useState<{ id: number; mapping: ImportMapping } | null>(null);
+  const [deletingProfileId, setDeletingProfileId] = useState<number | null>(null);
 
   const parents = categories.filter((c) => c.parentId === null);
   const label = (id: number | null) => {
@@ -61,8 +64,21 @@ export function ManagersClient({
   };
 
   const notice =
-    createState.message ?? renameState.message ?? archiveState.message ?? ruleState.message ?? deleteState.message ?? profileState.message;
-  const error = createState.error ?? renameState.error ?? archiveState.error ?? ruleState.error ?? deleteState.error ?? profileState.error;
+    createState.message ??
+    renameState.message ??
+    archiveState.message ??
+    ruleState.message ??
+    deleteState.message ??
+    profileState.message ??
+    deleteProfileState.message;
+  const error =
+    createState.error ??
+    renameState.error ??
+    archiveState.error ??
+    ruleState.error ??
+    deleteState.error ??
+    profileState.error ??
+    deleteProfileState.error;
 
   return (
     <div className="flex flex-col gap-6">
@@ -232,14 +248,40 @@ export function ManagersClient({
                   <span className="font-medium text-ink">{profile.name}</span>{' '}
                   <span className="text-xs text-subtle">{profile.institution}{profile.isBuiltin ? ' · built-in' : ''}</span>
                 </span>
-                <button
-                  type="button"
-                  onClick={() => setEditing(editing?.id === profile.id ? null : { id: profile.id, mapping: profile.mapping })}
-                  className="btn btn--ghost btn--sm text-xs"
-                >
-                  {editing?.id === profile.id ? 'close' : 'edit mapping'}
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditing(editing?.id === profile.id ? null : { id: profile.id, mapping: profile.mapping })}
+                    className="btn btn--ghost btn--sm text-xs"
+                  >
+                    {editing?.id === profile.id ? 'close' : 'edit mapping'}
+                  </button>
+                  {profile.isBuiltin ? null : (
+                    <button
+                      type="button"
+                      onClick={() => setDeletingProfileId(profile.id)}
+                      className="btn btn--ghost btn--sm money-neg text-xs"
+                    >
+                      delete
+                    </button>
+                  )}
+                </div>
               </div>
+              {deletingProfileId === profile.id ? (
+                <div className="mt-3 flex flex-col gap-3 rounded-md border border-negative-soft p-3">
+                  <p className="text-sm text-ink">
+                    Delete <strong className="font-semibold">{profile.name}</strong>? This cannot be undone. A
+                    profile still used by an account or a past import cannot be deleted.
+                  </p>
+                  <form action={removeProfile} className="flex gap-2">
+                    <input type="hidden" name="profileId" value={profile.id} />
+                    <SubmitButton variant="danger" size="sm">Delete permanently</SubmitButton>
+                    <button type="button" onClick={() => setDeletingProfileId(null)} className="btn btn--secondary btn--sm">
+                      Cancel
+                    </button>
+                  </form>
+                </div>
+              ) : null}
               {editing?.id === profile.id ? (
                 <form action={saveProfile} className="mt-3 flex flex-col gap-3">
                   <MappingEditor mapping={editing.mapping} onChange={(next) => setEditing({ id: profile.id, mapping: next })} />

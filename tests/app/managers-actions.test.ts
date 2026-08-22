@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { createSeededTestDb, categoryIdByName, insertTestUser, type TestDb } from '../helpers/db';
+import { createSeededTestDb, insertTestAccount, categoryIdByName, insertTestUser, type TestDb } from '../helpers/db';
 import { listRules, upsertRuleFromCorrection } from '@/lib/categorize/rules';
 
 let currentUser = { id: 1, name: 'Admin', username: 'admin', role: 'admin' as const };
@@ -16,7 +16,10 @@ vi.mock('next/cache', () => ({
   revalidatePath: vi.fn(),
 }));
 
-import { deleteRuleAction } from '@/app/(app)/settings/managers/actions';
+import { requireAdmin } from '@/lib/auth/session';
+import { revalidatePath } from 'next/cache';
+import { deleteProfileAction, deleteRuleAction } from '@/app/(app)/settings/managers/actions';
+import { createProfile, getBuiltinPreset, getProfile, getProfileByName, listProfiles } from '@/lib/import/presets';
 
 let current: TestDb | null = null;
 afterEach(() => {
@@ -63,5 +66,54 @@ describe('deleteRuleAction — missing input validation (finding 2)', () => {
     const result = await deleteRuleAction({}, formData({ ruleId: String(ruleId) }));
     expect(result.message).toBeTruthy();
     expect(listRules().find((r) => r.id === ruleId)).toBeUndefined();
+  });
+});
+
+describe('deleteProfileAction (PENDING-FIXES.md #2: a mapping could not be deleted by anyone)', () => {
+  it('refuses to delete a built-in profile', async () => {
+    setup();
+    const builtin = getProfileByName('TD Visa')!;
+    const result = await deleteProfileAction({}, formData({ profileId: String(builtin.id) }));
+    expect(result.error).toMatch(/built-in/i);
+    expect(listProfiles()).toHaveLength(4);
+  });
+
+  it('deletes an unused custom profile and revalidates the managers page', async () => {
+    setup();
+    const id = createProfile({
+      name: 'Tangerine Chequing',
+      institution: 'Tangerine',
+      mapping: getBuiltinPreset('Scotiabank Chequing/Debit'),
+    });
+    vi.mocked(revalidatePath).mockClear();
+    const result = await deleteProfileAction({}, formData({ profileId: String(id) }));
+    expect(result.message).toBeTruthy();
+    expect(getProfile(id)).toBeNull();
+    expect(vi.mocked(revalidatePath).mock.calls.map((call) => call[0])).toContain('/settings/managers');
+  });
+
+  it('refuses to delete a profile an account still uses', async () => {
+    const { db } = setup();
+    const id = createProfile({
+      name: 'Tangerine Chequing',
+      institution: 'Tangerine',
+      mapping: getBuiltinPreset('Scotiabank Chequing/Debit'),
+    });
+    insertTestAccount(db, { name: 'Joint Chequing', importProfileId: id });
+    const result = await deleteProfileAction({}, formData({ profileId: String(id) }));
+    expect(result.error).toMatch(/account/i);
+    expect(getProfile(id)).not.toBeNull();
+  });
+
+  it('refuses a non-admin caller', async () => {
+    setup();
+    const id = createProfile({
+      name: 'Tangerine Chequing',
+      institution: 'Tangerine',
+      mapping: getBuiltinPreset('Scotiabank Chequing/Debit'),
+    });
+    vi.mocked(requireAdmin).mockRejectedValueOnce(new Error('not admin'));
+    await expect(deleteProfileAction({}, formData({ profileId: String(id) }))).rejects.toThrow(/not admin/);
+    expect(getProfile(id)).not.toBeNull();
   });
 });
